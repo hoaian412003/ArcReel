@@ -30,10 +30,20 @@ _STATUS_ACTIONS: dict[str, str] = {
     "cancelled": "task_cancelled",
 }
 
+#: 非终态迁移（入队 / 被领取执行）：同样只是刷新信号，让前端立刻看到 queued→running，不必等轮询。
+_PROGRESS_ACTIONS: dict[str, str] = {
+    "queued": "task_queued",
+    "running": "task_running",
+}
+
 
 def build_task_terminal_change(event: dict[str, Any]) -> dict[str, Any] | None:
     """把一条终态记录转成项目变更 dict；状态非终态时返回 None。"""
-    action = _STATUS_ACTIONS.get(str(event.get("status") or ""))
+    return _build_task_change(event, _STATUS_ACTIONS)
+
+
+def _build_task_change(event: dict[str, Any], actions: dict[str, str]) -> dict[str, Any] | None:
+    action = actions.get(str(event.get("status") or ""))
     if action is None:
         return None
 
@@ -74,3 +84,18 @@ def emit_task_terminal_events(events: Iterable[dict[str, Any]]) -> None:
             emit_project_change_batch(project_name, changes)
         except Exception:
             logger.exception("发送任务终态项目事件失败 project=%s count=%d", project_name, len(changes))
+
+
+def emit_task_progress_event(event: dict[str, Any]) -> None:
+    """发布任务入队 / 开始执行的刷新信号；``event`` 需含 ``project_name`` / ``task_id`` / ``status``。
+
+    与终态事件同理，发布失败不向上抛：状态已落库，前端轮询兜底。
+    """
+    project_name = str(event.get("project_name") or "")
+    change = _build_task_change(event, _PROGRESS_ACTIONS)
+    if not project_name or change is None:
+        return
+    try:
+        emit_project_change_batch(project_name, [change])
+    except Exception:
+        logger.exception("发送任务进度项目事件失败 project=%s task=%s", project_name, change["entity_id"])

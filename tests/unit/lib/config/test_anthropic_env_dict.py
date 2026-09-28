@@ -18,6 +18,7 @@ async def test_active_credential_returns_full_dict(monkeypatch: pytest.MonkeyPat
         "Cred",
         (),
         {
+            "preset_id": "anthropic-official",
             "api_key": "sk-test",
             "base_url": "https://api.anthropic.com",
             "model": "claude-opus-4-7",
@@ -105,6 +106,7 @@ async def test_function_does_not_touch_environ(monkeypatch: pytest.MonkeyPatch) 
         "Cred",
         (),
         {
+            "preset_id": "anthropic-official",
             "api_key": "sk-test",
             "base_url": "x",
             "model": "y",
@@ -127,3 +129,20 @@ async def test_function_does_not_touch_environ(monkeypatch: pytest.MonkeyPatch) 
 
     await build_anthropic_env_dict(session)
     assert dict(os.environ) == baseline, "build 函数禁止改 os.environ"
+
+
+@pytest.mark.asyncio
+async def test_local_login_credential_blanks_anthropic_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lib.config.env_keys import ANTHROPIC_ENV_KEYS
+
+    repo_mock = AsyncMock()
+    repo_mock.get_active = AsyncMock(
+        return_value=type("Cred", (), {"preset_id": "__local_login__", "api_key": "", "base_url": ""})()
+    )
+    monkeypatch.setattr(
+        "lib.db.repositories.agent_credential_repo.AgentCredentialRepository",
+        lambda _s: repo_mock,
+    )
+
+    result = await build_anthropic_env_dict(AsyncMock())
+    assert result == dict.fromkeys(ANTHROPIC_ENV_KEYS, "")

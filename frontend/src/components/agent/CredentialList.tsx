@@ -1,7 +1,11 @@
 import { CheckCircle, Edit2, Loader2, PlayCircle, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { AgentCredential, TestConnectionResponse } from "@/types/agent-credential";
+import type {
+  AgentCredential,
+  LocalLoginStatus,
+  TestConnectionResponse,
+} from "@/types/agent-credential";
 import { CARD_STYLE, GHOST_BTN_CLS, ICON_BTN_CLS } from "@/components/ui/darkroom-tokens";
 
 import { PresetIcon } from "./PresetIcon";
@@ -13,6 +17,9 @@ interface Props {
   /** 显示在对应凭证行下方的连接测试结果(null 时不显示). */
   testedId?: number | null;
   testResult?: TestConnectionResponse | null;
+  /** 本机登录凭证的 preset id；该类凭证不显示地址/密钥，改显示登录态。 */
+  localLoginPresetId?: string;
+  localLoginStatus?: LocalLoginStatus | null;
   onActivate: (id: number) => void;
   onTest: (id: number) => void;
   onEdit: (cred: AgentCredential) => void;
@@ -24,6 +31,8 @@ export function CredentialList({
   busyId = null,
   testedId = null,
   testResult = null,
+  localLoginPresetId,
+  localLoginStatus = null,
   onActivate,
   onTest,
   onEdit,
@@ -45,7 +54,8 @@ export function CredentialList({
   return (
     <ul className="grid gap-2.5">
       {credentials.map((c) => {
-        const showResult = testedId === c.id && testResult;
+        const isLocal = localLoginPresetId !== undefined && c.preset_id === localLoginPresetId;
+        const showResult = !isLocal && testedId === c.id && testResult;
         return (
           <li key={c.id}>
             <div
@@ -69,11 +79,17 @@ export function CredentialList({
                     </span>
                   )}
                 </div>
-                <div className="mt-0.5 flex items-center gap-2 font-mono text-[10.5px] text-text-4">
-                  <span className="truncate">{c.base_url}</span>
-                  <span className="shrink-0">·</span>
-                  <span className="shrink-0">{c.api_key_masked}</span>
-                </div>
+                {isLocal ? (
+                  <div className="mt-0.5 text-[11.5px] text-text-3" role="status">
+                    {localLoginSummary(localLoginStatus, t)}
+                  </div>
+                ) : (
+                  <div className="mt-0.5 flex items-center gap-2 font-mono text-[10.5px] text-text-4">
+                    <span className="truncate">{c.base_url}</span>
+                    <span className="shrink-0">·</span>
+                    <span className="shrink-0">{c.api_key_masked}</span>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-1">
                 <button
@@ -100,14 +116,16 @@ export function CredentialList({
                     {t("cred_activate_label")}
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => onEdit(c)}
-                  className={ICON_BTN_CLS}
-                  aria-label={t("cred_edit_label")}
-                >
-                  <Edit2 className="h-3.5 w-3.5" aria-hidden />
-                </button>
+                {!isLocal && (
+                  <button
+                    type="button"
+                    onClick={() => onEdit(c)}
+                    className={ICON_BTN_CLS}
+                    aria-label={t("cred_edit_label")}
+                  >
+                    <Edit2 className="h-3.5 w-3.5" aria-hidden />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => onDelete(c.id)}
@@ -126,4 +144,14 @@ export function CredentialList({
       })}
     </ul>
   );
+}
+
+function localLoginSummary(
+  status: LocalLoginStatus | null,
+  t: (key: string, opts?: Record<string, string>) => string,
+): string {
+  if (status === null) return t("cred_local_login_hint");
+  if (!status.cli_found) return t("cred_local_login_nocli");
+  if (!status.logged_in) return t("cred_local_login_out");
+  return t("cred_local_login_ok", { who: status.email ? ` (${status.email})` : "" });
 }

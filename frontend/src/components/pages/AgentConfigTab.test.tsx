@@ -88,6 +88,7 @@ function setupBaseMocks(opts?: { credentials?: AgentCredential[] }) {
   vi.spyOn(API, "listAgentPresetProviders").mockResolvedValue({
     providers: [makePreset()],
     custom_sentinel_id: "__custom__",
+    local_login_sentinel_id: "__local_login__",
   });
   vi.spyOn(API, "getAgentMemory").mockResolvedValue({
     path: "/data/users/default/memory",

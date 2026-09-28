@@ -70,4 +70,16 @@ describe("AgentFailureCard", () => {
     expect(onRetry).toHaveBeenCalledOnce();
     expect(screen.getByRole("alert")).toHaveTextContent("Agent 启动失败");
   });
+
+  it("hints at `claude login` only for authentication failures", () => {
+    const { rerender } = render(<AgentFailureCard failure={turnFailure} />);
+    expect(screen.queryByText(/claude login/)).not.toBeInTheDocument();
+
+    rerender(
+      <AgentFailureCard
+        failure={{ ...turnFailure, summary: { ...turnFailure.summary, type: "authentication_failed" } }}
+      />,
+    );
+    expect(screen.getByText(/claude login/)).toBeInTheDocument();
+  });
 });

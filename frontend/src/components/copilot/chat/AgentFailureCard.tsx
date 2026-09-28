@@ -66,6 +66,12 @@ export function AgentFailureCard({ failure, onRetry }: Readonly<AgentFailureCard
           ))}
         </dl>
 
+        {failure.summary.type === "authentication_failed" && (
+          <p className="rounded-lg border border-warm-bright/30 bg-warm-bright/[0.06] p-2.5 text-[11.5px] leading-relaxed text-text-2">
+            {t("agent_failure_auth_hint")}
+          </p>
+        )}
+
         <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-hairline-soft bg-bg-grad-a/60 p-2.5 font-mono text-[11px] leading-relaxed text-text-2">
           {display(failure.summary.message, unavailable)}
         </pre>

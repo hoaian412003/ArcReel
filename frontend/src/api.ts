@@ -104,6 +104,7 @@ import type {
   CreateAgentCredentialRequest,
   PresetProvidersResponse,
   TestConnectionRequest,
+  LocalLoginStatus,
   TestConnectionResponse,
   UpdateAgentCredentialRequest,
 } from "@/types/agent-credential";
@@ -2383,6 +2384,10 @@ class API {
 
   static async testAgentCredential(id: number): Promise<TestConnectionResponse> {
     return this.request(`/agent/credentials/${id}/test`, { method: "POST" });
+  static async getLocalLoginStatus(): Promise<LocalLoginStatus> {
+    return this.request("/agent/local-login/status");
+  }
+
   }
 
   static async testAgentConnectionDraft(

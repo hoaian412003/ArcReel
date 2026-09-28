@@ -22,6 +22,7 @@ export interface PresetProvider {
 export interface PresetProvidersResponse {
   providers: PresetProvider[];
   custom_sentinel_id: string;
+  local_login_sentinel_id: string;
 }
 
 export interface AgentCredential {
@@ -96,4 +97,13 @@ export interface TestConnectionRequest {
   base_url?: string | null;
   api_key: string;
   model?: string | null;
+}
+
+/** 宿主机上 Claude Code CLI 的登录态（`claude auth status`）。 */
+export interface LocalLoginStatus {
+  cli_found: boolean;
+  logged_in: boolean;
+  auth_method: string | null;
+  email: string | null;
+  subscription_type: string | null;
 }

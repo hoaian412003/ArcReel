@@ -12,10 +12,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lib.agent.agent_provider_catalog import CUSTOM_SENTINEL_ID, get_preset, list_presets
+from lib.agent.agent_provider_catalog import CUSTOM_SENTINEL_ID, LOCAL_LOGIN_SENTINEL_ID, get_preset, list_presets
 from lib.config.anthropic_probe import DiagnosisCode, run_test
 from lib.config.anthropic_probe import ProbeResult as ProbeResultDC
 from lib.config.anthropic_probe import TestConnectionResponse as TestConnectionResponseDC
+from lib.config.local_claude_login import read_local_login_status
 from lib.config.repository import mask_secret
 from lib.config.url_utils import InvalidAnthropicBaseUrlError, validate_anthropic_base_url
 from lib.db import get_async_session
@@ -51,6 +52,7 @@ class PresetProviderResponse(BaseModel):
 class PresetProvidersResponse(BaseModel):
     providers: list[PresetProviderResponse]
     custom_sentinel_id: str
+    local_login_sentinel_id: str
 
 
 # ── Endpoints ──────────────────────────────────────────────────────
@@ -77,6 +79,7 @@ async def list_preset_providers(_t: Translator) -> PresetProvidersResponse:
             for p in list_presets()
         ],
         custom_sentinel_id=CUSTOM_SENTINEL_ID,
+        local_login_sentinel_id=LOCAL_LOGIN_SENTINEL_ID,
     )
 
 
@@ -130,7 +133,7 @@ class UpdateCredentialRequest(BaseModel):
 
 
 def _cred_to_response(cred) -> CredentialResponse:
-    preset = get_preset(cred.preset_id) if cred.preset_id != CUSTOM_SENTINEL_ID else None
+    preset = None if cred.preset_id in (CUSTOM_SENTINEL_ID, LOCAL_LOGIN_SENTINEL_ID) else get_preset(cred.preset_id)
     return CredentialResponse(
         id=cred.id,
         preset_id=cred.preset_id,
@@ -200,20 +203,26 @@ async def create_credential(
     _t: Translator,
     session: AsyncSession = Depends(get_async_session),
 ) -> CredentialResponse:
-    api_key, requested_base_url = await _resolve_key_source(body, _t, session)
-    if body.preset_id != CUSTOM_SENTINEL_ID:
-        preset = get_preset(body.preset_id)
-        if preset is None:
-            raise HTTPException(status_code=422, detail=_t("agent_preset_unknown", preset_id=body.preset_id))
-        base_url = _normalized_base_url(requested_base_url, _t) if requested_base_url else preset.messages_url
-        display_name = body.display_name or preset.display_name
-        model = body.model or preset.default_model
-    else:
-        if not requested_base_url:
-            raise HTTPException(status_code=422, detail=_t("agent_base_url_required_custom"))
-        base_url = _normalized_base_url(requested_base_url, _t)
-        display_name = body.display_name or "Custom"
+    if body.preset_id == LOCAL_LOGIN_SENTINEL_ID:
+        # 不存密钥与地址：会话直接使用宿主机 `claude login` 的登录态
+        api_key, base_url = "", ""
+        display_name = body.display_name or "Local Claude login"
         model = body.model
+    else:
+        api_key, requested_base_url = await _resolve_key_source(body, _t, session)
+        if body.preset_id != CUSTOM_SENTINEL_ID:
+            preset = get_preset(body.preset_id)
+            if preset is None:
+                raise HTTPException(status_code=422, detail=_t("agent_preset_unknown", preset_id=body.preset_id))
+            base_url = _normalized_base_url(requested_base_url, _t) if requested_base_url else preset.messages_url
+            display_name = body.display_name or preset.display_name
+            model = body.model or preset.default_model
+        else:
+            if not requested_base_url:
+                raise HTTPException(status_code=422, detail=_t("agent_base_url_required_custom"))
+            base_url = _normalized_base_url(requested_base_url, _t)
+            display_name = body.display_name or "Custom"
+            model = body.model
 
     repo = AgentCredentialRepository(session)
     cred = await repo.create(
@@ -392,10 +401,35 @@ async def run_credential_test(
     cred = await repo.get(cred_id)
     if cred is None:
         raise HTTPException(status_code=404, detail=_t("agent_credential_not_found"))
+    if cred.preset_id == LOCAL_LOGIN_SENTINEL_ID:
+        raise HTTPException(status_code=422, detail=_t("agent_local_login_no_probe"))
     return await _run_and_serialize(
         preset_id=cred.preset_id,
         base_url=cred.base_url,
         api_key=cred.api_key,
         model=cred.model,
         _t=_t,
+    )
+
+
+# ── Local Claude login ─────────────────────────────────────────────
+
+
+class LocalLoginStatusResponse(BaseModel):
+    cli_found: bool
+    logged_in: bool
+    auth_method: str | None
+    email: str | None
+    subscription_type: str | None
+
+
+@router.get("/local-login/status", response_model=LocalLoginStatusResponse)
+async def get_local_login_status() -> LocalLoginStatusResponse:
+    status = await read_local_login_status()
+    return LocalLoginStatusResponse(
+        cli_found=status.cli_found,
+        logged_in=status.logged_in,
+        auth_method=status.auth_method,
+        email=status.email,
+        subscription_type=status.subscription_type,
     )

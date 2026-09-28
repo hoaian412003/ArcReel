@@ -7,6 +7,7 @@ from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lib.agent.agent_provider_catalog import LOCAL_LOGIN_SENTINEL_ID
 from lib.config.env_keys import ANTHROPIC_ENV_KEYS
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.repository import ProviderConfigRepository, SystemSettingRepository
@@ -80,6 +81,10 @@ async def build_anthropic_env_dict(session: AsyncSession) -> dict[str, str]:
 
     repo = AgentCredentialRepository(session)
     cred = await repo.get_active()
+
+    if cred is not None and cred.preset_id == LOCAL_LOGIN_SENTINEL_ID:
+        # 空值覆盖宿主 env 里的 ANTHROPIC_*，让 CLI 回落到本机 `claude login` 的登录态
+        return dict.fromkeys(ANTHROPIC_ENV_KEYS, "")
 
     if cred is not None:
         settings = await SystemSettingRepository(session).get_all()

@@ -97,4 +97,27 @@ describe("CredentialList", () => {
     fireEvent.click(screen.getByRole("button", { name: /edit|编辑|Chỉnh sửa/i }));
     expect(onEdit).toHaveBeenCalledWith(cred);
   });
+
+  it("shows login state instead of url/key for the local login credential", () => {
+    const local = mockCred({ preset_id: "__local_login__", display_name: "Local", base_url: "", api_key_masked: "" });
+    render(
+      <CredentialList
+        credentials={[local]}
+        localLoginPresetId="__local_login__"
+        localLoginStatus={{
+          cli_found: true,
+          logged_in: true,
+          auth_method: "claude.ai",
+          email: "me@example.com",
+          subscription_type: null,
+        }}
+        onActivate={vi.fn()}
+        onTest={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("me@example.com");
+    expect(screen.queryByRole("button", { name: /edit|编辑|Sửa/i })).not.toBeInTheDocument();
+  });
 });

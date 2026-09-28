@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 CUSTOM_SENTINEL_ID = "__custom__"
+# 不存密钥：Agent 子进程使用宿主机上 `claude login` 的登录态。
+LOCAL_LOGIN_SENTINEL_ID = "__local_login__"
 
 
 @dataclass(frozen=True)

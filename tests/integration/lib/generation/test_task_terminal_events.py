@@ -165,8 +165,8 @@ class TestQueueEmitsTerminalEvents:
         assert len(changes) == 3
         assert {c["action"] for c in changes} == {"task_cancelled"}
 
-    async def test_non_terminal_transitions_emit_nothing(self, queue, captured_batches):
-        """入队与领取只是中间态，不该触发终态事件。"""
+    async def test_non_terminal_transitions_emit_no_terminal_events(self, queue, captured_batches):
+        """入队与领取只是中间态，只发进度信号，不该触发终态事件。"""
         await queue.enqueue_task(
             project_name="demo",
             task_type="video",
@@ -178,7 +178,8 @@ class TestQueueEmitsTerminalEvents:
         )
         await queue.claim_next_task(media_type="video")
 
-        assert _task_changes(captured_batches) == []
+        terminal = {"task_succeeded", "task_failed", "task_cancelled"}
+        assert not [c for c in _task_changes(captured_batches) if c["action"] in terminal]
 
     async def test_no_publish_when_commit_fails(self, queue, db_factory, captured_batches):
         """终态已收集但会话提交失败时不得发布——没有终态落库就没有终态可通告。
@@ -227,3 +228,23 @@ class TestQueueEmitsTerminalEvents:
 
         failed_ids = {c["entity_id"] for c in _task_changes(captured_batches) if c["action"] == "task_failed"}
         assert failed_ids == {parent["task_id"], child["task_id"]}
+
+
+class TestQueueEmitsProgressEvents:
+    async def test_enqueue_then_claim_emit_queued_then_running(self, queue, captured_batches):
+        task = await queue.enqueue_task(
+            project_name="demo",
+            task_type="video",
+            media_type="video",
+            resource_id="E1S01",
+            payload={},
+            script_file="episode_01.json",
+            source="webui",
+        )
+        await queue.claim_next_task(media_type="video")
+
+        changes = _task_changes(captured_batches)
+        assert [c["action"] for c in changes] == ["task_queued", "task_running"]
+        assert {c["entity_id"] for c in changes} == {task["task_id"]}
+        assert all(c["important"] is False and c["focus"] is None for c in changes)
+        assert {project for project, _ in captured_batches} == {"demo"}

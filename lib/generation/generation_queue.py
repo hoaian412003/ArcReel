@@ -27,7 +27,11 @@ from lib.generation.generation_batch import (
     build_generation_batch_read_model,
     validate_blocked_items,
 )
-from lib.generation.task_terminal_events import TERMINAL_TASK_STATUSES, emit_task_terminal_events
+from lib.generation.task_terminal_events import (
+    TERMINAL_TASK_STATUSES,
+    emit_task_progress_event,
+    emit_task_terminal_events,
+)
 from lib.infra.async_thread import run_noninterruptible_async
 from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE
 from lib.project.project_migration_guard import assert_project_migration_ok
@@ -470,6 +474,9 @@ class GenerationQueue:
         result.pop("_existing_payload", None)
         if not result.get("deduped"):
             logger.info("任务入队 task_id=%s type=%s", result["task_id"], task_type)
+            emit_task_progress_event(
+                {"project_name": project_name, "task_id": result["task_id"], "task_type": task_type, "status": "queued"}
+            )
         else:
             logger.debug("任务去重 task_id=%s", result["task_id"])
         return result
@@ -631,6 +638,7 @@ class GenerationQueue:
             )
         if task:
             logger.debug("任务被领取 task_id=%s", task["task_id"])
+            emit_task_progress_event({**task, "status": "running"})
         return task
 
     async def requeue_running_tasks(self, *, limit: int = 1000) -> int:

@@ -25,6 +25,7 @@ from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lib.agent.agent_provider_catalog import LOCAL_LOGIN_SENTINEL_ID
 from lib.backends.generation_type_buckets import (
     BUCKETS_BY_MEDIA_TYPE,
     GenerationTypeBucket,
@@ -364,7 +365,10 @@ async def get_system_config(
 
         active_cred = await AgentCredentialRepository(session).get_active()
         if active_cred is not None:
-            anthropic_key = active_cred.api_key
+            # 本机登录凭证不存密钥，激活即视为已配置
+            anthropic_key = active_cred.api_key or (
+                "local-login" if active_cred.preset_id == LOCAL_LOGIN_SENTINEL_ID else ""
+            )
 
     # 语速 setting 为字符串存储，损坏值（手工改库等）按未设置处理
     narration_speed = ConfigService.parse_narration_speed(all_s.get("narration_speed", ""))

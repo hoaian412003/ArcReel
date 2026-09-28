@@ -527,6 +527,7 @@ MESSAGES = {
     "agent_base_url_invalid": "Địa chỉ chứng thực Agent không hỗ trợ tham số truy vấn, fragment hay tên người dùng/mật khẩu; hãy dùng dạng https://host/path",
     "agent_no_fields_to_update": "Không có trường nào để cập nhật",
     "agent_credential_not_found": "Không tìm thấy xác thực",
+    "agent_local_login_no_probe": "Thông tin xác thực này dùng đăng nhập Claude trên máy nên không có kiểm tra kết nối; hãy xem trạng thái đăng nhập",
     "agent_cannot_delete_active": "Không thể xóa xác thực đang hoạt động; hãy kích hoạt xác thực khác trước",
     "agent_test_validation_error": "Kiểm tra kết nối thất bại; vui lòng kiểm tra cấu hình và thử lại",
     "invalid_project_name": "Tên dự án '{name}' không hợp lệ",

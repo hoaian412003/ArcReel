@@ -461,3 +461,43 @@ async def test_test_credential_uses_stored(agent_config_client, monkeypatch) -> 
     kwargs = fake.await_args.kwargs
     assert kwargs["api_key"] == "sk-stored"
     assert kwargs["preset_id"] == "deepseek"
+
+
+# ── Local Claude login ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_local_login_needs_no_key_or_url(agent_config_client) -> None:
+    resp = await agent_config_client.post("/api/v1/agent/credentials", json={"preset_id": "__local_login__"})
+    assert resp.status_code == 201
+    cred = resp.json()
+    assert cred["preset_id"] == "__local_login__"
+    assert cred["base_url"] == ""
+    assert cred["icon_key"] is None
+    assert cred["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_local_login_credential_has_no_connection_probe(agent_config_client) -> None:
+    created = await agent_config_client.post("/api/v1/agent/credentials", json={"preset_id": "__local_login__"})
+    resp = await agent_config_client.post(f"/api/v1/agent/credentials/{created.json()['id']}/test")
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_local_login_status_reports_cli_state(agent_config_client, monkeypatch) -> None:
+    from lib.config.local_claude_login import LocalLoginStatus
+
+    async def fake_status() -> LocalLoginStatus:
+        return LocalLoginStatus(cli_found=True, logged_in=True, auth_method="claude.ai", email="a@b.c")
+
+    monkeypatch.setattr("server.routers.agent_config.read_local_login_status", fake_status)
+    resp = await agent_config_client.get("/api/v1/agent/local-login/status")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "cli_found": True,
+        "logged_in": True,
+        "auth_method": "claude.ai",
+        "email": "a@b.c",
+        "subscription_type": None,
+    }

@@ -12,6 +12,7 @@ import { useConfigStatusStore } from "@/stores/config-status-store";
 import type {
   AgentCredential,
   CreateAgentCredentialRequest,
+  LocalLoginStatus,
   PresetProvider,
   TestConnectionResponse,
   UpdateAgentCredentialRequest,
@@ -24,6 +25,8 @@ export function CredentialsSection() {
   const [credentials, setCredentials] = useState<AgentCredential[]>([]);
   const [presets, setPresets] = useState<PresetProvider[]>([]);
   const [customSentinelId, setCustomSentinelId] = useState("__custom__");
+  const [localLoginSentinelId, setLocalLoginSentinelId] = useState("__local_login__");
+  const [localLoginStatus, setLocalLoginStatus] = useState<LocalLoginStatus | null>(null);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [busyCredId, setBusyCredId] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<TestConnectionResponse | null>(null);
@@ -41,6 +44,7 @@ export function CredentialsSection() {
       setCredentials(c.credentials);
       setPresets(p.providers);
       setCustomSentinelId(p.custom_sentinel_id);
+      setLocalLoginSentinelId(p.local_login_sentinel_id);
     } catch (err) {
       useAppStore.getState().pushToast(errMsg(err), "error");
     }
@@ -112,7 +116,37 @@ export function CredentialsSection() {
     [loadCreds, t],
   );
 
+  const hasLocalLogin = credentials.some((c) => c.preset_id === localLoginSentinelId);
+
+  const refreshLocalLoginStatus = useCallback(async () => {
+    try {
+      setLocalLoginStatus(await API.getLocalLoginStatus());
+    } catch (err) {
+      useAppStore.getState().pushToast(errMsg(err), "error");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hasLocalLogin) return;
+    // 存在本机登录凭证时异步拉取一次登录态，属于受控的初始化加载。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshLocalLoginStatus();
+  }, [hasLocalLogin, refreshLocalLoginStatus]);
+
+  const handleUseLocalLogin = useCallback(async () => {
+    await handleCreate({ preset_id: localLoginSentinelId });
+  }, [handleCreate, localLoginSentinelId]);
+
   const handleTest = useCallback(async (id: number) => {
+    if (credentialsRef.current.find((x) => x.id === id)?.preset_id === localLoginSentinelId) {
+      setBusyCredId(id);
+      try {
+        await refreshLocalLoginStatus();
+      } finally {
+        setBusyCredId(null);
+      }
+      return;
+    }
     setBusyCredId(id);
     setTestResult(null);
     setTestedCredId(id);
@@ -124,7 +158,7 @@ export function CredentialsSection() {
     } finally {
       setBusyCredId(null);
     }
-  }, []);
+  }, [localLoginSentinelId, refreshLocalLoginStatus]);
 
   const confirmDelete = useCallback(async () => {
     if (confirmDeleteId == null) return;
@@ -147,13 +181,26 @@ export function CredentialsSection() {
         title={t("agent_credentials")}
         description={t("anthropic_key_required_desc")}
         trailing={
-          <button
-            type="button"
-            onClick={() => setAddModalOpen(true)}
-            className={GHOST_BTN_CLS}
-          >
-            + {t("add_credential")}
-          </button>
+          <div className="flex items-center gap-1">
+            {!hasLocalLogin && (
+              <button
+                type="button"
+                onClick={() => void handleUseLocalLogin().catch((err) =>
+                  useAppStore.getState().pushToast(errMsg(err), "error"),
+                )}
+                className={GHOST_BTN_CLS}
+              >
+                {t("cred_local_login_use")}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setAddModalOpen(true)}
+              className={GHOST_BTN_CLS}
+            >
+              + {t("add_credential")}
+            </button>
+          </div>
         }
       >
         <CredentialList
@@ -161,6 +208,8 @@ export function CredentialsSection() {
           busyId={busyCredId}
           testedId={testedCredId}
           testResult={testResult}
+          localLoginPresetId={localLoginSentinelId}
+          localLoginStatus={localLoginStatus}
           onActivate={(id) => void handleActivate(id)}
           onTest={(id) => void handleTest(id)}
           onEdit={setEditingCred}

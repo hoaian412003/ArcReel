@@ -62,22 +62,27 @@ export function TaskProgressBlock({ block }: TaskProgressBlockProps) {
   if (status === "task_notification") {
     const isCompleted = taskStatus === "completed";
     const isFailed = taskStatus === "failed";
+    const isStopped = taskStatus === "stopped";
     const color = isFailed
       ? "var(--color-danger)"
       : isCompleted
         ? "var(--color-good)"
-        : "var(--color-text-3)";
+        : isStopped
+          ? "var(--color-warn)"
+          : "var(--color-text-3)";
     const label = isCompleted
       ? t("task_progress_completed")
       : isFailed
         ? t("task_progress_failed")
-        : t("task_progress_ended");
+        : isStopped
+          ? t("task_progress_interrupted")
+          : t("task_progress_ended");
     return (
       <div
         className="my-1 flex items-center gap-1.5 text-[11.5px]"
         style={{ color }}
       >
-        <span>{isCompleted ? "✓" : isFailed ? "✗" : "–"}</span>
+        <span>{isCompleted ? "✓" : isFailed ? "✗" : isStopped ? "⚠" : "–"}</span>
         <span>
           {label}: {summary || description}
         </span>

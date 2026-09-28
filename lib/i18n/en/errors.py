@@ -527,6 +527,7 @@ MESSAGES = {
     "agent_base_url_invalid": "Agent credential URLs cannot carry query strings, fragments or userinfo; use a plain https://host/path address",
     "agent_no_fields_to_update": "No fields to update",
     "agent_credential_not_found": "Credential not found",
+    "agent_local_login_no_probe": "This credential uses the local Claude login and has no connection to test; check the login status instead",
     "agent_cannot_delete_active": "Cannot delete the active credential; activate another first",
     "agent_test_validation_error": "Test connection failed; please check the configuration and retry",
     "invalid_project_name": "Invalid project name '{name}'",
