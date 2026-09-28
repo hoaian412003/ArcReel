@@ -75,8 +75,8 @@ class ImageGenerationRequest:
     image_size: str | None = None
     project_name: str | None = None
     seed: int | None = None
-    #: 供应商响应的诊断回调，与 ``VideoGenerationRequest`` 同形。只有需要逐阶段留痕的调用方
-    #: （端点测试）会给它；生产的出图路径不收集留痕，保持 ``None``。
+    #: 供应商响应的诊断回调，与 ``VideoGenerationRequest`` 同形。生产生成路径用它把异步
+    #: submit / poll 响应写入 usage 记录；无需逐阶段留痕的直接调用可保持 ``None``。
     on_provider_response: Callable[[ProviderResponseStage, object], Awaitable[None]] | None = None
 
 

@@ -903,6 +903,42 @@ class TestTestProviderConnection:
         assert resp.available_models == ["MiniMax-M2.7", "abab6.5s-chat"]
         assert resp.success is True
 
+    def test_runninghub_test_fn_checks_the_image_ai_app(self):
+        captured: dict = {}
+
+        class _Response:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"code": 0, "msg": "success", "data": {"nodeInfoList": []}}
+
+        def _fake_get(url, params=None, timeout=None):
+            captured.update(url=url, params=params, timeout=timeout)
+            return _Response()
+
+        with patch("httpx.get", _fake_get):
+            resp = providers._check_runninghub({"api_key": "rh-key"}, lambda k, **kw: k)
+
+        assert captured["url"] == "https://www.runninghub.ai/api/webapp/apiCallDemo"
+        assert captured["params"] == {"apiKey": "rh-key", "webappId": "2104532059371909121"}
+        assert resp.available_models == ["ai-app-2104162779616120834", "ai-app-2104532059371909121"]
+        assert resp.success is True
+
+    def test_runninghub_test_fn_raises_ai_app_error(self):
+        class _Response:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"code": 804, "msg": "AI App is unavailable"}
+
+        with (
+            patch("httpx.get", return_value=_Response()),
+            pytest.raises(RuntimeError, match="AI App is unavailable"),
+        ):
+            providers._check_runninghub({"api_key": "rh-key"}, lambda k, **kw: k)
+
     def test_kling_registered_in_dispatch(self):
         # kling 作为内置 provider 暴露在设置页，连接测试必须有 dispatcher，
         # 否则点"测试连接"会落到 connectivity_check_unsupported 分支（即便凭证有效）

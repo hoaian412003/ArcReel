@@ -80,6 +80,14 @@
     --color-accent-end: var(--color-accent-2);
 }
 
+/* Tiếng Việt dùng một họ chữ xuyên suốt để dấu thanh không bị trộn glyph giữa
+ * Instrument Serif, font Trung văn và font hệ thống. Mono giữ nguyên cho dữ liệu. */
+html:lang(vi) {
+    --font-sans: "Google Sans Flex", "Inter", system-ui, sans-serif;
+    --font-display: "Google Sans Flex", "Inter", system-ui, sans-serif;
+    --font-editorial: "Google Sans Flex", "Inter", system-ui, sans-serif;
+}
+
 /* 全局 body 背景 — radial+linear 复合梯度 */
 html { color-scheme: dark; }
 

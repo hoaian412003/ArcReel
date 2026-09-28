@@ -1263,6 +1263,32 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
         },
         default_base_url=MINIMAX_BASE_URL,
     ),
+    "runninghub": ProviderMeta(
+        display_name="RunningHub",
+        description="RunningHub AI Apps，支持托管视频工作流以及文生图、图生图。",
+        required_keys=["api_key"],
+        optional_keys=["base_url", "image_max_workers", "video_max_workers"],
+        secret_keys=["api_key"],
+        models={
+            "ai-app-2104162779616120834": ModelInfo(
+                display_name="MiniMax H3 Storyboard (AI App)",
+                media_type="video",
+                capabilities=[],
+                default=True,
+                supported_durations=list(range(1, 16)),
+                resolutions=["768p"],
+            ),
+            "ai-app-2104532059371909121": ModelInfo(
+                display_name="GPT Image 2 All-in-One (AI App)",
+                media_type="image",
+                capabilities=["text_to_image", "image_to_image"],
+                default=True,
+                resolutions=["1K", "2K", "4K"],
+            ),
+        },
+        default_base_url="https://www.runninghub.ai",
+        default_concurrency={"image": 2, "video": 2},
+    ),
     "kling": ProviderMeta(
         display_name="可灵 Kling",
         description=(

@@ -636,6 +636,9 @@ class MediaGenerator:
                             aspect_ratio=aspect_ratio,
                             image_size=image_size,
                             project_name=self.project_name,
+                            on_provider_response=lambda _stage, body: self.ledger.record_provider_response(
+                                call_id=call.call_id, body=body
+                            ),
                         )
                     )
 

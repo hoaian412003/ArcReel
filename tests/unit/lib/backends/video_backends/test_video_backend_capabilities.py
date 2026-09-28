@@ -234,6 +234,7 @@ _VIDEO_AUDIO_STANCES: dict[tuple[str, str], tuple[str, str]] = {
     ("minimax", "S2V-01"): ("always_off", "always_off"),
     ("openai", "sora-2"): ("always_on", "always_on"),
     ("openai", "sora-2-pro"): ("always_on", "always_on"),
+    ("runninghub", "ai-app-2104162779616120834"): ("always_on", "always_on"),
     ("vidu", "vidu2.0"): ("always_off", "always_off"),
     ("vidu", "viduq3"): ("controllable", "controllable"),
     ("vidu", "viduq3-pro"): ("controllable", "controllable"),

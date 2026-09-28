@@ -408,6 +408,35 @@ class TestMediaGenerator:
         assert sent["20"]["inputs"]["image"] == "arcreel/job-7-reference_images-1.png"
         assert gen.ledger.outcomes[0]["status"] == "success"
 
+    async def test_image_provider_responses_are_recorded_on_the_usage_call(self, tmp_path):
+        gen = _build_generator(tmp_path)
+
+        class _ReportingImageBackend(_FakeImageBackend):
+            async def generate(self, request) -> ImageGenerationResult:
+                assert request.on_provider_response is not None
+                await request.on_provider_response("submit", {"taskId": "image-task-1"})
+                await request.on_provider_response("poll", {"status": "RUNNING"})
+                request.output_path.parent.mkdir(parents=True, exist_ok=True)
+                request.output_path.write_bytes(PNG_BYTES)
+                return ImageGenerationResult(
+                    image_path=request.output_path,
+                    provider=self.name,
+                    model=self.model,
+                )
+
+        gen._image_backend = _ReportingImageBackend()
+
+        await gen.generate_image_async(
+            prompt="p",
+            resource_type="storyboards",
+            resource_id="E1S01",
+        )
+
+        assert gen.ledger.provider_responses == [
+            (1, {"taskId": "image-task-1"}),
+            (1, {"status": "RUNNING"}),
+        ]
+
     async def test_cancelled_formal_image_generation_never_replaces_the_canonical_file(self, tmp_path):
         gen = _build_generator(tmp_path)
         backend_written = asyncio.Event()

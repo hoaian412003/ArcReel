@@ -1003,6 +1003,27 @@ def _check_kling(config: dict[str, str], _t: Callable[..., str]) -> Connectivity
     )
 
 
+def _check_runninghub(config: dict[str, str], _t: Callable[..., str]) -> ConnectivityCheckResponse:
+    """Đọc metadata AI App để xác thực key mà không tạo job có tính phí."""
+    import httpx
+
+    base_url = (config.get("base_url") or "https://www.runninghub.ai").rstrip("/")
+    response = httpx.get(
+        f"{base_url}/api/webapp/apiCallDemo",
+        params={"apiKey": config["api_key"], "webappId": "2104532059371909121"},
+        timeout=_CONNECTIVITY_CHECK_TIMEOUT,
+    )
+    raise_for_status_redacted(response)
+    payload = response.json()
+    if payload.get("code") != 0:
+        raise RuntimeError(str(payload.get("msg") or "RunningHub AI App lookup failed"))
+    return ConnectivityCheckResponse(
+        success=True,
+        available_models=["ai-app-2104162779616120834", "ai-app-2104532059371909121"],
+        message=_t("connectivity_check_ok"),
+    )
+
+
 _CONNECTIVITY_CHECK_DISPATCH: dict[str, Callable[[dict[str, str], Any], ConnectivityCheckResponse]] = {
     "gemini-aistudio": _check_gemini_aistudio,
     "gemini-vertex": _check_gemini_vertex,
@@ -1014,6 +1035,7 @@ _CONNECTIVITY_CHECK_DISPATCH: dict[str, Callable[[dict[str, str], Any], Connecti
     "dashscope": _check_dashscope,
     "minimax": _check_minimax,
     "kling": _check_kling,
+    "runninghub": _check_runninghub,
 }
 
 

@@ -13,6 +13,7 @@ MESSAGES: dict[str, str] = {
     "provider_name_minimax": "MiniMax",
     "provider_name_kling": "Kling",
     "provider_name_agnes": "Agnes",
+    "provider_name_runninghub": "RunningHub",
     # Provider descriptions
     "provider_desc_gemini-aistudio": "Google AI Studio cung cấp các mô hình Gemini hỗ trợ tạo ảnh và video, phù hợp cho việc dựng prototype nhanh và dự án cá nhân.",
     "provider_desc_gemini-vertex": "Nền tảng doanh nghiệp Vertex AI của Google Cloud hỗ trợ các mô hình Gemini và Imagen với hạn mức cao hơn cùng khả năng tạo âm thanh.",
@@ -25,6 +26,7 @@ MESSAGES: dict[str, str] = {
     "provider_desc_minimax": "Nền tảng đa phương thức MiniMax (Hailuo) hỗ trợ tạo văn bản, ảnh và video. Mặc định kết nối site nội địa; đặt base_url sang site quốc tế khi dùng ở nước ngoài.",
     "provider_desc_kling": "Nền tảng tạo video và ảnh Kling của Kuaishou. Xác thực bằng API Key áp dụng cho mọi model; Access Key + Secret Key (JWT) chỉ áp dụng cho model từ 3.0 trở về trước. Chọn một trong hai — nếu điền cả hai, API Key được ưu tiên.",
     "provider_desc_agnes": "Nền tảng đa phương thức Agnes (phong cách OpenAI), xác thực bằng Bearer API key; hiện hỗ trợ tạo ảnh, văn bản và video.",
+    "provider_desc_runninghub": "RunningHub AI Apps cho workflow video, tạo ảnh từ văn bản và tạo ảnh từ ảnh.",
     # Model display names (registry entries written in a non-Latin script; brand-only
     # names are absent on purpose and fall back to lib/config/registry.py display_name)
     "model_name_ark_doubao-seed-2-0-pro-260215": "Doubao Seed 2.0 Pro",
@@ -54,6 +56,8 @@ MESSAGES: dict[str, str] = {
     "model_name_kling_kling-v3-omni-image": "Kling V3-Omni (Ảnh)",
     "model_name_kling_kling-image-o1": "Kling Ảnh O1",
     "model_name_kling_kling-video-o1": "Kling Video O1",
+    "model_name_runninghub_ai-app-2104162779616120834": "MiniMax H3 Storyboard (AI App)",
+    "model_name_runninghub_ai-app-2104532059371909121": "GPT Image 2 All-in-One (AI App)",
     # Agent preset notes (lib/agent/agent_provider_catalog.py)
     "preset_notes_deepseek": "Endpoint Anthropic-compat chính thức của DeepSeek; cần API key sk-.",
     "preset_notes_xiaomi_mimo": "Xiaomi MiMo chỉ chấp nhận tên model đã biết; không có danh sách model công khai.",

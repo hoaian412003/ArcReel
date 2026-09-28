@@ -396,7 +396,15 @@ def _text_openai_compat_spec(
 # （未登记的 provider × media 抛 ValueError，不「缺席即默认」造静默错误 backend）。只登记今天确有注册 backend
 # 的对：image/video 简单族七家齐全，audio 仅 dashscope，text 八家（六 provider，gemini 两 id）。
 
-_SIMPLE_IMAGE_VIDEO_PROVIDERS = ("ark", "ark-agent-plan", "grok", "openai", "vidu", "dashscope", "minimax")
+_SIMPLE_IMAGE_VIDEO_PROVIDERS = (
+    "ark",
+    "ark-agent-plan",
+    "grok",
+    "openai",
+    "vidu",
+    "dashscope",
+    "minimax",
+)
 _SIMPLE_MEDIA_PAIRS: list[tuple[str, str]] = [
     *((p, "image") for p in _SIMPLE_IMAGE_VIDEO_PROVIDERS),
     *((p, "video") for p in _SIMPLE_IMAGE_VIDEO_PROVIDERS if p != "dashscope"),
@@ -429,6 +437,8 @@ PROVIDER_SPEC_REGISTRY[("minimax", "video")] = ProviderSpec(
     registry_backend="declarative",
     build_backend=_build_minimax_declarative_video,
 )
+PROVIDER_SPEC_REGISTRY[("runninghub", "video")] = _simple_spec("runninghub", "video")
+PROVIDER_SPEC_REGISTRY[("runninghub", "image")] = _simple_spec("runninghub", "image")
 
 # agnes 简单族 image + video 显式登记（文本族在下方文本区随 _TEXT_SIMPLE_PROVIDERS 登记）；
 # 与 kling 同走独立显式登记，不并入 _SIMPLE_IMAGE_VIDEO_PROVIDERS 元组。

@@ -13,6 +13,7 @@ MESSAGES: dict[str, str] = {
     "provider_name_minimax": "MiniMax",
     "provider_name_kling": "Kling",
     "provider_name_agnes": "Agnes",
+    "provider_name_runninghub": "RunningHub",
     # Provider descriptions
     "provider_desc_gemini-aistudio": "Google AI Studio provides Gemini models with image and video generation, ideal for rapid prototyping and personal projects.",
     "provider_desc_gemini-vertex": "Google Cloud Vertex AI enterprise platform supporting Gemini and Imagen models with higher quotas and audio generation.",
@@ -25,6 +26,7 @@ MESSAGES: dict[str, str] = {
     "provider_desc_minimax": "MiniMax (Hailuo) multimodal platform with text, image and video generation. Connects to the domestic site by default; set base_url to the international site for overseas access.",
     "provider_desc_kling": "Kuaishou Kling video and image generation platform. API Key authentication works with all models; Access Key + Secret Key (JWT) only supports 3.0-and-earlier models. Choose either — when both are set, API Key takes priority.",
     "provider_desc_agnes": "Agnes multimodal platform (OpenAI-style), authenticated with a Bearer API key; currently supports image, text and video generation.",
+    "provider_desc_runninghub": "RunningHub AI Apps for hosted video workflows, text-to-image, and image-to-image generation.",
     # Model display names (registry entries written in a non-Latin script; brand-only
     # names are absent on purpose and fall back to lib/config/registry.py display_name)
     "model_name_ark_doubao-seed-2-0-pro-260215": "Doubao Seed 2.0 Pro",
@@ -54,6 +56,8 @@ MESSAGES: dict[str, str] = {
     "model_name_kling_kling-v3-omni-image": "Kling V3-Omni (Image)",
     "model_name_kling_kling-image-o1": "Kling Image O1",
     "model_name_kling_kling-video-o1": "Kling Video O1",
+    "model_name_runninghub_ai-app-2104162779616120834": "MiniMax H3 Storyboard (AI App)",
+    "model_name_runninghub_ai-app-2104532059371909121": "GPT Image 2 All-in-One (AI App)",
     # Agent preset notes (lib/agent/agent_provider_catalog.py)
     "preset_notes_deepseek": "DeepSeek official Anthropic-compat endpoint; needs sk- prefixed key.",
     "preset_notes_xiaomi_mimo": "Xiaomi MiMo only accepts known model names; no public model list.",

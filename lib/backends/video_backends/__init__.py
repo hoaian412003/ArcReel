@@ -7,6 +7,7 @@ from lib.backends.providers import (
     PROVIDER_GROK,
     PROVIDER_NEWAPI,
     PROVIDER_OPENAI,
+    PROVIDER_RUNNINGHUB,
 )
 from lib.backends.video_backend_contract import (
     ReferenceAudioMode,
@@ -22,6 +23,7 @@ __all__ = [
     "PROVIDER_GROK",
     "PROVIDER_NEWAPI",
     "PROVIDER_OPENAI",
+    "PROVIDER_RUNNINGHUB",
     "ReferenceAudioMode",
     "VideoBackend",
     "VideoGenerationRequest",
@@ -76,3 +78,8 @@ from lib.backends.providers import PROVIDER_AGNES
 from lib.backends.video_backends.agnes import AgnesVideoBackend
 
 register_backend(PROVIDER_AGNES, AgnesVideoBackend)
+
+# RunningHub AI App — MiniMax H3 storyboard / reference-to-video workflow
+from lib.backends.video_backends.runninghub import RunningHubVideoBackend
+
+register_backend(PROVIDER_RUNNINGHUB, RunningHubVideoBackend)

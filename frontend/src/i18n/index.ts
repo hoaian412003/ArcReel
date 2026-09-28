@@ -24,6 +24,16 @@ export const LANGUAGE_DISPLAY_LABELS: Record<SupportedLanguage, string> = {
   vi: 'Tiếng Việt',
 };
 
+function syncDocumentLanguage(language: string): void {
+  if (typeof document === 'undefined') return;
+  const baseLanguage = language.split('-')[0];
+  document.documentElement.lang = SUPPORTED_LANGUAGES.includes(baseLanguage as SupportedLanguage)
+    ? baseLanguage
+    : 'zh';
+}
+
+i18n.on('languageChanged', syncDocumentLanguage);
+
 const I18N_NAMESPACES = [
   'common',
   'auth',
