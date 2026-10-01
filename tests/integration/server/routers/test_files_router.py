@@ -1472,6 +1472,7 @@ class TestPublicFileRouteServesMediaOnly:
             "end_frames/scene_E1S01.png",
             "videos/scene_E1S01.mp4",
             "reference_videos/E1U1.mp4",
+            "final_cuts/ep1_abc123.mp4",
             "reference_videos/thumbnails/E1U1.jpg",
             "thumbnails/scene_E1S01.jpg",
             "characters/Alice.png",

@@ -409,6 +409,56 @@ describe("ProjectSettingsPage – style picker", () => {
     });
   });
 
+  it("saves the H3 prompt profile on a reference-video drama project and clears it back to default", async () => {
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        generation_mode: "reference_video",
+        content_mode: "drama",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    const updateSpy = vi.spyOn(API, "updateProject").mockResolvedValue({
+      success: true,
+      project: { title: "Demo" } as unknown as Awaited<ReturnType<typeof API.updateProject>>["project"],
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    // 字段缺省即默认档
+    expect(await screen.findByRole("radio", { name: /^默认$|^Default$/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: /MiniMax H3 Ref2VA/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^(保存|Save)$/i }));
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith("demo", expect.objectContaining({ video_prompt_profile: "h3_ref2va" }));
+    });
+  });
+
+  it.each([
+    ["ad", "reference_video"],
+    ["drama", "storyboard"],
+  ])("hides the H3 prompt profile for %s content on the %s route", async (contentMode, generationMode) => {
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        generation_mode: generationMode,
+        content_mode: contentMode,
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+
+    renderAt("/app/projects/demo/settings");
+
+    await screen.findByRole("button", { name: /^(保存|Save)$/i });
+    expect(screen.queryByRole("radio", { name: /MiniMax H3 Ref2VA/ })).not.toBeInTheDocument();
+  });
+
   it("omits the character voice binding on the storyboard route", async () => {
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {

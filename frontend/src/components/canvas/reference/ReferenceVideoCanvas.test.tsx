@@ -114,6 +114,7 @@ describe("ReferenceVideoCanvas", () => {
       optimisticActiveScriptFile: new Set(),
     });
     useAppStore.setState({ toast: null });
+    vi.spyOn(API, "previewReferenceScript").mockResolvedValue({ utterances: [], warnings: [] });
     // 时长取档预检默认「与请求时长基准一致」：生成入口无需确认。
     vi.spyOn(API, "precheckReferenceVideoDuration").mockResolvedValue({
       needs_confirmation: false,

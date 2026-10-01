@@ -969,6 +969,12 @@ class TaskRepository(BaseRepository):
         result = await self.session.execute(self._scope_query(stmt, Task))
         return result.scalar_one()
 
+    async def list_running_task_ids(self, project_name: str) -> list[str]:
+        """返回项目中当前 running 状态的任务 id（强制取消的目标集合）。"""
+        stmt = select(Task.task_id).where(Task.project_name == project_name, Task.status == "running")
+        result = await self.session.execute(self._scope_query(stmt, Task))
+        return list(result.scalars().all())
+
     async def cancel_all_queued(self, project_name: str) -> dict[str, Any]:
         """取消项目中所有 queued 任务。"""
         queued_result = await self.session.execute(

@@ -107,6 +107,7 @@ from lib.project.project_migration_failure import (
 from lib.project.project_migration_guard import project_migration_failure
 from lib.project.project_migrations import migrate_project_with_verdict
 from lib.project.source_revision import SourceScope
+from lib.prompts.video_prompt_profile import VALID_VIDEO_PROMPT_PROFILES
 from lib.script.script_batch_edit import (
     ScriptBatchEditCommand,
     ScriptBatchEditLocation,
@@ -537,6 +538,8 @@ async def _run_text_generation(
 
 
 _TEXT_EPISODE_SCRIPT = "text_episode_script"
+#: WebUI 的「重新生成 H3 提示词」与 Agent 工具共用同一个文本任务类型。
+TEXT_EPISODE_SCRIPT_TASK_TYPE = _TEXT_EPISODE_SCRIPT
 _TEXT_DRAMA_SCRIPT_PLAN = "text_drama_script_plan"
 _TEXT_NARRATION_SCRIPT_PLAN = "text_narration_script_plan"
 _TEXT_REFERENCE_SCRIPT_PLAN = "text_reference_script_plan"
@@ -1806,6 +1809,7 @@ PROJECT_SETTINGS = (
     "narration_voice",
     "narration_speed",
     "character_voice_binding",
+    "video_prompt_profile",
 )
 PROJECT_OVERVIEW_FIELDS = ("synopsis", "genre", "theme", "world_setting")
 EPISODE_META_FIELDS = ("title",)
@@ -2193,6 +2197,7 @@ async def execute_queued_text_task(
             instructions=payload.get("instructions"),
             dry_run=bool(payload.get("dry_run")),
             entry_ids=tuple(payload.get("entry_ids") or ()),
+            keep_text=bool(payload.get("keep_text")),
         )
         handlers = {
             _TEXT_EPISODE_SCRIPT: ("generate_episode_script", generate_episode_script_handler),
@@ -2335,6 +2340,12 @@ def _coerce_setting_value(key: str, value: Any) -> Any:
         if value is not None and (not isinstance(value, str) or value not in VALID_CHARACTER_VOICE_BINDINGS):
             raise ValueError(
                 f"character_voice_binding 必须是 {sorted(VALID_CHARACTER_VOICE_BINDINGS)} 之一或 null,收到 {value!r}"
+            )
+        return value
+    if key == "video_prompt_profile":
+        if value is not None and (not isinstance(value, str) or value not in VALID_VIDEO_PROMPT_PROFILES):
+            raise ValueError(
+                f"video_prompt_profile 必须是 {sorted(VALID_VIDEO_PROMPT_PROFILES)} 之一或 null,收到 {value!r}"
             )
         return value
     if key == "narration_voice":

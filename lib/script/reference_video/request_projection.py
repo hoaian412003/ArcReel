@@ -31,6 +31,7 @@ from lib.generation.video_request_facts import (
 from lib.infra.path_safety import PathTraversalError, safe_join
 from lib.infra.schema_guards import is_int
 from lib.project.asset_types import AssetSpec, asset_name_comparison_key
+from lib.prompts.video_prompt_profile import is_h3_ref2va
 from lib.references.reference_admission import (
     SHEET_REQUIRED_ASSET_TYPES,
     UNREGISTERED_REFERENCE_CODE,
@@ -43,6 +44,7 @@ from lib.script.reference_video.duration_slots import (
     project_request_duration,
     request_duration_input,
 )
+from lib.script.reference_video.h3_prompt import preflight_h3_prompt
 from lib.script.reference_video.text_parser import derive_references_from_text
 from lib.script.script_models import ReferenceResource
 from lib.speech.narration_delivery import (
@@ -535,6 +537,10 @@ _PROBLEM_PRESENTATION: dict[str, tuple[str, tuple[tuple[str | int, ...], ...]]] 
     "video_capability_missing_r2v": ("configure_video_model", (("text",),)),
     "video_capability_missing_t2v": ("configure_video_model", (("text",),)),
     "video_capability_reference_unavailable": ("configure_video_model", (("text",),)),
+    "h3_prompt_missing": ("regenerate_h3_prompt", (("h3_prompt",),)),
+    "h3_prompt_stale": ("regenerate_h3_prompt", (("h3_prompt",),)),
+    "h3_prompt_unresolved_reference": ("regenerate_h3_prompt", (("h3_prompt",),)),
+    "h3_prompt_too_long": ("regenerate_h3_prompt", (("h3_prompt",),)),
 }
 
 
@@ -657,6 +663,11 @@ class ReferenceUnitRequestProjector:
                         model=facts.model_id,
                     )
                 )
+
+        if is_h3_ref2va(project):
+            h3_problem = preflight_h3_prompt(unit, project, [asset.reference for asset in request_assets])
+            if h3_problem is not None:
+                problems.append(_problem(h3_problem.code, blocking=True, **h3_problem.params))
 
         planned_duration = _planned_duration(unit)
         prepared_floor = (

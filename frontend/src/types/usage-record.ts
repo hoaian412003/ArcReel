@@ -29,6 +29,7 @@ export interface UsageRecord {
   input_tokens: number | null;
   output_tokens: number | null;
   usage_tokens: number | null;
+  provider_coins: number | null;
   image_input_tokens: number | null;
   image_output_tokens: number | null;
   text_input_tokens: number | null;

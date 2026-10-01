@@ -1284,6 +1284,11 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
                 resolutions=["1K", "2K", "4K"],
+                pricing=PerImageFlat(
+                    rates={"ai-app-2104532059371909121": 0.015},
+                    default_model="ai-app-2104532059371909121",
+                    currency="USD",
+                ),
             ),
         },
         default_base_url="https://www.runninghub.ai",

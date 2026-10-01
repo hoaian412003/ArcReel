@@ -49,12 +49,14 @@ from lib.script.reference_video.execution_checkpoint import (
     stage_provider_media,
     stage_provider_media_for_task,
 )
+from lib.script.reference_video.h3_prompt import H3PromptUnavailable
 from lib.script.reference_video.prompt_render import (
     RenderedUnitPrompt,
     render_video_unit_prompt,
     resolve_reference_audio_paths,
 )
 from lib.script.reference_video.request_projection import (
+    ProjectionProblem,
     ReferenceProjectionBlockedError,
     ReferenceRequestOptions,
     ReferenceUnitRequestProjector,
@@ -122,12 +124,18 @@ def _render_unit_prompt(
     *引用语法文本*而非渲染结果上——三段论渲染恒产出非空第三段，渲染后已无从判别。
 
     """
-    return render_video_unit_prompt(
-        unit,
-        project,
-        settings,
-        request_references=request_references,
-    )
+    try:
+        return render_video_unit_prompt(
+            unit,
+            project,
+            settings,
+            request_references=request_references,
+        )
+    except H3PromptUnavailable as exc:
+        # 参考音频等只有渲染期才判得出的缺口：与投影阶段的 H3 问题同码，任务按同一条阻断路径失败。
+        raise ReferenceProjectionBlockedError(
+            ProjectionProblem(code=exc.code, blocking=True, params=tuple(exc.params.items()))
+        ) from exc
 
 
 def _reference_limit_warning(*, provider: str, model: str | None, count: int, max_refs: int) -> dict[str, Any]:

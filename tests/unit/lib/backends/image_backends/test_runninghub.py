@@ -44,10 +44,14 @@ async def test_generate_uploads_references_submits_and_downloads(tmp_path):
         submit = router.post("https://www.runninghub.ai/task/openapi/ai-app/run").mock(
             return_value=httpx.Response(200, json={"code": 0, "data": {"taskId": "image-task-1"}})
         )
-        router.post("https://www.runninghub.cn/openapi/v2/query").mock(
+        router.post("https://www.runninghub.ai/openapi/v2/query").mock(
             return_value=httpx.Response(
                 200,
-                json={"status": "SUCCESS", "results": [{"url": "https://output.test/result.png"}]},
+                json={
+                    "status": "SUCCESS",
+                    "results": [{"url": "https://output.test/result.png"}],
+                    "usage": {"consumeMoney": None, "consumeCoins": "12", "thirdPartyConsumeMoney": "0.015"},
+                },
             )
         )
         router.get("https://output.test/result.png").mock(
@@ -78,6 +82,8 @@ async def test_generate_uploads_references_submits_and_downloads(tmp_path):
     assert output.read_bytes() == b"generated-image"
     assert result.image_uri == "https://output.test/result.png"
     assert result.provider == "runninghub"
+    assert result.provider_coins == 12
+    assert result.provider_cost_usd == 0.015
 
 
 @pytest.mark.asyncio
@@ -87,7 +93,7 @@ async def test_generate_without_references_sets_every_workflow_image_to_none(tmp
         submit = router.post("https://www.runninghub.ai/task/openapi/ai-app/run").mock(
             return_value=httpx.Response(200, json={"code": 0, "data": {"taskId": "text-task-1"}})
         )
-        router.post("https://www.runninghub.cn/openapi/v2/query").mock(
+        router.post("https://www.runninghub.ai/openapi/v2/query").mock(
             return_value=httpx.Response(
                 200,
                 json={"status": "SUCCESS", "results": [{"url": "https://output.test/text.png"}]},
@@ -162,7 +168,7 @@ async def test_generate_reports_task_and_last_status_when_polling_times_out(tmp_
         router.post("https://www.runninghub.ai/task/openapi/ai-app/run").mock(
             return_value=httpx.Response(200, json={"code": 0, "data": {"taskId": "stuck-task"}})
         )
-        router.post("https://www.runninghub.cn/openapi/v2/query").mock(
+        router.post("https://www.runninghub.ai/openapi/v2/query").mock(
             return_value=httpx.Response(200, json={"status": "RUNNING", "results": None})
         )
 

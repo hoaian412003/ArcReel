@@ -7,6 +7,7 @@ import { buildMentionLookup, characterReferenceForms, MENTION_RE } from "@/utils
 import { useProjectsStore } from "@/stores/projects-store";
 import { API } from "@/api";
 import { PromptPreviewButton } from "@/components/shared/PromptPreviewButton";
+import { H3PromptControls } from "./H3PromptControls";
 import { SourceTextReadonly } from "@/components/shared/SourceTextReadonly";
 import {
   SHEET_FIELD,
@@ -297,6 +298,7 @@ export function ReferenceVideoCard({
           {unit.unit_id}
         </span>
         <div className="flex items-center gap-2">
+          <H3PromptControls unit={unit} projectName={projectName} episode={episode} />
           <PromptPreviewButton
             title={t("reference_prompt_preview_title")}
             notice={t("reference_prompt_preview_notice")}

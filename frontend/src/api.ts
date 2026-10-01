@@ -71,6 +71,8 @@ import type {
   ReferenceUnitCapability,
   ReferenceUnitCapabilityMap,
   ReferenceVideoUnit,
+  H3PromptSections,
+  H3PromptStatus,
   TransitionType,
   AdShot,
   DramaScene,
@@ -92,6 +94,13 @@ import type {
 } from "@/types";
 import type { GridCapability, GridGeneration } from "@/types/grid";
 import type {
+  EditClip,
+  EditRenderState,
+  EditFinalCut,
+  EditTimelineDetail,
+  EditTimelineSummary,
+} from "@/types/edit-timeline";
+import type {
   PresentationReadModel,
   PresentationRequestOptions,
   PresentationResourceType,
@@ -102,9 +111,9 @@ import type { WorkflowPlan, WorkflowPlanRequest } from "@/types/workflow";
 import type {
   AgentCredential,
   CreateAgentCredentialRequest,
+  LocalLoginStatus,
   PresetProvidersResponse,
   TestConnectionRequest,
-  LocalLoginStatus,
   TestConnectionResponse,
   UpdateAgentCredentialRequest,
 } from "@/types/agent-credential";
@@ -566,6 +575,80 @@ class API {
     narrationDelivery: "post_production" | "use_tts" = "post_production",
   ): string {
     return `${API_BASE}/projects/${encodeURIComponent(projectName)}/export/jianying-draft?episode=${encodeURIComponent(episode)}&draft_path=${encodeURIComponent(draftPath)}&download_token=${encodeURIComponent(downloadToken)}&jianying_version=${encodeURIComponent(jianyingVersion)}&narration_delivery=${encodeURIComponent(narrationDelivery)}`;
+  }
+
+  // ==================== 剪辑时间线 ====================
+
+  private static editTimelineBase(projectName: string, episode: number): string {
+    return `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/edit-timelines`;
+  }
+
+  static async listEditTimelines(projectName: string, episode: number) {
+    return this.request<{ timelines: EditTimelineSummary[] }>(this.editTimelineBase(projectName, episode));
+  }
+
+  static async createEditTimeline(
+    projectName: string,
+    episode: number,
+    payload: { name: string; source?: "mechanical" | "copy"; copy_from?: string },
+  ) {
+    return this.request<EditTimelineDetail>(this.editTimelineBase(projectName, episode), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  static async getEditTimeline(projectName: string, episode: number, timelineId: string) {
+    return this.request<EditTimelineDetail>(`${this.editTimelineBase(projectName, episode)}/${timelineId}`);
+  }
+
+  static async updateEditTimeline(
+    projectName: string,
+    episode: number,
+    timelineId: string,
+    payload: { parent_revision: number; clips: EditClip[]; summary?: string },
+  ) {
+    return this.request<EditTimelineDetail>(`${this.editTimelineBase(projectName, episode)}/${timelineId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  static async rollbackEditTimeline(
+    projectName: string,
+    episode: number,
+    timelineId: string,
+    payload: { to_revision: number; parent_revision: number },
+  ) {
+    return this.request<EditTimelineDetail>(
+      `${this.editTimelineBase(projectName, episode)}/${timelineId}/rollback`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+  }
+
+  static async renameEditTimeline(projectName: string, episode: number, timelineId: string, name: string) {
+    return this.request<EditTimelineDetail>(`${this.editTimelineBase(projectName, episode)}/${timelineId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  static async deleteEditTimeline(projectName: string, episode: number, timelineId: string) {
+    return this.request<{ success: boolean }>(`${this.editTimelineBase(projectName, episode)}/${timelineId}`, {
+      method: "DELETE",
+    });
+  }
+
+  static async renderEditTimeline(projectName: string, episode: number, timelineId: string) {
+    return this.request<EditRenderState>(`${this.editTimelineBase(projectName, episode)}/${timelineId}/render`, {
+      method: "POST",
+    });
+  }
+
+  static async getEditTimelineRender(projectName: string, episode: number, timelineId: string) {
+    return this.request<{ render: EditRenderState | null; final_cut: EditFinalCut | null }>(
+      `${this.editTimelineBase(projectName, episode)}/${timelineId}/render`,
+    );
   }
 
   static async getPresentation(
@@ -1911,6 +1994,25 @@ class API {
     );
   }
 
+  static async forceCancelAllPreview(
+    projectName: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ queued_count: number; running_count: number }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/tasks/force-cancel-all-preview`,
+      { signal: options.signal },
+    );
+  }
+
+  static async forceCancelAll(
+    projectName: string
+  ): Promise<{ cancelled_count: number; force_cancelled_running_count: number }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/tasks/force-cancel-all`,
+      { method: "POST" }
+    );
+  }
+
   /** 订阅项目事件流；断线后自动重建，重建后服务端重新下发 snapshot。 */
   static openProjectEventStream(options: ProjectEventStreamOptions): SseStreamHandle {
     const url = `${API_BASE}/projects/${encodeURIComponent(options.projectName)}/events/stream`;
@@ -2382,12 +2484,12 @@ class API {
     return this.request(`/agent/credentials/${id}/activate`, { method: "POST" });
   }
 
-  static async testAgentCredential(id: number): Promise<TestConnectionResponse> {
-    return this.request(`/agent/credentials/${id}/test`, { method: "POST" });
   static async getLocalLoginStatus(): Promise<LocalLoginStatus> {
     return this.request("/agent/local-login/status");
   }
 
+  static async testAgentCredential(id: number): Promise<TestConnectionResponse> {
+    return this.request(`/agent/credentials/${id}/test`, { method: "POST" });
   }
 
   static async testAgentConnectionDraft(
@@ -2915,9 +3017,39 @@ class API {
   static async listReferenceVideoUnits(
     projectName: string,
     episode: number,
-  ): Promise<{ units: ReferenceVideoUnit[]; unit_capabilities: ReferenceUnitCapabilityMap }> {
+  ): Promise<{
+    units: ReferenceVideoUnit[];
+    unit_capabilities: ReferenceUnitCapabilityMap;
+    /** 仅 H3 提示词档的项目带：逐单元的 H3 提示词状态。 */
+    h3_prompt_status?: Record<string, H3PromptStatus>;
+  }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units`,
+    );
+  }
+
+  /** 手写 H3 六段载荷：后端按当前单元正文机械校验，通过后绑定到这份正文。 */
+  static async patchReferenceUnitH3Prompt(
+    projectName: string,
+    episode: number,
+    unitId: string,
+    sections: H3PromptSections,
+  ): Promise<{ unit: ReferenceVideoUnit; h3_prompt_status: H3PromptStatus }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/${encodeURIComponent(unitId)}/h3-prompt`,
+      { method: "PATCH", body: JSON.stringify(sections) },
+    );
+  }
+
+  /** 重新生成 H3 提示词：单元正文原样保留，入队文本任务；unitIds 缺省即本集全部单元。 */
+  static async regenerateH3Prompts(
+    projectName: string,
+    episode: number,
+    unitIds?: string[],
+  ): Promise<{ task_id: string; deduped: boolean; unit_ids: string[] }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/h3-prompt/regenerate`,
+      { method: "POST", body: JSON.stringify(unitIds ? { unit_ids: unitIds } : {}) },
     );
   }
 

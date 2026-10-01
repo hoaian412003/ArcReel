@@ -21,14 +21,16 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from lib.project.asset_types import BUCKET_KEY, asset_name_comparison_key, normalize_asset_bucket
 from lib.prompts.prompt_style import normalize_style_value
 from lib.prompts.prompt_templates.builtin import builtin_templates
+from lib.prompts.video_prompt_profile import is_h3_ref2va
 from lib.references.reference_catalog import ReferenceCatalog, build_reference_catalog
+from lib.script.reference_video.h3_prompt import load_h3_prompt, render_h3_prompt, uses_audio_labels
 from lib.script.reference_video.script_preview import (
     WARN_UNREGISTERED_MENTION,
     derive_utterances,
@@ -45,6 +47,9 @@ from lib.script.reference_video.text_parser import (
 from lib.script.reference_video.voice_settings import VoiceRenderSettings
 from lib.script.script_models import ReferenceResource
 from lib.speech.audio_utils import resolve_audio_ref_path
+
+#: H3 提示词档：请求发出了参考音频，但六段载荷没有引用任何 ``<Audio …>`` 标签。
+WARN_H3_AUDIO_UNREFERENCED = "h3_prompt_audio_unreferenced"
 
 #: 角色参考音频的项目内固定目录（与上传 / TTS 样本落盘口径一致）。
 ASSET_AUDIO_SUBDIR = "characters/refs_audio"
@@ -188,7 +193,19 @@ def render_video_unit_prompt(
     references = request_references
     if references is None:
         references, _missing = derive_references_from_text(text, project)
-    return render_unit_prompt(text, project, references, settings)
+    rendered = render_unit_prompt(text, project, references, settings)
+    if not is_h3_ref2va(project):
+        return rendered
+    # H3 提示词档：声音绑定与参考图顺序仍由上面的通用渲染派生，下发的文本换成载荷解析后的六段。
+    h3 = load_h3_prompt(unit)
+    warnings = list(rendered.warnings)
+    if rendered.audio_speakers and not uses_audio_labels(h3):
+        warnings.append({"key": WARN_H3_AUDIO_UNREFERENCED, "params": {}})
+    return replace(
+        rendered,
+        prompt=render_h3_prompt(h3, text, project, references, rendered.audio_speakers),
+        warnings=warnings,
+    )
 
 
 def _warning_unregistered(name: str) -> dict[str, Any]:

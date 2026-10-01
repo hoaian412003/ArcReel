@@ -3661,6 +3661,10 @@ class ProjectManager:
 
     # ==================== 项目概述生成 ====================
 
+    def read_source_text(self, project_name: str, max_chars: int = 50000) -> str:
+        """项目 source 目录下全部文本文件的拼接内容（供提示词规模估算等只读用途）。"""
+        return self._read_source_files(project_name, max_chars)
+
     def _read_source_files(self, project_name: str, max_chars: int = 50000) -> str:
         """
         读取项目 source 目录下的所有 UTF-8 文本文件内容。

@@ -43,6 +43,8 @@ from lib.project.asset_types import (
 )
 from lib.project.project_manager import VALID_GENERATION_MODES as _VALID_GENERATION_MODES
 from lib.project.project_manager import VALID_SOURCE_KINDS as _VALID_SOURCE_KINDS
+from lib.prompts.video_prompt_profile import PROJECT_FIELD as VIDEO_PROMPT_PROFILE_FIELD
+from lib.prompts.video_prompt_profile import VALID_VIDEO_PROMPT_PROFILES
 from lib.references.reference_catalog import ReferenceCatalog, build_reference_catalog
 from lib.script.script_models import (
     AD_TARGET_DURATION_DRIFT_THRESHOLD,
@@ -404,6 +406,19 @@ class DataValidator:
         grid_storyboard = project.get("grid_storyboard")
         if grid_storyboard is not None and not isinstance(grid_storyboard, bool):
             errors.append(_m("val_field_type_bool", field="grid_storyboard"))
+
+        # 参考生视频提示词档：可选字段，缺省即默认档；出现即须是已知取值。
+        prompt_profile = project.get(VIDEO_PROMPT_PROFILE_FIELD)
+        if prompt_profile is not None and (
+            not isinstance(prompt_profile, str) or prompt_profile not in VALID_VIDEO_PROMPT_PROFILES
+        ):
+            errors.append(
+                _m(
+                    "val_video_prompt_profile_invalid",
+                    value=prompt_profile,
+                    allowed=_allowed(VALID_VIDEO_PROMPT_PROFILES),
+                )
+            )
 
         # 项目级语速覆盖（阅读单位 / 秒）：可选字段，缺省即回退语言默认；出现即须落在硬区间内。
         speech_rate = project.get(SPEECH_RATE_FIELD)

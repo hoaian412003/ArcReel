@@ -56,6 +56,23 @@ export interface UnitGeneratedAssets {
   source_signature?: string | null;
 }
 
+/** MiniMax H3 全参考提示词的六段，字段名与顺序即输出格式，逐字保留。 */
+export const H3_PROMPT_SECTIONS = [
+  "subject_definitions",
+  "summary",
+  "retention_analysis",
+  "detailed_description",
+  "overall_soundscape",
+  "non_diegetic_music",
+] as const;
+
+export type H3PromptSection = (typeof H3_PROMPT_SECTIONS)[number];
+
+export type H3PromptSections = Record<H3PromptSection, string>;
+
+/** current 可直接下发；stale 是单元正文改动后的过期；missing 是尚未写成。仅 H3 提示词档的项目有该状态。 */
+export type H3PromptStatus = "current" | "stale" | "missing";
+
 export interface ReferenceVideoUnit {
   /** Format: "E{episode}U{index}" */
   unit_id: string;
@@ -73,6 +90,8 @@ export interface ReferenceVideoUnit {
   pending_authoring?: boolean;
   /** Source text carried over from the script plan on content confirmation. Read-only; empty or absent for manually added units. */
   source_text?: string;
+  /** H3 提示词档下的六段载荷；其它提示词档不带。 */
+  h3_prompt?: H3PromptSections & { source_text_hash?: string };
 }
 
 export interface ReferenceRequestOptions {

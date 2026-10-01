@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.generation.batch_admission import DURATION_CONFIRMATION_CODE
+from lib.script.reference_video.h3_prompt import H3PromptUnavailable
 from lib.script.reference_video.prompt_render import render_video_unit_prompt, resolve_reference_audio_paths
 from lib.script.reference_video.request_projection import ReferenceUnitRequestProjection
 from lib.script.reference_video.voice_settings import VoiceRenderSettings
@@ -43,14 +44,18 @@ def render_reference_prompt_preview(
         result["unavailable"] = translate("reference_prompt_preview_missing")
         return result
 
-    rendered = render_video_unit_prompt(
-        unit,
-        project,
-        VoiceRenderSettings.from_request_facts(
-            request_facts, audio_ready=resolve_reference_audio_paths(project, project_path)
-        ),
-        request_references=[asset.reference for asset in projection.request_assets],
-    )
+    try:
+        rendered = render_video_unit_prompt(
+            unit,
+            project,
+            VoiceRenderSettings.from_request_facts(
+                request_facts, audio_ready=resolve_reference_audio_paths(project, project_path)
+            ),
+            request_references=[asset.reference for asset in projection.request_assets],
+        )
+    except H3PromptUnavailable as exc:
+        result["unavailable"] = translate(exc.code, **exc.params)
+        return result
     result["text"] = rendered.prompt
     result["references"] = [
         {

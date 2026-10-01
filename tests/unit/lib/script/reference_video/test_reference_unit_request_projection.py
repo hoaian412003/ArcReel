@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from lib.generation.video_request_facts import VideoRequestFacts, VideoRequestFactsFailure
+from lib.script.reference_video.h3_prompt import bind_h3_prompt
 from lib.script.reference_video.request_projection import (
     POST_PRODUCTION,
     USE_TTS,
@@ -732,3 +733,54 @@ async def test_production_entry_treats_an_unclaimed_sheet_as_unavailable_like_th
         "reference_capability_changed",
     ]
     assert dict(projections[1].problems[0].params)["missing"] == (("character", "李四"),)
+
+
+_H3_TEXT = "@[阿离] 站在 @[大厅]。"
+_H3_SECTIONS = {
+    "subject_definitions": "@[阿离] is the woman in <Picture @[阿离]>.\n@[大厅] is the hall in <Picture @[大厅]>.",
+    "summary": "[reference generation] @[阿离] stands in @[大厅].",
+    "retention_analysis": "@[阿离] (appears in [Shot 1]): fully_preserved - kept.",
+    "detailed_description": "Realistic style.\n[Shot 1] @[阿离] stands in @[大厅].",
+    "overall_soundscape": "Quiet room tone.",
+    "non_diegetic_music": "N/A",
+}
+
+
+async def _project_h3_unit(unit: dict) -> list[str]:
+    project = {
+        "generation_mode": "reference_video",
+        "content_mode": "drama",
+        "video_prompt_profile": "h3_ref2va",
+        "scenes": {"大厅": {}},
+        "characters": {"阿离": {}},
+        "props": {},
+    }
+    projector = ReferenceUnitRequestProjector(_FakeRequestFacts(), _FakeAssets(set()))
+    result = await projector.project_current(
+        project=project,
+        script={"video_units": [unit]},
+        unit=unit,
+        resolved_assets=[
+            _asset("character", "阿离", "/fake/character.png"),
+            _asset("scene", "大厅", "/fake/scene.png"),
+        ],
+    )
+    return [problem.code for problem in result.blocking_problems]
+
+
+@pytest.mark.asyncio
+async def test_projection_blocks_an_h3_project_unit_without_a_current_payload() -> None:
+    unit = {"unit_id": "E1U1", "text": _H3_TEXT, "duration_seconds": 8}
+    assert "h3_prompt_missing" in await _project_h3_unit(unit)
+
+    payload = bind_h3_prompt(_H3_TEXT, _H3_SECTIONS).model_dump()
+    stale = {**unit, "text": _H3_TEXT + "\n镜头推近。", "h3_prompt": payload}
+    assert "h3_prompt_stale" in await _project_h3_unit(stale)
+
+
+@pytest.mark.asyncio
+async def test_projection_lets_an_h3_project_unit_with_a_current_payload_through() -> None:
+    payload = bind_h3_prompt(_H3_TEXT, _H3_SECTIONS).model_dump()
+    unit = {"unit_id": "E1U1", "text": _H3_TEXT, "duration_seconds": 8, "h3_prompt": payload}
+    codes = await _project_h3_unit(unit)
+    assert not [code for code in codes if code.startswith("h3_prompt")]

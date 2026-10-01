@@ -36,7 +36,11 @@ async def test_generate_uploads_ordered_images_and_runs_ai_app(monkeypatch, tmp_
         if request.url.path == "/openapi/v2/query":
             return httpx.Response(
                 200,
-                json={"status": "SUCCESS", "results": [{"url": "https://cdn.example/final.mp4"}]},
+                json={
+                    "status": "SUCCESS",
+                    "results": [{"url": "https://cdn.example/final.mp4"}],
+                    "usage": {"consumeMoney": None, "consumeCoins": "94", "thirdPartyConsumeMoney": None},
+                },
             )
         raise AssertionError(f"unexpected request: {request.method} {request.url}")
 
@@ -75,3 +79,4 @@ async def test_generate_uploads_ordered_images_and_runs_ai_app(monkeypatch, tmp_
     assert downloaded == {"url": "https://cdn.example/final.mp4", "output_path": output, "label": "RunningHub"}
     assert result.task_id == "task-1"
     assert result.provenance == {"runninghub_webapp_id": "2104162779616120834"}
+    assert result.provider_coins == 94

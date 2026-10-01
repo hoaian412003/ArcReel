@@ -30,6 +30,7 @@ export function makeUsageRecord(overrides: Partial<UsageRecord> = {}): UsageReco
     input_tokens: null,
     output_tokens: null,
     usage_tokens: null,
+    provider_coins: null,
     image_input_tokens: null,
     image_output_tokens: null,
     text_input_tokens: null,

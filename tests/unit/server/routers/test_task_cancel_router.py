@@ -309,3 +309,70 @@ class TestCancelAllQueued:
         body = resp.json()
         assert body["cancelled_count"] == 0
         assert body["skipped_running_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: force-cancel-all
+# ---------------------------------------------------------------------------
+
+
+class _ForceCancelQueue(_FakeQueue):
+    def __init__(self, running_ids: list[str]):
+        super().__init__(cancel_all_result={"cancelled_count": 2, "skipped_running_count": 0})
+        self._running_ids = running_ids
+        self.interrupted: list[str] = []
+
+    async def list_running_task_ids(self, project_name: str) -> list[str]:
+        return self._running_ids
+
+    async def mark_task_interrupted(self, task_id: str) -> int:
+        self.interrupted.append(task_id)
+        return 1
+
+
+class _FakeWorker:
+    def __init__(self) -> None:
+        self.forced: set[str] = set()
+
+    async def force_cancel_running(self, task_ids: set[str]) -> None:
+        self.forced = task_ids
+
+
+class TestForceCancelAll:
+    def test_preview_reports_queued_and_running(self, monkeypatch):
+        fake = _ForceCancelQueue(["r1", "r2"])
+        fake._cancel_all_preview_count = 3
+        monkeypatch.setattr(tasks_router, "get_task_queue", lambda: fake)
+
+        with TestClient(_make_app()) as client:
+            resp = client.get("/api/v1/projects/p/tasks/force-cancel-all-preview")
+
+        assert resp.json() == {"queued_count": 3, "running_count": 2}
+
+    def test_interrupts_running_tasks_through_worker(self, monkeypatch):
+        fake = _ForceCancelQueue(["r1", "r2"])
+        monkeypatch.setattr(tasks_router, "get_task_queue", lambda: fake)
+        app = _make_app()
+        worker = _FakeWorker()
+        app.state.generation_worker = worker
+
+        with TestClient(app) as client:
+            resp = client.post("/api/v1/projects/p/tasks/force-cancel-all")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "cancelled_count": 2,
+            "skipped_running_count": 0,
+            "force_cancelled_running_count": 2,
+        }
+        assert worker.forced == {"r1", "r2"}
+
+    def test_falls_back_to_marking_interrupted_without_worker(self, monkeypatch):
+        fake = _ForceCancelQueue(["r1"])
+        monkeypatch.setattr(tasks_router, "get_task_queue", lambda: fake)
+
+        with TestClient(_make_app()) as client:
+            resp = client.post("/api/v1/projects/p/tasks/force-cancel-all")
+
+        assert resp.json()["force_cancelled_running_count"] == 1
+        assert fake.interrupted == ["r1"]

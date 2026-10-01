@@ -96,6 +96,9 @@ class ImageGenerationResult:
     image_output_tokens: int | None = None
     text_input_tokens: int | None = None
     text_output_tokens: int | None = None
+    # RunningHub：workflow 在 RH 机器上的运行消耗（RH coin）与其内第三方模型的美元费用。
+    provider_coins: float | None = None
+    provider_cost_usd: float | None = None
 
 
 class ImageBackend(Protocol):

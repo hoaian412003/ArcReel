@@ -13,8 +13,10 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from lib.backends.text_backends.base import TextTaskType
 from lib.billing.cost_calculator import cost_calculator
 from lib.billing.pricing.strategies import PricingParams
+from lib.billing.text_step_estimate import estimate_text_steps
 from lib.config.resolver import (
     ConfigResolver,
     VideoGenerationType,
@@ -724,6 +726,67 @@ class CostEstimationService:
             },
             "episodes": episodes_result,
             "project_totals": {"estimate": proj_est, "actual": proj_act},
+        }
+
+    async def compute_text_steps(
+        self,
+        project_data: dict[str, Any],
+        scripts: Mapping[str, dict[str, Any]],
+        *,
+        project_name: str,
+        source_text: str,
+    ) -> dict[str, Any]:
+        """按提示词规模估算文本类制作步骤（分集规划 / 分集规划内容 / 最终剧本）的 token 与费用。
+
+        与图像、视频估算独立：没有源文本时返回空步骤，文本模型解析不出时只给 token、不给费用。
+        """
+        episodes_meta = [ep for ep in project_data.get("episodes", []) if isinstance(ep, dict)]
+        episode_numbers = [ep["episode"] for ep in episodes_meta if isinstance(ep.get("episode"), int)]
+        scripts_by_episode = {
+            ep["episode"]: script
+            for ep in episodes_meta
+            if isinstance(ep.get("episode"), int) and (script := scripts.get(ep.get("script_file", "")))
+        }
+        estimates = estimate_text_steps(
+            project_data,
+            source_text=source_text,
+            scripts_by_episode=scripts_by_episode,
+            episode_numbers=episode_numbers,
+        )
+        provider: str | None = None
+        model: str | None = None
+        price: Any = None
+        try:
+            provider, model = await self._resolver.text_backend_for_task(TextTaskType.SCRIPT, project_name)
+            async with self._session_factory() as session:
+                price = await CustomProviderRepository(session).resolve_price(provider, model)
+        except (ValueError, SQLAlchemyError):
+            logger.debug("无法解析文本估价模型", exc_info=True)
+
+        steps: list[dict[str, Any]] = []
+        for estimate in estimates:
+            cost: CostBreakdown = {}
+            if provider is not None and price is not None:
+                try:
+                    amount, currency = cost_calculator.calculate_cost(
+                        provider,
+                        PricingParams(
+                            call_type="text",
+                            model=model,
+                            input_tokens=estimate.input_tokens,
+                            output_tokens=estimate.output_tokens,
+                        ),
+                        custom_price_input=price.price_input,
+                        custom_price_output=price.price_output,
+                        custom_currency=price.currency,
+                    )
+                    _add_cost(cost, amount, currency)
+                except ValueError:
+                    logger.debug("无法计算 text 预估费用 step=%s", estimate.id, exc_info=True)
+            steps.append({**estimate.to_payload(), "cost": cost})
+        return {
+            "model": {"provider": provider, "model": model} if provider is not None else None,
+            "steps": steps,
         }
 
     async def _estimate_unit_reference_video_episode(

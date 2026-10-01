@@ -8,11 +8,18 @@ import { NarrationAudioCard } from "@/components/canvas/timeline/NarrationAudioC
 import { UPLOAD_VIDEO_ACCEPT, UploadIconButton } from "@/components/ui/UploadIconButton";
 import { formatCost } from "@/utils/cost-format";
 import { StatusBadge, resolveUnitStatus } from "./unit-status";
+import { UnitDialogueCard } from "./UnitDialogueCard";
 import type { CostBreakdown, ReferenceVideoUnit, UnitStatus } from "@/types";
 
 export interface UnitPreviewPanelProps {
   unit: ReferenceVideoUnit | null;
   projectName?: string;
+  /** Episode number; with `projectName` it enables the pre-generation dialogue card. */
+  episode?: number;
+  /** Project asset tables (characters, scenes, …); the dialogue card re-parses when they change. */
+  dialogueAssets?: string;
+  /** Jump back to the script editor from the dialogue card. */
+  onEditDialogue?: () => void;
   /** Composite UI status — combines persisted state, queue, and optimistic flags.
    *  When omitted, falls back to `video_clip ? 'ready' : 'pending'`. */
   status?: UnitStatus;
@@ -65,6 +72,9 @@ function hasCost(b: CostBreakdown | undefined): boolean {
 export function UnitPreviewPanel({
   unit,
   projectName,
+  episode,
+  dialogueAssets,
+  onEditDialogue,
   status,
   errorMessage,
   busy = false,
@@ -221,6 +231,17 @@ export function UnitPreviewPanel({
           </div>
         )}
       </div>
+
+      {projectName && episode !== undefined && (
+        <UnitDialogueCard
+          key={unit.unit_id}
+          projectName={projectName}
+          episode={episode}
+          text={unit.text}
+          assets={dialogueAssets}
+          onEdit={onEditDialogue}
+        />
+      )}
 
       {onGenerate && (
         <button

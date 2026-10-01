@@ -96,6 +96,7 @@ class SettlementInput:
     image_output_tokens: int | None = None
     text_input_tokens: int | None = None
     text_output_tokens: int | None = None
+    provider_coins: float | None = None
 
 
 @dataclass(frozen=True)
@@ -388,6 +389,7 @@ class UsageRepository(BaseRepository):
             "cost_amount": settled.cost_amount,
             "currency": settled.currency,
             "usage_tokens": settlement.usage_tokens,
+            "provider_coins": settlement.provider_coins,
             "generate_audio": settled.effective_generate_audio,
         }
         if error_message is not None or error_code is not None:
@@ -519,6 +521,7 @@ class UsageRepository(BaseRepository):
                 cost_amount=settled.cost_amount,
                 currency=settled.currency,
                 usage_tokens=settlement.usage_tokens,
+                provider_coins=settlement.provider_coins,
                 input_tokens=settled.input_tokens,
                 output_tokens=settled.output_tokens,
                 image_input_tokens=settlement.image_input_tokens,
@@ -890,6 +893,7 @@ def _record_to_dict(row: ApiCall, task_type: str | None) -> dict[str, Any]:
         "input_tokens": row.input_tokens,
         "output_tokens": row.output_tokens,
         "usage_tokens": row.usage_tokens,
+        "provider_coins": row.provider_coins,
         "image_input_tokens": row.image_input_tokens,
         "image_output_tokens": row.image_output_tokens,
         "text_input_tokens": row.text_input_tokens,

@@ -200,6 +200,11 @@ export function UsageRecordsSection() {
       ? undefined
       : () => void cancellation.requestAll(cancelProject);
 
+  const onForceCancelAll =
+    cancelProject === null || activeTasks.every((task) => !taskMatchesFilters(task, filters))
+      ? undefined
+      : () => void cancellation.requestForceAll(cancelProject);
+
   return (
     <section className="space-y-4">
       <header>
@@ -258,6 +263,7 @@ export function UsageRecordsSection() {
         onPage={(direction) => void goToPage(direction)}
         onOpenDetail={onOpenDetail}
         onCancelAll={onCancelAll}
+        onForceCancelAll={onForceCancelAll}
       />
 
       {cancellation.request && (

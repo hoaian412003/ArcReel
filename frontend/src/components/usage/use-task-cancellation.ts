@@ -19,6 +19,12 @@ export type CancelRequest =
       kind: "all";
       projectName: string;
       queuedCount: number;
+    }
+  | {
+      kind: "force-all";
+      projectName: string;
+      queuedCount: number;
+      runningCount: number;
     };
 
 export interface TaskCancellation {
@@ -33,6 +39,8 @@ export interface TaskCancellation {
   cancellingTaskIds: ReadonlySet<string>;
   requestSingle: (taskId: string) => Promise<void>;
   requestAll: (projectName: string) => Promise<void>;
+  /** 强制取消：排队中与执行中的任务一并停掉（执行中的供应商调用无法撤回，可能仍计费）。 */
+  requestForceAll: (projectName: string) => Promise<void>;
   confirm: () => Promise<void>;
   dismiss: () => void;
 }
@@ -104,6 +112,28 @@ export function useTaskCancellation(
     [beginPreview],
   );
 
+  const requestForceAll = useCallback(
+    async (projectName: string) => {
+      const controller = beginPreview();
+      try {
+        const { queued_count, running_count } = await API.forceCancelAllPreview(projectName, {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || queued_count + running_count === 0) return;
+        setFailed(false);
+        setRequest({
+          kind: "force-all",
+          projectName,
+          queuedCount: queued_count,
+          runningCount: running_count,
+        });
+      } catch {
+        // 没有可取消的任务，或预览被更新的操作接管
+      }
+    },
+    [beginPreview],
+  );
+
   const confirm = useCallback(async () => {
     if (!request) return;
     setCancelling(true);
@@ -116,6 +146,7 @@ export function useTaskCancellation(
     try {
       try {
         if (request.kind === "single") await API.cancelTask(request.taskId);
+        else if (request.kind === "force-all") await API.forceCancelAll(request.projectName);
         else await API.cancelAllQueued(request.projectName);
       } catch (error) {
         // 取消没有落到服务端：确认态留在原地并标记失败，用户看得到原因、也能重试。
@@ -153,6 +184,7 @@ export function useTaskCancellation(
     cancellingTaskIds,
     requestSingle,
     requestAll,
+    requestForceAll,
     confirm,
     dismiss,
   };

@@ -806,6 +806,25 @@ class ReferenceResource(BaseModel):
     name: str = Field(description="商品/角色/场景/道具名称，必须在 project.json 对应 bucket 中已注册")
 
 
+class H3Prompt(BaseModel):
+    """MiniMax H3 全参考提示词的六段结构，由提示词编写或人工写入，属于 ``text`` 的派生载荷。
+
+    各段正文里的资产以 ``@[名称]`` 占位，生成时按实际随请求发出的参考图 / 参考音频顺序解析成
+    ``<Picture N>`` / ``<Audio N>`` 标签。``source_text_hash`` 记录写入时的 ``text`` 指纹，
+    ``text`` 改动后指纹不再匹配，该载荷即视为过期。
+    """
+
+    model_config = _STRICT_CONFIG
+
+    subject_definitions: str = Field(min_length=1, description="subject_definitions 段")
+    summary: str = Field(min_length=1, description="summary 段")
+    retention_analysis: str = Field(min_length=1, description="retention_analysis 段")
+    detailed_description: str = Field(min_length=1, description="detailed_description 段")
+    overall_soundscape: str = Field(min_length=1, description="overall_soundscape 段")
+    non_diegetic_music: str = Field(min_length=1, description="non_diegetic_music 段")
+    source_text_hash: SkipJsonSchema[str] = Field(default="", description="写入时的 text 指纹，空串表示未绑定")
+
+
 class ReferenceVideoUnit(BaseModel):
     """视频单元——一个视频文件的最小生成粒度。
 
@@ -836,6 +855,9 @@ class ReferenceVideoUnit(BaseModel):
     # 待编写：视觉层尚未补出。不带视觉层的新增条目置位，提示词编写写回或手写齐视觉层时清除；
     # 对 LLM 隐藏，不在任何 PATCH 白名单内。落盘只在置位时出现。
     pending_authoring: SkipJsonSchema[bool] = Field(default=False, description="该条目待编写")
+    # H3 全参考提示词档下的六段载荷；其它提示词档不写入。对 LLM 的单元级 schema 隐藏（提示词编写
+    # 用独立输出模型承载），落盘只在存在时出现。
+    h3_prompt: SkipJsonSchema[H3Prompt | None] = Field(default=None, description="H3 全参考提示词六段")
 
     @model_validator(mode="after")
     def _validate_replan_shell(self) -> "ReferenceVideoUnit":
@@ -973,6 +995,26 @@ class ReferencePromptAuthoringFlatScript(BaseModel):
 
     title: str = Field(description="剧集标题")
     units: list[ReferencePromptAuthoringFlatUnit] = Field(
+        min_length=1, description="与 script_plan units 一一对应、顺序不变"
+    )
+
+
+class ReferencePromptAuthoringH3FlatUnit(BaseModel):
+    """H3 Ref2VA 提示词档下 prompt_authoring 的 LLM 产出单元：引用语法正文 + 六段英文载荷。"""
+
+    model_config = _STRICT_CONFIG
+
+    text: str = Field(min_length=1, description="提示词编写后的引用语法正文：画面描述 + 行内的台词 / 画外音记号")
+    h3_prompt: H3Prompt = Field(description="与 text 同一内容的 MiniMax H3 全参考六段英文提示词")
+
+
+class ReferencePromptAuthoringH3FlatScript(BaseModel):
+    """H3 Ref2VA 提示词档下 prompt_authoring 的 LLM 产出顶层形状。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(description="剧集标题")
+    units: list[ReferencePromptAuthoringH3FlatUnit] = Field(
         min_length=1, description="与 script_plan units 一一对应、顺序不变"
     )
 

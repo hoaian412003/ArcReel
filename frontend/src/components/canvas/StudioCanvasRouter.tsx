@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { errMsg, voidPromise } from "@/utils/async";
-import { Route, Switch, Redirect } from "wouter";
+import { Link, Route, Switch, Redirect } from "wouter";
 import {
   WORKSPACE_ROUTE_LOREBOOK,
   WORKSPACE_ROUTE_CLUES,
@@ -10,6 +10,7 @@ import {
   WORKSPACE_ROUTE_PROPS,
   WORKSPACE_ROUTE_PRODUCTS,
   WORKSPACE_ROUTE_EPISODES,
+  WORKSPACE_ROUTE_EPISODE_EDIT,
 } from "@/app-routes";
 import { useTranslation } from "react-i18next";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -30,6 +31,7 @@ import { ProductsPage } from "./lorebook/ProductsPage";
 import { ReferenceVideoCanvas } from "./reference/ReferenceVideoCanvas";
 import { GridImageToVideoCanvas } from "./grid/GridImageToVideoCanvas";
 import { EpisodeSourceReview } from "./EpisodeSourceReview";
+import { EditTimelineCanvas } from "./edit-timeline/EditTimelineCanvas";
 import { WorkflowPanel } from "@/components/workflow/WorkflowPanel";
 import { API, NarratedVideoDurationError } from "@/api";
 import {
@@ -59,6 +61,7 @@ import type { EpisodeScript } from "@/types/script";
 
 /** 集级路由 path，与渲染该集的 `<Route>` 共用一份。 */
 const EPISODE_ROUTE_PATH = `/${WORKSPACE_ROUTE_EPISODES}/:episodeId`;
+const EPISODE_EDIT_ROUTE_PATH = `${EPISODE_ROUTE_PATH}/${WORKSPACE_ROUTE_EPISODE_EDIT}`;
 
 // ---------------------------------------------------------------------------
 // resolveSegmentPrompt -- shared segment lookup for generate storyboard/video
@@ -97,6 +100,7 @@ function resolveSegmentPrompt(
 
 export function StudioCanvasRouter() {
   const { t } = useTranslation("dashboard");
+  const { t: tEdit } = useTranslation("edit_timeline");
   const tRef = useRef(t);
   // eslint-disable-next-line react-hooks/refs -- tRef 是稳定 event-handler ref 模式，用于在回调中获取最新 t 而不触发无限 useCallback 重建
   tRef.current = t;
@@ -711,6 +715,20 @@ export function StudioCanvasRouter() {
         }
       </Route>
 
+      <Route path={EPISODE_EDIT_ROUTE_PATH}>
+        {(params) =>
+          demoMode || !currentProjectName ? (
+            <Redirect to="/" />
+          ) : (
+            <EditTimelineCanvas
+              key={`${currentProjectName}::${params.episodeId}`}
+              projectName={currentProjectName}
+              episode={parseInt(params.episodeId, 10)}
+            />
+          )
+        }
+      </Route>
+
       <Route path={EPISODE_ROUTE_PATH}>
         {(params) => {
           const epNum = parseInt(params.episodeId, 10);
@@ -755,6 +773,16 @@ export function StudioCanvasRouter() {
                           void handleWorkflowRegenerate(stepId, unitIds, scriptFile)
                   }
                 />
+              )}
+              {!demoMode && Boolean(script) && (
+                <div className="flex justify-end px-6 pt-2">
+                  <Link
+                    href={`/${WORKSPACE_ROUTE_EPISODES}/${epNum}/${WORKSPACE_ROUTE_EPISODE_EDIT}`}
+                    className="text-xs text-gray-400 hover:text-gray-200"
+                  >
+                    {tEdit("entry_link")}
+                  </Link>
+                </div>
               )}
               <div className="min-h-0 flex-1">
                 {demoMode && !script ? (

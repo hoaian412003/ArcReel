@@ -201,3 +201,41 @@ def build_reference_video_prompt(
         max_refs=max_refs,
         instructions=instructions,
     )
+
+
+def build_reference_video_h3_ref2va_prompt(
+    *,
+    project_overview: dict,
+    style: str,
+    style_description: str,
+    characters: dict,
+    scenes: dict,
+    props: dict,
+    script_plan_units: list[dict],
+    max_refs: int | None,
+    episode: int,
+    audio_reference_names: list[str],
+    aspect_ratio: str = "9:16",
+    target_language: str = "中文",
+    instructions: str | None = None,
+) -> str:
+    """构建 H3 Ref2VA 提示词档下参考生视频 prompt_authoring 的 LLM Prompt。
+
+    与 :func:`build_reference_video_prompt` 同一套输入，产出多一份六段英文载荷；
+    ``audio_reference_names`` 是已挂参考音频、允许用 ``<Audio @[名称]>`` 引用的角色名，为空时模版不使用音频标签。
+    """
+    return builtin_templates.render(
+        "text/reference_video_prompt_authoring_h3_ref2va",
+        target_language=target_language,
+        project_overview=_overview_slot(project_overview),
+        style=style,
+        style_description=style_description,
+        aspect_ratio=aspect_ratio,
+        assets=_project_asset_appearances(characters, scenes, props),
+        **_candidate_names(characters, scenes, props),
+        audio_reference_names=audio_reference_names,
+        units_content=render_reference_units_for_prompt_authoring(script_plan_units),
+        episode=episode,
+        max_refs=max_refs,
+        instructions=instructions,
+    )

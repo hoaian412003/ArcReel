@@ -13,6 +13,7 @@ from lib.infra.api_errors import NotFoundError
 from lib.project.project_manager import get_project_manager
 from lib.script.reference_video import find_reference_unit
 from lib.script.reference_video.request_projection import POST_PRODUCTION, NarrationDelivery, ReferenceRequestOptions
+from lib.script.source_loader.errors import SourceDecodeError
 from server.i18n import Translator
 from server.services.admission.cost_estimation import CostEstimationService
 
@@ -73,12 +74,20 @@ async def get_cost_estimate(
     )
 
     try:
-        return await service.compute(
+        result = await service.compute(
             project_data,
             scripts,
             project_name=project_name,
             reference_request_options=reference_request_options,
         )
+        try:
+            source_text = await asyncio.to_thread(get_project_manager().read_source_text, project_name)
+        except SourceDecodeError:
+            source_text = ""
+        result["text_steps"] = await service.compute_text_steps(
+            project_data, scripts, project_name=project_name, source_text=source_text
+        )
+        return result
     except Exception as exc:
         logger.exception("费用估算失败")
         raise HTTPException(status_code=500, detail=_t("cost_estimation_failed")) from exc

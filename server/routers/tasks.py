@@ -200,6 +200,31 @@ async def cancel_all_queued(project_name: str):
     return await queue.cancel_all_queued(project_name)
 
 
+@router.get("/projects/{project_name}/tasks/force-cancel-all-preview")
+async def force_cancel_all_preview(project_name: str):
+    queue = get_task_queue()
+    return {
+        "queued_count": await queue.get_cancel_all_preview(project_name),
+        "running_count": len(await queue.list_running_task_ids(project_name)),
+    }
+
+
+@router.post("/projects/{project_name}/tasks/force-cancel-all")
+async def force_cancel_all(project_name: str, request: Request):
+    """取消项目全部排队任务，并强制中断全部执行中的任务（ADR 0006 的显式例外）。"""
+    queue = get_task_queue()
+    result = await queue.cancel_all_queued(project_name)
+    running_ids = await queue.list_running_task_ids(project_name)
+    worker = getattr(request.app.state, "generation_worker", None)
+    if running_ids:
+        if worker is not None:
+            await worker.force_cancel_running(set(running_ids))
+        else:
+            for task_id in running_ids:
+                await queue.mark_task_interrupted(task_id)
+    return {**result, "force_cancelled_running_count": len(running_ids)}
+
+
 @router.get("/tasks/{task_id}")
 async def get_task(
     task_id: str,

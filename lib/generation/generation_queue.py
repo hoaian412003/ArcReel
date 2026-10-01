@@ -715,6 +715,10 @@ class GenerationQueue:
             logger.info("批量取消 project=%s 共取消 %d 个", project_name, result["cancelled_count"])
         return result
 
+    async def list_running_task_ids(self, project_name: str) -> list[str]:
+        async with self._task_repo() as repo:
+            return await repo.list_running_task_ids(project_name)
+
     async def get_cancel_all_preview(self, project_name: str) -> int:
         async with self._task_repo() as repo:
             return await repo.get_cancel_all_preview(project_name)

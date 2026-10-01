@@ -301,6 +301,19 @@ export function UsagePopover({ projectName, anchorRef, panelId }: UsagePopoverPr
                       {t("cancel_all")}
                     </button>
                   )}
+                  {activeRows.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={voidPromise(() => cancellation.requestForceAll(projectName))}
+                      className={
+                        (queuedCount > 0 ? "" : "ml-auto ") +
+                        "focus-ring rounded px-1 text-[10.5px] text-danger-2 transition-opacity hover:opacity-80"
+                      }
+                      aria-label={t("force_cancel_all_aria")}
+                    >
+                      {t("force_cancel_all")}
+                    </button>
+                  )}
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto">
                   {activeRows.length === 0 ? (

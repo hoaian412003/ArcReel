@@ -344,6 +344,7 @@ _PROBLEM_ACTIONS: dict[str, GenerationAction] = {
     "enable_model_audio": GenerationAction.CONFIGURE_PROVIDER,
     "repair_reference_assets": GenerationAction.GENERATE_DEPENDENCY,
     "review_reference_selection": GenerationAction.FIX_INPUT,
+    "regenerate_h3_prompt": GenerationAction.FIX_INPUT,
     "review_request_configuration": GenerationAction.FIX_INPUT,
 }
 

@@ -63,6 +63,8 @@ class _ImgResult:
     image_output_tokens: int | None = None
     text_input_tokens: int | None = None
     text_output_tokens: int | None = None
+    provider_coins: float | None = None
+    provider_cost_usd: float | None = None
 
 
 @dataclass
@@ -75,6 +77,7 @@ class _VideoResult:
     usage_tokens: int | None = 0
     generate_audio: bool | None = False
     duration_seconds: int = 15
+    provider_coins: float | None = None
 
 
 @dataclass
@@ -88,6 +91,17 @@ class TestSettlementDispatch:
         s = _settlement_from_result("image", _ImgResult(usage_tokens=8, quality="high"))
         assert s.usage_tokens == 8
         assert s.quality == "high"
+
+    def test_image_provider_reported_usd_overrides_price_table_and_carries_coins(self) -> None:
+        s = _settlement_from_result("image", _ImgResult(provider_coins=12, provider_cost_usd=0.015))
+        assert (s.provider_coins, s.cost_amount, s.currency) == (12, 0.015, "USD")
+
+    def test_image_without_provider_usd_leaves_cost_to_price_table(self) -> None:
+        s = _settlement_from_result("image", _ImgResult(provider_coins=12))
+        assert (s.provider_coins, s.cost_amount, s.currency) == (12, None, None)
+
+    def test_video_carries_provider_coins(self) -> None:
+        assert _settlement_from_result("video", _VideoResult(provider_coins=94)).provider_coins == 94
 
     def test_audio_transcribes_characters_to_usage_tokens(self) -> None:
         # 语义转写①：合成字符数 → 计费 token
@@ -119,6 +133,15 @@ class TestSettlementDispatch:
 
 
 class TestRecordBracket:
+    async def test_provider_coins_and_usd_land_on_the_row(self, db_factory: async_sessionmaker) -> None:
+        ledger = Ledger(session_factory=db_factory)
+        async with ledger.record(project_name="demo", call_type="image", model="m", provider="runninghub") as call:
+            call.success(_ImgResult(provider_coins=12, provider_cost_usd=0.015))
+
+        row = await _only_row(db_factory)
+        assert row.provider_coins == 12
+        assert (row.cost_amount, row.currency) == (0.015, "USD")
+
     async def test_call_id_available_in_block_and_success_flips_row(self, db_factory: async_sessionmaker) -> None:
         ledger = Ledger(session_factory=db_factory)
         seen_call_id: int | None = None

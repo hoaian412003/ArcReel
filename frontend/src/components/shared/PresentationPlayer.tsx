@@ -85,7 +85,10 @@ export function PresentationPlayer({
     projectSnapshotRevision,
   ]);
   const requestMatches = loadState.requestKey === requestKey;
-  const presentation = requestMatches ? loadState.presentation : null;
+  // 同一资源的快照/指纹刷新只是静默重取：旧 presentation 留在画面上直到新结果到达，
+  // 否则每次项目刷新都会卸载 <video>、闪出加载态并打断播放。
+  const sameResource = loadState.resourceKey === resourceKey;
+  const presentation = requestMatches || sameResource ? loadState.presentation : null;
   const error = requestMatches ? loadState.error : null;
   const loading = !requestMatches;
 
@@ -143,7 +146,6 @@ export function PresentationPlayer({
       });
     return () => {
       controller.abort();
-      stopRetainedMedia();
       if (requestEpochRef.current === epoch) requestEpochRef.current += 1;
     };
   }, [
@@ -158,8 +160,10 @@ export function PresentationPlayer({
     projectSnapshotRevision,
     resourceKey,
     requestKey,
-    stopRetainedMedia,
   ]);
+
+  // 只在切换资源/版本或卸载时停播；同一资源的静默重取不打断播放。
+  useEffect(() => stopRetainedMedia, [resourceKey, variant, stopRetainedMedia]);
 
   const enforceVideoAudioPolicy = useCallback(
     (video: HTMLVideoElement) => {

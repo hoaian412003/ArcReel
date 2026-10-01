@@ -35,10 +35,25 @@ export interface ModelInfo {
   model: string;
 }
 
+/** 文本类制作步骤按提示词规模估出的用量与费用。 */
+export interface TextStepCost {
+  id: "episode_plan" | "script_plan_content" | "final_script";
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost: CostBreakdown;
+}
+
+export interface TextStepsEstimate {
+  model: ModelInfo | null;
+  steps: TextStepCost[];
+}
+
 /** 费用估算 API 响应 */
 export interface CostEstimateResponse {
   project_name: string;
   models: { image: ModelInfo; video: ModelInfo; audio?: ModelInfo };
   episodes: EpisodeCost[];
   project_totals: { estimate: CostByType; actual: CostByType };
+  text_steps?: TextStepsEstimate;
 }

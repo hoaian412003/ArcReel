@@ -38,7 +38,12 @@ export function CancelConfirmDialog({
       <p className="text-[12px] text-text-2">
         {request.kind === "all"
           ? t("cancel_all_confirm", { count: request.queuedCount })
-          : cascaded.length > 0
+          : request.kind === "force-all"
+            ? t("force_cancel_all_confirm", {
+                queued: request.queuedCount,
+                running: request.runningCount,
+              })
+            : cascaded.length > 0
             ? t("cancel_cascade_msg", { count: cascaded.length })
             : t("cancel_single_confirm")}
       </p>

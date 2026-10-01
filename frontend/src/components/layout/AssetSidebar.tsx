@@ -22,6 +22,7 @@ import { useDemoWorkbench } from "@/onboarding/use-demo-workbench";
 import { isDemoProject } from "@/onboarding/demo-project";
 import { normalizeRoute } from "@/utils/generation-mode";
 import { EpisodeCard } from "./EpisodeCard";
+import { useEpisodeVideoExport } from "./use-episode-video-export";
 
 interface AssetSidebarProps {
   className?: string;
@@ -48,6 +49,7 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
   const [location, setLocation] = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState("");
+  const { exportEpisodeVideo, exporting } = useEpisodeVideoExport(currentProjectName);
 
   const characterCount = Object.keys(currentProjectData?.characters ?? {}).length;
   const sceneCount = Object.keys(currentProjectData?.scenes ?? {}).length;
@@ -314,6 +316,8 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
                   showEpisodeBadge={!isAd}
                   fallbackTitle={isAd ? currentProjectData?.title : undefined}
                   route={normalizeRoute(currentProjectData?.generation_mode)}
+                  onExportVideo={() => void exportEpisodeVideo(ep.episode)}
+                  exportingVideo={exporting.has(ep.episode)}
                 />
               ))
             )}

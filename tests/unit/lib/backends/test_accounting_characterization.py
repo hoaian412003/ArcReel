@@ -157,6 +157,7 @@ def _expected_row(**overrides: Any) -> dict[str, Any]:
         "currency": "USD",
         "provider": "gemini",
         "usage_tokens": None,
+        "provider_coins": None,
         "input_tokens": None,
         "output_tokens": None,
         "image_input_tokens": None,
@@ -301,6 +302,7 @@ class _FakeVideoBackend:
             "duration_seconds": request.duration_seconds,
             "video_uri": "fake-video-uri",
             "usage_tokens": None,
+            "provider_coins": None,
             "generate_audio": request.generate_audio,
             **self._result_fields,
         }

@@ -356,6 +356,10 @@ class SlotTable:
         """所有占用的 task_id（pending+inflight）：self-active 扫描用。"""
         return {tid for bucket in self._slots.values() for tid in bucket}
 
+    def tasks_by_id(self, task_ids: set[str]) -> list[asyncio.Future[Any]]:
+        """按 task_id 取占用的执行体（pending+inflight）：强制取消用。"""
+        return [occ.task for bucket in self._slots.values() for tid, occ in bucket.items() if tid in task_ids]
+
     def all_active_tasks(self) -> list[asyncio.Future[Any]]:
         """所有占用的执行体（pending+inflight）：shutdown wait 用。"""
         return [occ.task for bucket in self._slots.values() for occ in bucket.values()]
@@ -707,15 +711,13 @@ class GenerationWorker:
                     process_task = self._process_task(task, claimed_provider_id=provider_id)
                 else:
                     process_task = self._process_task(task)
-                self._slots.register(
-                    provider_id,
-                    media_type,
-                    task["task_id"],
-                    asyncio.create_task(
-                        process_task,
-                        name=f"generation-{media_type}-{task['task_id']}",
-                    ),
+                running = asyncio.create_task(
+                    process_task,
+                    name=f"generation-{media_type}-{task['task_id']}",
                 )
+                # 槽位一释放就唤醒主循环回收并补位，队列非空时并发数不必等下一次轮询才回到上限。
+                running.add_done_callback(lambda _fut: self.wake())
+                self._slots.register(provider_id, media_type, task["task_id"], running)
                 if media_type == "text":
                     break
 
@@ -882,6 +884,21 @@ class GenerationWorker:
         停在 running 上无人接手（与 ``provider_id`` 同为资格条件，见 ``retry_artifact_download``）。
         """
         return await read_video_poll_timeout_seconds()
+
+    async def force_cancel_running(self, task_ids: set[str]) -> None:
+        """强制中断本进程里正在执行的任务，并把它们落 cancelled。
+
+        本地协程被 ``cancel()`` 后经 ``_process_task`` 的进程级打断路径落终态；已发出的供应商调用
+        无法撤回，可能仍会计费，结果被丢弃。不在本进程占用表里的 running 行（别的进程持有、或已
+        成孤儿）直接经 ``mark_task_interrupted`` 落终态，该调用对已落终态的行无副作用。
+        """
+        local = self._slots.tasks_by_id(task_ids)
+        for fut in local:
+            fut.cancel()
+        if local:
+            await asyncio.gather(*local, return_exceptions=True)
+        for task_id in task_ids:
+            await self.queue.mark_task_interrupted(task_id)
 
     async def retry_artifact_download(self, task: dict[str, Any], *, poll_timeout_seconds: int) -> None:
         """按原 provider job 派发一次下载恢复，不重新提交供应商任务。"""

@@ -62,12 +62,13 @@ from lib.prompts.prompt_builders_ad import (
     build_ad_reference_prompt_authoring_prompt,
     build_ad_shot_prompt_authoring_prompt,
 )
-from lib.prompts.prompt_builders_reference import build_reference_video_prompt
+from lib.prompts.prompt_builders_reference import build_reference_video_h3_ref2va_prompt, build_reference_video_prompt
 from lib.prompts.prompt_builders_script import (
     build_drama_prompt,
     build_narration_prompt,
     render_drama_content_for_prompt_authoring,
 )
+from lib.prompts.video_prompt_profile import is_h3_ref2va
 from lib.script.draft_quarantine import (
     PROMOTE_TOOL_NAME,
     QUARANTINE_KIND_DRAMA_SCRIPT_PLAN,
@@ -89,6 +90,13 @@ from lib.script.reference_video.draft_validation import (
     violation_items,
 )
 from lib.script.reference_video.duration_slots import resolve_duration_slot
+from lib.script.reference_video.h3_prompt import (
+    KEEP_TEXT_INSTRUCTION,
+    SECTION_FIELDS,
+    bind_h3_prompt,
+    validate_h3_prompt,
+)
+from lib.script.reference_video.prompt_render import resolve_reference_audio_paths
 from lib.script.reference_video.request_projection import ReferenceUnitHydration
 from lib.script.reference_video.unit_capabilities import hydrate_reference_units
 from lib.script.script_document import (
@@ -111,6 +119,7 @@ from lib.script.script_models import (
     NarrationScriptPlanDraft,
     NarrationVisualEpisodeScript,
     ReferencePromptAuthoringFlatScript,
+    ReferencePromptAuthoringH3FlatScript,
     ReferenceScriptPlanDraft,
     ReferenceVideoScript,
     build_episode_script_model,
@@ -128,6 +137,7 @@ from lib.script.script_review import (
     script_plan_path,
 )
 from lib.script.script_skeleton import resolve_declared_kind, resolve_kind_items, rewrite_episode_prefix
+from lib.speech.character_voice import character_voice_binding
 from lib.speech.speech_composition import require_script_unit_admitted, video_unit_replan_problems
 from lib.speech.speech_rate import project_speech_rate_override
 
@@ -348,6 +358,7 @@ class ScriptGenerator:
         entry_ids: Iterable[str] | None = None,
         rewritten_entry_ids: list[str] | None = None,
         before_quarantine_commit: Callable[[], None] | None = None,
+        keep_text: bool = False,
     ) -> Path:
         """
         为正式剧本补写视觉层（提示词编写）；ad 项目尚无正式剧本时整份生成。
@@ -366,6 +377,8 @@ class ScriptGenerator:
                 任一 id 不在正式剧本内即报错、不落盘。
             rewritten_entry_ids: 可选收集器；非 None 时就地填入本次编写的条目 id（剧本顺序），
                 供调用方在回执里列出。ad 整份生成时保持为空。
+            keep_text: 只重写 H3 载荷、单元正文原样保留（H3 Ref2VA 提示词档的「重新生成 H3 提示词」）；
+                须同时点名 entry_ids，且仅适用于 H3 提示词档。
 
         Returns:
             正式剧本 JSON 文件路径
@@ -412,6 +425,8 @@ class ScriptGenerator:
                 output_filename,
             )
 
+        if keep_text and not (is_h3_ref2va(self.project_json) and entry_ids):
+            raise PromptAuthoringTargetError("keep_text 仅适用于 H3 Ref2VA 提示词档，且须用 entry_ids 点名条目")
         if rewritten_entry_ids is not None:
             rewritten_entry_ids[:] = targets.ids
         output_path = self.project_path / "scripts" / filename
@@ -432,6 +447,7 @@ class ScriptGenerator:
                 episode,
                 filename,
                 targets,
+                keep_text=keep_text,
                 formal_baseline=formal_baseline,
                 instructions=instructions,
                 before_quarantine_commit=before_quarantine_commit,
@@ -1308,6 +1324,22 @@ class ScriptGenerator:
     def _build_reference_prompt_authoring_prompt(
         self, episode: int, targets: PromptAuthoringTargets, facts: PlanningVideoFacts, instructions: str | None
     ) -> str:
+        if is_h3_ref2va(self.project_json):
+            return build_reference_video_h3_ref2va_prompt(
+                project_overview=self.project_json.get("overview", {}),
+                style=self.project_json.get("style", ""),
+                style_description=self.project_json.get("style_description", ""),
+                characters=self._project_bucket("characters"),
+                scenes=self._project_bucket("scenes"),
+                props=self._project_bucket("props"),
+                script_plan_units=list(targets.entries),
+                max_refs=self._resolve_max_refs(facts),
+                aspect_ratio=self._resolve_aspect_ratio(),
+                episode=episode,
+                audio_reference_names=self._audio_reference_names(),
+                target_language=self.project_json.get("source_language") or "中文",
+                instructions=instructions,
+            )
         return build_reference_video_prompt(
             project_overview=self.project_json.get("overview", {}),
             style=self.project_json.get("style", ""),
@@ -1323,6 +1355,12 @@ class ScriptGenerator:
             instructions=instructions,
         )
 
+    def _audio_reference_names(self) -> list[str]:
+        """已挂参考音频、H3 提示词可用 ``<Audio @[角色]>`` 引用的角色名；未选参考音频绑定方式时为空。"""
+        if character_voice_binding(self.project_json) != "reference_audio":
+            return []
+        return list(resolve_reference_audio_paths(self.project_json, self.project_path))
+
     @staticmethod
     def _unit_durations(targets: PromptAuthoringTargets) -> dict[str, int]:
         """待编写单元的时长：编写不改时长，取档校验按落地正文对着这份值重算。"""
@@ -1334,6 +1372,7 @@ class ScriptGenerator:
         filename: str,
         targets: PromptAuthoringTargets,
         *,
+        keep_text: bool = False,
         formal_baseline: str | None,
         instructions: str | None,
         before_quarantine_commit: Callable[[], None] | None,
@@ -1354,10 +1393,16 @@ class ScriptGenerator:
             )
         max_refs = self._resolve_max_refs(facts)
         logger.info("正在为第 %d 集编写提示词（video_units，%d/%d 个单元）...", episode, len(units), len(targets.items))
+        if keep_text:
+            instructions = "\n\n".join(part for part in (instructions, KEEP_TEXT_INSTRUCTION) if part)
         result = await self._generate_text(
             TextGenerationRequest(
                 prompt=self._build_reference_prompt_authoring_prompt(episode, targets, facts, instructions),
-                response_schema=ReferencePromptAuthoringFlatScript,
+                response_schema=(
+                    ReferencePromptAuthoringH3FlatScript
+                    if is_h3_ref2va(self.project_json)
+                    else ReferencePromptAuthoringFlatScript
+                ),
                 max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
             )
         )
@@ -1378,7 +1423,9 @@ class ScriptGenerator:
         # _add_metadata 一并纳入草稿保护：它按落地后的最终正文重算生效档位，一个新增 / 去掉了
         # `@` 引用的 unit 要到合并之后才判出档——不接住的话，这份已付费产出只存在于内存里。
         try:
-            authored = self._merge_reference_visual(units, response_text, episode, max_refs=max_refs)
+            authored = self._merge_reference_visual(
+                units, response_text, episode, max_refs=max_refs, keep_text=keep_text
+            )
             script_data = self._authored_script(
                 episode, targets, authored, reference_unit_durations=self._unit_durations(targets), facts=facts
             )
@@ -1404,7 +1451,9 @@ class ScriptGenerator:
         logger.info("剧本已保存至 %s", output_path)
         return output_path
 
-    def _parse_unit_texts(self, response_text: str, episode: int) -> ReferencePromptAuthoringFlatScript:
+    def _parse_unit_texts(
+        self, response_text: str, episode: int
+    ) -> ReferencePromptAuthoringFlatScript | ReferencePromptAuthoringH3FlatScript:
         text = strip_json_code_fences(response_text)
         try:
             data = json.loads(text)
@@ -1417,7 +1466,13 @@ class ScriptGenerator:
             if not (isinstance(raw_title, str) and raw_title.strip()):
                 data["title"] = f"第{episode}集"
         try:
-            return ReferencePromptAuthoringFlatScript.model_validate(data)
+            # 广告的提示词编写共用本解析器，提示词档只对参考生视频的剧情 / 解说项目成立（is_h3_ref2va 已含此判定）。
+            schema = (
+                ReferencePromptAuthoringH3FlatScript
+                if is_h3_ref2va(self.project_json)
+                else ReferencePromptAuthoringFlatScript
+            )
+            return schema.model_validate(data)
         except ValidationError as e:
             raise ValueError(f"prompt_authoring 提示词编写结构校验失败: {e}") from e
 
@@ -1428,6 +1483,7 @@ class ScriptGenerator:
         episode: int,
         *,
         max_refs: int | None,
+        keep_text: bool = False,
     ) -> list[dict]:
         """参考路径提示词编写合并：LLM 只出引用语法正文，按位写回待编写单元，其余字段原样保留。
 
@@ -1452,17 +1508,42 @@ class ScriptGenerator:
             label = f"unit {unit['unit_id']}"
             # 逐 unit 收集而非首个违约即抛：报告要覆盖所有坏 unit，Agent 一轮就能看全要改什么。
             # 一个 unit 内部仍是首个违约即停——正文解析不出时，后续判定都建立在同一个问题上。
+            # keep_text：单元正文是用户已认可的内容，模型回写的正文一律不采用，载荷只对着现有正文校验。
+            text = str(unit.get("text") or "") if keep_text else flat_unit.text
             try:
-                validate_unit_text(label, flat_unit.text, self.project_json, max_refs=max_refs)
-                assert_dialogue_preserved(label, str(unit.get("text") or ""), flat_unit.text)
+                if not keep_text:
+                    validate_unit_text(label, text, self.project_json, max_refs=max_refs)
+                    assert_dialogue_preserved(label, str(unit.get("text") or ""), text)
+                h3_payload = self._h3_payload(label, unit, text, flat_unit)
             except DraftViolation as exc:
                 violations.extend(violation_items(exc))
                 continue
-            authored.append({**unit, "text": flat_unit.text})
+            authored_unit = {**unit, "text": text}
+            if h3_payload is None:
+                # 提示词档不是 H3 时不留旧载荷：它按旧正文写成，留着只会被误认成当前内容。
+                authored_unit.pop("h3_prompt", None)
+            else:
+                authored_unit["h3_prompt"] = h3_payload
+            authored.append(authored_unit)
 
         if violations:
             raise DraftViolations(violations)
         return authored
+
+    def _h3_payload(self, label: str, unit: dict, text: str, flat_unit: Any) -> dict | None:
+        """H3 提示词档下校验并绑定单元的六段载荷；其它提示词档没有载荷。"""
+        h3 = getattr(flat_unit, "h3_prompt", None)
+        if h3 is None:
+            return None
+        sections = {field: getattr(h3, field) for field in SECTION_FIELDS}
+        validate_h3_prompt(
+            label,
+            text,
+            sections,
+            duration_seconds=int(unit.get("duration_seconds") or 0),
+            project=self.project_json,
+        )
+        return bind_h3_prompt(text, sections).model_dump()
 
     async def _author_ad_reference_units(
         self,

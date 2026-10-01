@@ -59,6 +59,12 @@ from lib.project.asset_types import asset_name_comparison_key
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import EmptySourceError, EpisodeScriptReboundError, SourceKind, get_project_manager
 from lib.prompts.style_templates import is_known_template, resolve_template_prompt
+from lib.prompts.video_prompt_profile import (
+    DEFAULT_VIDEO_PROMPT_PROFILE,
+    VALID_VIDEO_PROMPT_PROFILES,
+    h3_ref2va_supported,
+)
+from lib.prompts.video_prompt_profile import PROJECT_FIELD as VIDEO_PROMPT_PROFILE_FIELD
 from lib.script.script_batch_edit import ScriptBatchEditCommand, ScriptBatchEditor, blank_item_after, script_revision
 from lib.script.script_editor import resolve_items
 from lib.script.script_references import annotate_derivative_references
@@ -291,6 +297,8 @@ class UpdateProjectRequest(BaseModel):
     video_generate_audio: bool | None = None
     # 角色声音绑定方式：prompt（默认，voice_style 提示词软约束）/ reference_audio（挂角色参考音频）
     character_voice_binding: str | None = None
+    # 参考生视频提示词档：default / h3_ref2va；null / 空串 = 清除、回落默认档
+    video_prompt_profile: str | None = None
     # 旁白配音（TTS）项目级覆盖：音频后端 / 音色 / 语速；留空 = 跟随全局默认
     audio_backend: str | None = None
     narration_voice: str | None = None
@@ -979,6 +987,14 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                         project[CHARACTER_VOICE_BINDING_FIELD] = binding
                     else:
                         raise HTTPException(status_code=422, detail=_t("character_voice_binding_invalid"))
+                if "video_prompt_profile" in req.model_fields_set:
+                    profile = (req.video_prompt_profile or "").strip()
+                    if not profile or profile == DEFAULT_VIDEO_PROMPT_PROFILE:
+                        project.pop(VIDEO_PROMPT_PROFILE_FIELD, None)
+                    elif profile in VALID_VIDEO_PROMPT_PROFILES and h3_ref2va_supported(project):
+                        project[VIDEO_PROMPT_PROFILE_FIELD] = profile
+                    else:
+                        raise HTTPException(status_code=422, detail=_t("video_prompt_profile_invalid"))
                 # 旁白音色：照供应商文档填的字符串 id；空串 = 清除回落全局默认
                 if "narration_voice" in req.model_fields_set:
                     voice = (req.narration_voice or "").strip()

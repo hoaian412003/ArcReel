@@ -83,6 +83,7 @@ PUBLIC_MEDIA_DIRS: frozenset[str] = frozenset(
         "products",
         "grids",
         "audio",
+        "final_cuts",
     }
 )
 PUBLIC_VERSIONS_DIR = "versions"

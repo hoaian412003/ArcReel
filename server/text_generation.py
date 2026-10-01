@@ -114,6 +114,8 @@ class TextGenerationRequest:
     dry_run: bool = False
     #: 提示词编写显式重写这些条目；为空时编写全部待编写条目。
     entry_ids: tuple[str, ...] = ()
+    #: 只重写 H3 载荷、单元正文原样保留（H3 Ref2VA 提示词档的「重新生成 H3 提示词」）；须点名 entry_ids。
+    keep_text: bool = False
 
     def __post_init__(self) -> None:
         if not is_int(self.episode, minimum=1):
@@ -506,6 +508,7 @@ async def generate_episode_script(
             instructions=instructions,
             entry_ids=request.entry_ids,
             rewritten_entry_ids=rewritten,
+            keep_text=request.keep_text,
         )
     except PromptAuthoringTargetError as exc:
         # 点名的条目不在正式剧本内是调用方的错：报「拒绝生成」而不是让它冒成 internal_error，

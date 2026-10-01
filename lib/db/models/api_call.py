@@ -46,6 +46,8 @@ class ApiCall(TimestampMixin, UserOwnedMixin, Base):
     currency: Mapped[str] = mapped_column(String, server_default="USD")
     provider: Mapped[str] = mapped_column(String, server_default="gemini")
     usage_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # RunningHub 的 RH coin 消耗（workflow 机器运行费）；其它供应商为 NULL。
+    provider_coins: Mapped[float | None] = mapped_column(Float, nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     image_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)

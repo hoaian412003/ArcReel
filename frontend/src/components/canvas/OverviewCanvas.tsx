@@ -6,6 +6,7 @@ import type { ProjectData } from "@/types";
 import { API, ConflictError } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
+import { ProjectWorkflowSection } from "./ProjectWorkflowSection";
 import { useCostStore } from "@/stores/cost-store";
 import { costEntries, formatCost, totalBreakdown } from "@/utils/cost-format";
 import { errMsg } from "@/utils/async";
@@ -650,6 +651,14 @@ export function OverviewCanvas({
               >
                 {t("cost_estimate_failed", { message: costError })}
               </div>
+            )}
+
+            {/* Production workflow + per-step cost */}
+            {!readOnly && (
+              <ProjectWorkflowSection
+                projectName={projectName}
+                episodes={(projectData?.episodes ?? []).map((ep) => ep.episode)}
+              />
             )}
 
             {/* Project total cost */}

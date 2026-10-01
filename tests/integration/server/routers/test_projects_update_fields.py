@@ -141,6 +141,38 @@ class TestProjectsRouter:
             assert resp.status_code == 422
             assert "character_voice_binding" not in fake_pm.project_data["ready"]
 
+    def test_update_project_persists_video_prompt_profile_for_reference_video_project(self, tmp_path, monkeypatch):
+        """PATCH 提示词档：参考生视频的剧情项目可写入 h3_ref2va，默认档与空值从 project.json 移除。"""
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.project_data["ready"].update({"generation_mode": "reference_video", "content_mode": "drama"})
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"video_prompt_profile": "h3_ref2va"})
+            assert resp.status_code == 200
+            assert fake_pm.project_data["ready"]["video_prompt_profile"] == "h3_ref2va"
+
+            resp = client.patch("/api/v1/projects/ready", json={"video_prompt_profile": None})
+            assert resp.status_code == 200
+            assert "video_prompt_profile" not in fake_pm.project_data["ready"]
+
+    @pytest.mark.parametrize(
+        ("overrides", "profile"),
+        [
+            ({"generation_mode": "reference_video", "content_mode": "drama"}, "native"),
+            ({"generation_mode": "storyboard", "content_mode": "drama"}, "h3_ref2va"),
+            ({"generation_mode": "reference_video", "content_mode": "ad"}, "h3_ref2va"),
+        ],
+    )
+    def test_update_project_rejects_unsupported_video_prompt_profile(self, tmp_path, monkeypatch, overrides, profile):
+        """未知取值，或模式组合不支持 H3 档时 422，且不写回 project.json。"""
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.project_data["ready"].update(overrides)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"video_prompt_profile": profile})
+            assert resp.status_code == 422
+            assert "video_prompt_profile" not in fake_pm.project_data["ready"]
+
     def test_update_project_rejects_non_positive_narration_speed(self, tmp_path, monkeypatch):
         """语速 0/负数应 422，且不写回 project.json。"""
         fake_pm = _FakePM(tmp_path)

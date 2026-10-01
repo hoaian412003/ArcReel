@@ -2,7 +2,13 @@
 import { create } from "zustand";
 import { API } from "@/api";
 import { errMsg } from "@/utils/async";
-import type { ReferenceUnitCapabilityMap, ReferenceVideoUnit, TransitionType } from "@/types";
+import type {
+  H3PromptSections,
+  H3PromptStatus,
+  ReferenceUnitCapabilityMap,
+  ReferenceVideoUnit,
+  TransitionType,
+} from "@/types";
 
 interface AddUnitPayload {
   prompt: string;
@@ -32,6 +38,10 @@ interface ReferenceVideoStore {
    * 响应按单元合并——正文改了引用，桶与档位当场随响应更新，画布不自判。
    */
   unitCapabilitiesByEpisode: Record<string, ReferenceUnitCapabilityMap>;
+  /**
+   * 同 key 下逐单元的 H3 提示词状态。只有 H3 提示词档的项目才有这一项，缺席即该项目不使用 H3 提示词。
+   */
+  h3PromptStatusByEpisode: Record<string, Record<string, H3PromptStatus>>;
   selectedUnitId: string | null;
   loading: boolean;
   error: string | null;
@@ -42,7 +52,18 @@ interface ReferenceVideoStore {
   deleteUnit: (projectName: string, episode: number, unitId: string) => Promise<void>;
   reorderUnits: (projectName: string, episode: number, unitIds: string[]) => Promise<void>;
   select: (unitId: string | null) => void;
+  /** 手写 H3 六段载荷；校验不过时抛出后端给出的原因。 */
+  saveH3Prompt: (projectName: string, episode: number, unitId: string, sections: H3PromptSections) => Promise<void>;
+  /**
+   * 重新生成 H3 提示词（单元正文不动）：入队文本任务后轮询单元列表，直到被点名的单元都回到 current
+   * 或超时。unitIds 缺省即本集全部单元。
+   */
+  regenerateH3Prompts: (projectName: string, episode: number, unitIds?: string[]) => Promise<void>;
 }
+
+/** 重新生成 H3 提示词后轮询单元列表的间隔与上限：文本模型一次调用通常在数十秒内。 */
+const H3_POLL_INTERVAL_MS = 3000;
+const H3_POLL_MAX_ATTEMPTS = 60;
 
 // 每个 cache key 上最新一次 loadUnits 的序号：`loadUnits` 有多个入口（画布 effect 随
 // 项目/剧集/任务完成失效重跑、单元写入后重拉、手动重试），同一 key 上可能有多个请求并发
@@ -65,9 +86,10 @@ function invalidateInFlightLoads(cacheKey: string, set: (patch: { loading: false
   set({ loading: false });
 }
 
-export const useReferenceVideoStore = create<ReferenceVideoStore>((set) => ({
+export const useReferenceVideoStore = create<ReferenceVideoStore>((set, get) => ({
   unitsByEpisode: {},
   unitCapabilitiesByEpisode: {},
+  h3PromptStatusByEpisode: {},
   selectedUnitId: null,
   loading: false,
   error: null,
@@ -78,13 +100,19 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set) => ({
     _loadSeqByKey.set(cacheKey, seq);
     set({ loading: true, error: null });
     try {
-      const { units, unit_capabilities } = await API.listReferenceVideoUnits(projectName, episode);
+      const { units, unit_capabilities, h3_prompt_status } = await API.listReferenceVideoUnits(projectName, episode);
       if (_loadSeqByKey.get(cacheKey) !== seq) return;
-      set((s) => ({
-        unitsByEpisode: { ...s.unitsByEpisode, [cacheKey]: units },
-        unitCapabilitiesByEpisode: { ...s.unitCapabilitiesByEpisode, [cacheKey]: unit_capabilities },
-        loading: false,
-      }));
+      set((s) => {
+        const { [cacheKey]: _previous, ...otherStatuses } = s.h3PromptStatusByEpisode;
+        return {
+          unitsByEpisode: { ...s.unitsByEpisode, [cacheKey]: units },
+          unitCapabilitiesByEpisode: { ...s.unitCapabilitiesByEpisode, [cacheKey]: unit_capabilities },
+          h3PromptStatusByEpisode: h3_prompt_status
+            ? { ...otherStatuses, [cacheKey]: h3_prompt_status }
+            : otherStatuses,
+          loading: false,
+        };
+      });
     } catch (e) {
       if (_loadSeqByKey.get(cacheKey) !== seq) return;
       set({ loading: false, error: errMsg(e) });
@@ -106,6 +134,7 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set) => ({
         selectedUnitId: unit.unit_id,
       };
     });
+    refreshH3PromptStatuses(projectName, episode);
     return unit;
   },
 
@@ -126,6 +155,7 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set) => ({
         },
       };
     });
+    refreshH3PromptStatuses(projectName, episode);
     return unit;
   },
 
@@ -153,4 +183,44 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set) => ({
   },
 
   select: (unitId) => set({ selectedUnitId: unitId }),
+
+  saveH3Prompt: async (projectName, episode, unitId, sections) => {
+    const { unit, h3_prompt_status } = await API.patchReferenceUnitH3Prompt(projectName, episode, unitId, sections);
+    invalidateInFlightLoads(referenceVideoCacheKey(projectName, episode), set);
+    set((s) => {
+      const key = referenceVideoCacheKey(projectName, episode);
+      return {
+        unitsByEpisode: {
+          ...s.unitsByEpisode,
+          [key]: (s.unitsByEpisode[key] ?? []).map((u) => (u.unit_id === unitId ? unit : u)),
+        },
+        h3PromptStatusByEpisode: {
+          ...s.h3PromptStatusByEpisode,
+          [key]: { ...s.h3PromptStatusByEpisode[key], [unitId]: h3_prompt_status },
+        },
+      };
+    });
+  },
+
+  regenerateH3Prompts: async (projectName, episode, unitIds) => {
+    const { unit_ids } = await API.regenerateH3Prompts(projectName, episode, unitIds);
+    const key = referenceVideoCacheKey(projectName, episode);
+    for (let attempt = 0; attempt < H3_POLL_MAX_ATTEMPTS; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, H3_POLL_INTERVAL_MS));
+      await get().loadUnits(projectName, episode);
+      const statuses = get().h3PromptStatusByEpisode[key] ?? {};
+      if (unit_ids.every((id) => statuses[id] === "current")) return;
+    }
+  },
 }));
+
+/**
+ * 单元正文的增改会让 H3 提示词过期或缺席：该项目使用 H3 提示词档时（状态表存在）重拉一次列表，
+ * 状态以服务端的指纹比对为准，前端不复算。
+ */
+function refreshH3PromptStatuses(projectName: string, episode: number): void {
+  const store = useReferenceVideoStore.getState();
+  if (store.h3PromptStatusByEpisode[referenceVideoCacheKey(projectName, episode)]) {
+    void store.loadUnits(projectName, episode);
+  }
+}

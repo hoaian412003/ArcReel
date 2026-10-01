@@ -53,6 +53,7 @@ class UsageRecord(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     usage_tokens: int | None = None
+    provider_coins: float | None = None
     image_input_tokens: int | None = None
     image_output_tokens: int | None = None
     text_input_tokens: int | None = None

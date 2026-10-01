@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Clapperboard } from "lucide-react";
+import { Clapperboard, Download, Loader2 } from "lucide-react";
 import type { EpisodeMeta } from "@/types";
 import { itemCountKey, type GenerationRoute } from "@/utils/generation-mode";
 import { useCostStore } from "@/stores/cost-store";
@@ -15,6 +15,9 @@ interface EpisodeCardProps {
   fallbackTitle?: string;
   /** 项目生成模式：决定条目数报「分镜数」还是「视频单元数」。必填，漏接线时类型报错而不是静默显示错名词。 */
   route: GenerationRoute;
+  /** 导出该集成片视频；缺省则不显示导出按钮。 */
+  onExportVideo?: () => void;
+  exportingVideo?: boolean;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -44,6 +47,8 @@ export function EpisodeCard({
   showEpisodeBadge = true,
   fallbackTitle,
   route,
+  onExportVideo,
+  exportingVideo = false,
 }: EpisodeCardProps) {
   const { t } = useTranslation(["dashboard"]);
   const status = ep.status ?? "draft";
@@ -81,6 +86,7 @@ export function EpisodeCard({
   const durLabel = dur > 0 ? `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}` : null;
 
   return (
+    <div className="relative">
     <button
       type="button"
       onClick={onClick}
@@ -203,5 +209,22 @@ export function EpisodeCard({
         </span>
       )}
     </button>
+    {onExportVideo && (
+      <button
+        type="button"
+        onClick={onExportVideo}
+        disabled={exportingVideo}
+        title={t("episode_export_video")}
+        aria-label={t("episode_export_video")}
+        className="absolute bottom-1.5 right-1.5 grid h-5 w-5 place-items-center rounded text-text-4 transition-colors hover:text-text focus-ring disabled:cursor-wait"
+      >
+        {exportingVideo ? (
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+        ) : (
+          <Download className="h-3 w-3" aria-hidden />
+        )}
+      </button>
+    )}
+    </div>
   );
 }

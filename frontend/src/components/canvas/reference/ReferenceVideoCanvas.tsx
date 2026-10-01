@@ -19,6 +19,7 @@ import { deriveUnitStatus } from "./unit-status";
 import { tierProblemText } from "./unit-tier-problem";
 import { ReferenceSplitAlert } from "./ReferenceSplitAlert";
 import { EpisodeHeader } from "./EpisodeHeader";
+import { H3RegenerateAllButton } from "./H3PromptControls";
 import { ReferenceDurationConfirmDialog } from "./ReferenceDurationConfirmDialog";
 import { ReferenceBatchAdmissionDialog } from "./ReferenceBatchAdmissionDialog";
 import { referenceBatchOutcome } from "./batch-outcome";
@@ -755,6 +756,16 @@ export function ReferenceVideoCanvas({
   // 编辑器列内的两种视图：写文稿 / 看解析结果。解析预览是只读派生视图，与正文同一份
   // 文本，故共用编辑器列的空间而非再占一栏（右栏留给成片预览）。
   const [editorView, setEditorView] = useState<"script" | "parse">("script");
+  // 按资产内容而非项目对象引用判等：项目数据刷新会换新对象，按引用会让台词卡反复作废在途请求。
+  const dialogueAssets = useMemo(
+    () =>
+      JSON.stringify([project?.characters, project?.scenes, project?.props, project?.products]),
+    [project?.characters, project?.scenes, project?.props, project?.products],
+  );
+  const handleEditDialogue = useCallback(() => {
+    setEditorView("script");
+    setStackTab("editor");
+  }, []);
 
   const hasAnyDurationDraft = units.some((unit) => {
     const raw = durationDrafts[draftKey(projectName, episode, unit.unit_id)];
@@ -975,6 +986,7 @@ export function ReferenceVideoCanvas({
         <span className="flex-1" />
         {tab === "units" && (
           <>
+            <H3RegenerateAllButton projectName={projectName} episode={episode} />
             <NarrationDeliveryChoice
               value={narrationDelivery}
               onChange={setNarrationDelivery}
@@ -1366,6 +1378,9 @@ export function ReferenceVideoCanvas({
                         <UnitPreviewPanel
                           unit={selected}
                           projectName={projectName}
+                          episode={episode}
+                          dialogueAssets={dialogueAssets}
+                          onEditDialogue={handleEditDialogue}
                           status={statusMap[selected.unit_id]}
                           errorMessage={failureMessage}
                           busy={selectedBusy}
@@ -1401,6 +1416,9 @@ export function ReferenceVideoCanvas({
                 <UnitPreviewPanel
                   unit={selected}
                   projectName={projectName}
+                  episode={episode}
+                  dialogueAssets={dialogueAssets}
+                  onEditDialogue={handleEditDialogue}
                   status={selected ? statusMap[selected.unit_id] : undefined}
                   errorMessage={failureMessage}
                   busy={selectedBusy}

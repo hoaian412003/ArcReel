@@ -152,6 +152,11 @@ export type CharacterVoiceBinding = "prompt" | "reference_audio";
 /** 未声明时的取值：提示词软约束。参考音频是可选增强，须由用户显式选择才生效。 */
 export const DEFAULT_CHARACTER_VOICE_BINDING: CharacterVoiceBinding = "prompt";
 
+/** 参考生视频提示词档；与后端 `lib.prompts.video_prompt_profile.VideoPromptProfile` 一一对应，取值增减须两侧同步。 */
+export type VideoPromptProfile = "default" | "h3_ref2va";
+
+export const DEFAULT_VIDEO_PROMPT_PROFILE: VideoPromptProfile = "default";
+
 export interface ModelSettingEntry {
   resolution?: string | null;
 }
@@ -198,6 +203,8 @@ export interface ProjectData {
   video_generate_audio?: boolean | null;
   /** 角色声音绑定方式：prompt（默认，按 voice_style 提示词软约束）/ reference_audio（挂角色参考音频）。 */
   character_voice_binding?: CharacterVoiceBinding;
+  /** 参考生视频提示词档：default（通用三段论）/ h3_ref2va（MiniMax H3 全参考六段）。仅参考生视频的剧情 / 解说项目有效。 */
+  video_prompt_profile?: VideoPromptProfile | null;
   /** 旁白配音（TTS）项目级覆盖：音频后端 / 音色 / 语速，留空即跟随全局默认 */
   audio_backend?: string | null;
   narration_voice?: string | null;

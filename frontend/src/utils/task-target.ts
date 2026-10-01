@@ -28,6 +28,18 @@ const ASSET_ROUTES: Record<"character" | "scene" | "prop" | "product", string> =
   product: `/${WORKSPACE_ROUTE_PRODUCTS}`,
 };
 
+/**
+ * 引用资源 → 资产页上的落点。角色衍生的引用名形如 `本体/衍生`，资产页只有本体卡片
+ * （衍生在卡片内的衍生图面板里），所以落到本体。类型不是资产类（或名字为空）时返回 null。
+ */
+export function assetFocusTarget(type: string, name: string): WorkspaceNotificationTarget | null {
+  if (!(type in ASSET_ROUTES)) return null;
+  const assetType = type as keyof typeof ASSET_ROUTES;
+  const id = assetType === "character" ? name.split("/")[0] : name;
+  if (!id) return null;
+  return { type: assetType, id, route: ASSET_ROUTES[assetType], highlight_style: "flash" };
+}
+
 const FAILURE_TEXT_KEYS: Partial<
   Record<TaskItem["task_type"], { key: string; idParam: "id" | "unitId" }>
 > = {

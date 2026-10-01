@@ -27,6 +27,7 @@ interface UsageRecordsCardProps {
   onPage: (direction: "prev" | "next") => void;
   onOpenDetail: (recordId: number) => void;
   onCancelAll?: () => void;
+  onForceCancelAll?: () => void;
 }
 
 const STATUS_TABS: { value: UsageStatusFilter; labelKey: string }[] = [
@@ -54,6 +55,7 @@ export function UsageRecordsCard({
   onPage,
   onOpenDetail,
   onCancelAll,
+  onForceCancelAll,
 }: UsageRecordsCardProps) {
   const { t } = useTranslation("dashboard");
   const providerLabel = providerLabelResolver(summary);
@@ -159,6 +161,18 @@ export function UsageRecordsCard({
                           className="focus-ring ml-auto rounded px-1 text-[11px] text-text-3 transition-colors hover:text-danger-2"
                         >
                           {t("usage_cancel_all")}
+                        </button>
+                      )}
+                      {onForceCancelAll && (
+                        <button
+                          type="button"
+                          onClick={onForceCancelAll}
+                          className={
+                            (onCancelAll ? "" : "ml-auto ") +
+                            "focus-ring rounded px-1 text-[11px] text-danger-2 transition-opacity hover:opacity-80"
+                          }
+                        >
+                          {t("force_cancel_all")}
                         </button>
                       )}
                     </div>

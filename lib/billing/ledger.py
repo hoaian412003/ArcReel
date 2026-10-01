@@ -91,6 +91,10 @@ def _settlement_from_result(call_type: CallType, result: Any, *, service_tier: s
             image_output_tokens=result.image_output_tokens,
             text_input_tokens=result.text_input_tokens,
             text_output_tokens=result.text_output_tokens,
+            provider_coins=result.provider_coins,
+            # 供应商直报的第三方美元费用优先于定价表估算。
+            cost_amount=result.provider_cost_usd,
+            currency="USD" if result.provider_cost_usd is not None else None,
         )
     if call_type == "audio":
         return SettlementInput(usage_tokens=result.characters)
@@ -99,6 +103,7 @@ def _settlement_from_result(call_type: CallType, result: Any, *, service_tier: s
             usage_tokens=result.usage_tokens,
             generate_audio=result.generate_audio,
             billed_duration_seconds=result.duration_seconds,
+            provider_coins=result.provider_coins,
             service_tier=service_tier,
         )
     if call_type == "text":

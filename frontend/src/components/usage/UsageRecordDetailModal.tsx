@@ -176,6 +176,7 @@ function UsageGroup({ detail }: { detail: UsageRecordDetail }) {
     [t("usage_field_input_tokens"), detail.input_tokens],
     [t("usage_field_output_tokens"), detail.output_tokens],
     [t("usage_field_total_tokens"), detail.usage_tokens],
+    [t("usage_field_rh_coins"), detail.provider_coins],
   ].filter(([, value]) => value !== null) as [string, number][];
   if (rows.length === 0) {
     return <p className="text-[11.5px] text-text-4">{t("usage_detail_empty")}</p>;

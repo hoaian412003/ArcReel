@@ -350,6 +350,8 @@ class VideoGenerationResult:
     usage_tokens: int | None = None
     task_id: str | None = None
     generate_audio: bool | None = None
+    # RunningHub：workflow 在 RH 机器上的运行消耗（RH coin）。
+    provider_coins: float | None = None
 
     # 这一次生成才确定、且要随成片一起留档的事实（如 ComfyUI 的实发 workflow 指纹）。调用方把
     # 它并进产物版本元数据：请求侧的那份元数据在提交前就已定稿，装不下只有执行过一次才知道的值。

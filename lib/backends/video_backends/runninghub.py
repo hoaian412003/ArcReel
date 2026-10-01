@@ -17,6 +17,7 @@ import httpx
 from lib.backends.artifact_download_guard import artifact_http_client
 from lib.backends.backend_runtime import ProviderJobIdPersistenceMixin, download_resumable_video, submit_post
 from lib.backends.providers import PROVIDER_RUNNINGHUB
+from lib.backends.runninghub_usage import parse_runninghub_usage
 from lib.backends.video_backend_contract import (
     VideoAudioMode,
     VideoCapabilities,
@@ -28,7 +29,7 @@ from lib.backends.video_backend_contract import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://www.runninghub.ai"
-_QUERY_URL = "https://www.runninghub.cn/openapi/v2/query"
+_QUERY_URL = "https://www.runninghub.ai/openapi/v2/query"
 _APP_ID = "2104162779616120834"
 _MODEL = f"ai-app-{_APP_ID}"
 _IMAGE_NODES = ("139", "147", "159", "160", "222", "287", "290", "292", "294")
@@ -237,5 +238,6 @@ class RunningHubVideoBackend(ProviderJobIdPersistenceMixin):
             video_uri=video_url,
             task_id=task_id,
             generate_audio=True,
+            provider_coins=parse_runninghub_usage(payload).coins,
             provenance={"runninghub_webapp_id": _APP_ID},
         )

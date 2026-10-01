@@ -2378,3 +2378,108 @@ def test_unit_writes_return_the_refreshed_capability(reference_videos_client: Te
     assert patched["unit"]["text"] == "镜头1：@[张三] 推门"
     assert patched["unit_capability"]["hydrated_capability"] == "r2v"
     assert patched["unit_capability"]["allowed_durations"] == [9]
+
+
+_H3_UNIT_TEXT = "@[张三]站在@[酒馆]门口。"
+_H3_SECTIONS = {
+    "subject_definitions": (
+        "@[张三] is the traveller in <Picture @[张三]>.\n@[酒馆] is the old tavern in <Picture @[酒馆]>."
+    ),
+    "summary": "[reference generation] @[张三] waits at @[酒馆].",
+    "retention_analysis": "@[张三] (appears in [Shot 1]): fully_preserved - kept.",
+    "detailed_description": "Realistic style.\n[Shot 1] @[张三] stands at @[酒馆].",
+    "overall_soundscape": "Soft wind.",
+    "non_diegetic_music": "N/A",
+}
+_REFERENCE_VIDEOS = "/api/v1/projects/demo/reference-videos"
+
+
+def _enable_h3_profile(tmp_path: Path) -> None:
+    project_file = tmp_path / "projects" / "demo" / "project.json"
+    project = json.loads(project_file.read_text(encoding="utf-8"))
+    project["video_prompt_profile"] = "h3_ref2va"
+    project_file.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+
+
+def _add_h3_unit(client: TestClient) -> str:
+    resp = client.post(f"{_REFERENCE_VIDEOS}/episodes/1/units", json={"prompt": _H3_UNIT_TEXT, "duration_seconds": 6})
+    assert resp.status_code == 201, resp.text
+    return resp.json()["unit"]["unit_id"]
+
+
+def test_h3_project_lists_the_payload_status_per_unit(reference_videos_client: TestClient, tmp_path: Path):
+    _enable_h3_profile(tmp_path)
+    unit_id = _add_h3_unit(reference_videos_client)
+    listed = reference_videos_client.get(f"{_REFERENCE_VIDEOS}/episodes/1/units").json()
+    assert listed["h3_prompt_status"] == {unit_id: "missing"}
+
+    saved = reference_videos_client.patch(
+        f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}/h3-prompt", json=_H3_SECTIONS
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["h3_prompt_status"] == "current"
+
+    reference_videos_client.patch(
+        f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}", json={"prompt": _H3_UNIT_TEXT + "\n镜头推近。"}
+    )
+    listed = reference_videos_client.get(f"{_REFERENCE_VIDEOS}/episodes/1/units").json()
+    assert listed["h3_prompt_status"] == {unit_id: "stale"}
+
+
+def test_patch_h3_prompt_rejects_sections_that_disagree_with_the_unit_text(
+    reference_videos_client: TestClient, tmp_path: Path
+):
+    _enable_h3_profile(tmp_path)
+    unit_id = _add_h3_unit(reference_videos_client)
+    resp = reference_videos_client.patch(
+        f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}/h3-prompt",
+        json={**_H3_SECTIONS, "summary": "[reference generation] <Subject 1> waits."},
+    )
+    assert resp.status_code == 422
+    assert "数字标签" in resp.json()["detail"]
+
+
+def test_h3_routes_require_the_h3_profile(reference_videos_client: TestClient):
+    unit_id = _add_h3_unit(reference_videos_client)
+    edit = reference_videos_client.patch(f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}/h3-prompt", json=_H3_SECTIONS)
+    regenerate = reference_videos_client.post(f"{_REFERENCE_VIDEOS}/episodes/1/h3-prompt/regenerate", json={})
+    assert edit.status_code == 409
+    assert regenerate.status_code == 409
+
+
+def test_regenerate_h3_prompt_queues_a_text_task_that_keeps_the_unit_text(
+    reference_videos_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from server.routers import reference_videos as router_mod
+
+    _enable_h3_profile(tmp_path)
+    unit_id = _add_h3_unit(reference_videos_client)
+    enqueue = AsyncMock(return_value={"task_id": "task-1", "deduped": False})
+    monkeypatch.setattr(router_mod, "enqueue_task_only", enqueue)
+    monkeypatch.setattr(router_mod, "prompt_authoring_preflight", lambda *_args: None)
+
+    resp = reference_videos_client.post(
+        f"{_REFERENCE_VIDEOS}/episodes/1/h3-prompt/regenerate", json={"unit_ids": [unit_id]}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"task_id": "task-1", "deduped": False, "unit_ids": [unit_id]}
+    kwargs = enqueue.await_args.kwargs
+    assert kwargs["task_type"] == "text_episode_script"
+    assert kwargs["media_type"] == "text"
+    assert kwargs["payload"]["entry_ids"] == [unit_id]
+    assert kwargs["payload"]["keep_text"] is True
+
+
+def test_regenerate_h3_prompt_rejects_an_unknown_unit(
+    reference_videos_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from server.routers import reference_videos as router_mod
+
+    _enable_h3_profile(tmp_path)
+    _add_h3_unit(reference_videos_client)
+    monkeypatch.setattr(router_mod, "prompt_authoring_preflight", lambda *_args: None)
+    resp = reference_videos_client.post(
+        f"{_REFERENCE_VIDEOS}/episodes/1/h3-prompt/regenerate", json={"unit_ids": ["E1U99"]}
+    )
+    assert resp.status_code == 404

@@ -374,6 +374,12 @@ ArcReel 使用 SQLAlchemy 2.0 异步 ORM。
 - 音频；
 - 最终编码。
 
+### 剪辑时间线 {#edit-timeline}
+
+每集可以有多条具名剪辑时间线（`lib/edit_timeline/`，决策见 `docs/adr/0090`）。每条时间线是 `timelines/<集>/<timeline_id>.json`，只追加不可变修订；写入声明父修订，父修订已不是最新即返回 409。剪辑片段引用视频单元并取其 current 视频版本，入出点针对的版本不是 current 时渲染忽略裁切。
+
+`server/routers/edit_timelines.py` 提供增删改、回滚与渲染接口，前端编辑器在 `episodes/:n/edit`。渲染由 `lib/edit_timeline/render.py` 构造 ffmpeg 滤镜图（裁切、归一化、`concat` / `xfade` + `acrossfade`），成片写入 `final_cuts/ep<集>_<timeline_id>.mp4`（公开媒体目录，与生成视频同口径），同名 `.json` 记录渲染时的修订与所用视频版本，读取时据此判定成片是否过期。当前切片尚未包含 BGM、旁白与字幕轨、剪映草稿导出与 Agent 工具。
+
 ### 剪映草稿 {#jianying-draft}
 
 导出可继续编辑的项目结构，用于：

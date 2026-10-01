@@ -27,6 +27,7 @@ from lib.script.draft_quarantine import (
     write_quarantine,
 )
 from lib.script.reference_video.draft_validation import DraftViolation
+from lib.script.reference_video.h3_prompt import bind_h3_prompt, source_text_hash
 from lib.script.reference_video.request_projection import configured_reference_request_facts
 from lib.script.reference_video.text_parser import extract_mentions
 from lib.script.reference_video.unit_capabilities import evaluate_reference_unit_capabilities
@@ -1529,3 +1530,86 @@ async def test_promote_prompt_authoring_draft_revalidates_edited_formal_unit(ref
 async def test_promote_prompt_authoring_draft_without_draft(reference_project: Path):
     with pytest.raises(FileNotFoundError, match="没有可晋升的 prompt_authoring 待修复草稿"):
         await ScriptGenerator(reference_project).promote_reference_prompt_authoring_draft(episode=1)
+
+
+H3_UNIT_TEXT = "镜头1：中景，平视。@[主角] 推开 @[酒馆] 的门，侧身跨过门槛。"
+
+
+def _h3_sections(**overrides: str) -> dict[str, str]:
+    sections = {
+        "subject_definitions": (
+            "@[主角] is the traveller in <Picture @[主角]>, with a dark cloak.\n"
+            "@[酒馆] is the old tavern in <Picture @[酒馆]>."
+        ),
+        "summary": "[reference generation] @[主角] pushes open the door of @[酒馆].",
+        "retention_analysis": (
+            "@[主角] (appears in [Shot 1]): fully_preserved - identity retained.\n"
+            "@[酒馆] (appears in [Shot 1]): fully_preserved - layout retained."
+        ),
+        "detailed_description": (
+            "The target video uses a realistic cinematic style with warm lantern light.\n"
+            "[Shot 1] A medium shot of @[主角] pushing open the wooden door of @[酒馆] and stepping across the threshold."
+        ),
+        "overall_soundscape": "Wood creaks as the door swings open over low murmuring voices.",
+        "non_diegetic_music": "N/A",
+    }
+    sections.update(overrides)
+    return sections
+
+
+def _h3_response(text: str, sections: dict[str, str]) -> str:
+    return _json.dumps({"title": "t", "units": [{"text": text, "h3_prompt": sections}]}, ensure_ascii=False)
+
+
+def _h3_generator(response: str) -> MagicMock:
+    generator = MagicMock()
+    generator.model = "mock"
+    generator.generate = AsyncMock(return_value=MagicMock(text=response))
+    return generator
+
+
+def _enable_h3_profile(project_dir: Path) -> None:
+    project_file = project_dir / "project.json"
+    project = _json.loads(project_file.read_text(encoding="utf-8"))
+    project["video_prompt_profile"] = "h3_ref2va"
+    project_file.write_text(_json.dumps(project, ensure_ascii=False), encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_h3_profile_prompt_asks_for_the_six_sections(reference_project: Path):
+    _enable_h3_profile(reference_project)
+    prompt = await ScriptGenerator(reference_project).build_prompt(episode=1)
+    assert "H3 全参考六段" in prompt
+    assert "subject_definitions" in prompt
+    assert "本项目没有可用的参考音频" in prompt
+    assert "（时长 4s）" in prompt
+
+
+@pytest.mark.asyncio
+async def test_h3_profile_saves_text_with_a_payload_bound_to_it(reference_project: Path):
+    _enable_h3_profile(reference_project)
+    gen = ScriptGenerator(reference_project, generator=_h3_generator(_h3_response(H3_UNIT_TEXT, _h3_sections())))
+    await gen.generate(episode=1)
+
+    unit = _formal_units(reference_project)["E1U01"]
+    assert unit["text"] == H3_UNIT_TEXT
+    assert unit["h3_prompt"]["summary"].startswith("[reference generation]")
+    assert unit["h3_prompt"]["source_text_hash"] == source_text_hash(H3_UNIT_TEXT)
+
+
+@pytest.mark.asyncio
+async def test_h3_profile_rejects_a_payload_that_disagrees_with_the_unit_text(reference_project: Path):
+    _enable_h3_profile(reference_project)
+    sections = _h3_sections(summary="[reference generation] <Subject 1> opens the door.")
+    gen = ScriptGenerator(reference_project, generator=_h3_generator(_h3_response(H3_UNIT_TEXT, sections)))
+    with pytest.raises(DraftViolation, match="数字标签"):
+        await gen.generate(episode=1)
+
+
+@pytest.mark.asyncio
+async def test_default_profile_drops_a_stale_h3_payload(reference_project: Path):
+    stale = bind_h3_prompt(SCRIPT_PLAN_UNIT["text"], _h3_sections()).model_dump()
+    _write_formal_units(reference_project, [{**SCRIPT_PLAN_UNIT, "h3_prompt": stale}])
+    gen = ScriptGenerator(reference_project, generator=_fake_prompt_authoring_generator(PROMPT_AUTHORING_UNIT_TEXT))
+    await gen.generate(episode=1)
+    assert "h3_prompt" not in _formal_units(reference_project)["E1U01"]

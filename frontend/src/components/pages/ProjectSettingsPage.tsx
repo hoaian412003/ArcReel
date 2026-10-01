@@ -12,8 +12,8 @@ import { executingImageModel, executingVideoModel } from "@/components/shared/La
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
 import { DEFAULT_TEMPLATE_ID, STYLE_TEMPLATES } from "@/data/style-templates";
-import type { CharacterVoiceBinding, CustomProviderInfo, ProviderInfo } from "@/types";
-import { DEFAULT_CHARACTER_VOICE_BINDING } from "@/types";
+import type { CharacterVoiceBinding, CustomProviderInfo, ProviderInfo, VideoPromptProfile } from "@/types";
+import { DEFAULT_CHARACTER_VOICE_BINDING, DEFAULT_VIDEO_PROMPT_PROFILE } from "@/types";
 import { useDisplayNames } from "@/hooks/useDisplayNames";
 import { useModelCandidates } from "@/hooks/useModelCandidates";
 import { ROUTE_META, RouteLockBadge } from "@/components/shared/GenerationRouteCards";
@@ -156,6 +156,8 @@ export function ProjectSettingsPage() {
   const [narrationSpeed, setNarrationSpeed] = useState<number | null>(null);
   // 角色声音绑定方式：参考生视频路线专有；缺省即默认档（提示词软约束）
   const [voiceBinding, setVoiceBinding] = useState<CharacterVoiceBinding>(DEFAULT_CHARACTER_VOICE_BINDING);
+  // 参考生视频提示词档：仅剧情 / 解说的参考生视频项目可选；缺省即默认档
+  const [promptProfile, setPromptProfile] = useState<VideoPromptProfile>(DEFAULT_VIDEO_PROMPT_PROFILE);
   const [textDefault, setTextDefault] = useState<string>("");
   const [textSimple, setTextSimple] = useState<string>("");
   const [textComplex, setTextComplex] = useState<string>("");
@@ -202,6 +204,7 @@ export function ProjectSettingsPage() {
     audioOverride: null as boolean | null,
     audioBackend: "", narrationVoice: "", narrationSpeed: null as number | null,
     voiceBinding: DEFAULT_CHARACTER_VOICE_BINDING,
+    promptProfile: DEFAULT_VIDEO_PROMPT_PROFILE,
     textDefault: "", textSimple: "", textComplex: "",
     aspectRatio: "", gridStoryboard: false,
     defaultDuration: null as number | null,
@@ -303,6 +306,8 @@ export function ProjectSettingsPage() {
       const sl = typeof project.source_language === "string" ? project.source_language : null;
       const vbind: CharacterVoiceBinding =
         project.character_voice_binding === "reference_audio" ? "reference_audio" : DEFAULT_CHARACTER_VOICE_BINDING;
+      const pprofile: VideoPromptProfile =
+        project.video_prompt_profile === "h3_ref2va" ? "h3_ref2va" : DEFAULT_VIDEO_PROMPT_PROFILE;
 
       setVideoBackend(vb);
       setVideoProviderI2V(vpi2v);
@@ -325,6 +330,7 @@ export function ProjectSettingsPage() {
       setEpisodeTargetDuration(etd);
       setSourceLanguage(sl);
       setVoiceBinding(vbind);
+      setPromptProfile(pprofile);
       setProjectTitle(typeof project.title === "string" ? project.title : "");
       setContentMode(typeof project.content_mode === "string" ? project.content_mode : "narration");
 
@@ -364,6 +370,7 @@ export function ProjectSettingsPage() {
         audioOverride: ao,
         audioBackend: ab, narrationVoice: nv, narrationSpeed: ns,
         voiceBinding: vbind,
+        promptProfile: pprofile,
         textDefault: td, textSimple: tsi, textComplex: tcx,
         aspectRatio: ar, gridStoryboard: grid, defaultDuration: dd, speechRate: sr,
         episodeTargetDuration: etd,
@@ -417,6 +424,7 @@ export function ProjectSettingsPage() {
     narrationVoice !== initialRef.current.narrationVoice ||
     narrationSpeed !== initialRef.current.narrationSpeed ||
     voiceBinding !== initialRef.current.voiceBinding ||
+    promptProfile !== initialRef.current.promptProfile ||
     textDefault !== initialRef.current.textDefault ||
     textSimple !== initialRef.current.textSimple ||
     textComplex !== initialRef.current.textComplex ||
@@ -500,6 +508,7 @@ export function ProjectSettingsPage() {
 
   // 宫格是分镜图生视频内的装配选项；参考生视频与不支持宫格的 ad 项目下既不呈现也不参与保存
   const gridToggleVisible = generationRoute === "storyboard" && contentMode !== "ad";
+  const promptProfileVisible = generationRoute === "reference_video" && contentMode !== "ad";
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -530,6 +539,8 @@ export function ProjectSettingsPage() {
         narration_speed: narrationSpeed,
         // 绑定方式只在参考生视频路线上有效，其余路线该键与项目无关，不写
         ...(generationRoute === "reference_video" ? { character_voice_binding: voiceBinding } : {}),
+        // 提示词档仅剧情 / 解说的参考生视频项目持有；null 即清除、回落默认档
+        ...(promptProfileVisible ? { video_prompt_profile: promptProfile === DEFAULT_VIDEO_PROMPT_PROFILE ? null : promptProfile } : {}),
         // null 即清除项目级覆盖、回退语言默认
         speech_rate_units_per_second: speechRate,
         default_text_backend: textDefault || null,
@@ -554,6 +565,7 @@ export function ProjectSettingsPage() {
         imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride,
         audioBackend, narrationVoice: trimmedVoice, narrationSpeed,
         voiceBinding,
+        promptProfile,
         textDefault, textSimple, textComplex,
         aspectRatio, gridStoryboard, defaultDuration, speechRate,
         episodeTargetDuration,
@@ -568,7 +580,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolutions, imageResolution, projectName, t, globalDefaults]);
+  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, promptProfile, promptProfileVisible, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolutions, imageResolution, projectName, t, globalDefaults]);
 
   const handleResetAgentProfile = useCallback(async () => {
     if (profileResetProject !== projectName) {
@@ -948,6 +960,39 @@ export function ProjectSettingsPage() {
                     {voiceBinding === "prompt"
                       ? t("character_voice_binding_prompt_desc")
                       : t("character_voice_binding_reference_audio_desc")}
+                  </p>
+                </fieldset>
+              </SectionCard>
+              )}
+
+              {/* 参考生视频提示词档：H3 全参考六段结构只支持参考生视频路线的剧情 / 解说项目 */}
+              {promptProfileVisible && (
+              <SectionCard kicker="Video Prompt" title={t("video_prompt_profile_title")}>
+                <fieldset>
+                  <legend className="sr-only">{t("video_prompt_profile_title")}</legend>
+                  <div className="flex gap-2.5">
+                    {(["default", "h3_ref2va"] as const).map((profile) => (
+                      <label key={profile} className={radioCardClass(promptProfile === profile)}>
+                        <input
+                          type="radio"
+                          name="videoPromptProfile"
+                          value={profile}
+                          checked={promptProfile === profile}
+                          onChange={() => setPromptProfile(profile)}
+                          className="sr-only"
+                        />
+                        <span>
+                          {profile === "default"
+                            ? t("video_prompt_profile_default_label")
+                            : t("video_prompt_profile_h3_ref2va_label")}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-text-4">
+                    {promptProfile === "default"
+                      ? t("video_prompt_profile_default_desc")
+                      : t("video_prompt_profile_h3_ref2va_desc")}
                   </p>
                 </fieldset>
               </SectionCard>

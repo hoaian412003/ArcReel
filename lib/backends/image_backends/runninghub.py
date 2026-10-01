@@ -18,9 +18,10 @@ from lib.backends.image_backends.base import (
     download_image_to_path,
 )
 from lib.backends.providers import PROVIDER_RUNNINGHUB
+from lib.backends.runninghub_usage import RunningHubUsage, parse_runninghub_usage
 
 DEFAULT_BASE_URL = "https://www.runninghub.ai"
-_QUERY_URL = "https://www.runninghub.cn/openapi/v2/query"
+_QUERY_URL = "https://www.runninghub.ai/openapi/v2/query"
 _APP_ID = "2104532059371909121"
 DEFAULT_MODEL = f"ai-app-{_APP_ID}"
 _UPLOAD_ENDPOINT = "/task/openapi/upload"
@@ -108,7 +109,7 @@ class RunningHubImageBackend:
         async with artifact_http_client(timeout=self._http_timeout) as client:
             uploaded = await asyncio.gather(*(self._upload_image(client, Path(ref.path)) for ref in refs))
             task_id = await self._submit(client, self._node_info(request, uploaded), request)
-            result_url = await self._poll(client, task_id, request)
+            result_url, usage = await self._poll(client, task_id, request)
 
         await download_image_to_path(result_url, request.output_path)
         return ImageGenerationResult(
@@ -116,6 +117,8 @@ class RunningHubImageBackend:
             provider=PROVIDER_RUNNINGHUB,
             model=self._model,
             image_uri=result_url,
+            provider_coins=usage.coins,
+            provider_cost_usd=usage.third_party_usd,
         )
 
     async def _upload_image(self, client: httpx.AsyncClient, path: Path) -> str:
@@ -196,7 +199,7 @@ class RunningHubImageBackend:
         client: httpx.AsyncClient,
         task_id: str,
         request: ImageGenerationRequest,
-    ) -> str:
+    ) -> tuple[str, RunningHubUsage]:
         last_status = "unknown"
         try:
             async with asyncio.timeout(self._poll_timeout):
@@ -218,7 +221,7 @@ class RunningHubImageBackend:
                                 if isinstance(item, dict):
                                     url = item.get("url") or item.get("outputUrl")
                                     if isinstance(url, str) and url:
-                                        return url
+                                        return url, parse_runninghub_usage(payload)
                         raise RuntimeError("RunningHub image task succeeded without an image URL")
                     if status == "FAILED":
                         raise RuntimeError(_api_error(payload, "RunningHub image task failed"))

@@ -24,7 +24,9 @@ from lib.generation.generation_queue_client import (
     BatchTaskResult,
     TaskSpec,
     TaskSpecValidationError,
+    WorkerOfflineError,
     batch_enqueue_only,
+    enqueue_task_only,
 )
 from lib.generation.generation_result import (
     GenerationAction,
@@ -38,6 +40,15 @@ from lib.infra.path_safety import PathTraversalError, safe_join
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager, is_reference_video_project
 from lib.project.resource_paths import resource_relative_path
+from lib.prompts.video_prompt_profile import is_h3_ref2va
+from lib.script.draft_violation import DraftViolation
+from lib.script.reference_video.h3_prompt import (
+    UNAVAILABLE_STALE,
+    H3PromptUnavailable,
+    bind_h3_prompt,
+    load_h3_prompt,
+    validate_h3_prompt,
+)
 from lib.script.reference_video.request_projection import (
     ReferenceRequestFactsLookup,
     ReferenceRequestOptions,
@@ -93,6 +104,8 @@ from server.services.tasks.video_caps import (
     reference_request_facts_lookup,
     reference_unit_capabilities,
 )
+from server.text_generation import TextGenerationError, TextGenerationRequest, prompt_authoring_preflight
+from server.tool_runtime import TEXT_EPISODE_SCRIPT_TASK_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +331,13 @@ async def _unit_capability(
 async def list_units(project_name: str, episode: int, _t: Translator) -> dict[str, Any]:
     project, script, _sf = _load_episode_script(project_name, episode, _t)
     units = script.get("video_units") or []
-    return {"units": units, "unit_capabilities": await _unit_capabilities(project_name, project, units)}
+    payload: dict[str, Any] = {
+        "units": units,
+        "unit_capabilities": await _unit_capabilities(project_name, project, units),
+    }
+    if is_h3_ref2va(project):
+        payload["h3_prompt_status"] = {str(unit.get("unit_id")): _h3_prompt_status(unit) for unit in units}
+    return payload
 
 
 @router.post("/episodes/{episode}/units", status_code=status.HTTP_201_CREATED)
@@ -428,6 +447,119 @@ async def patch_unit(
         "unit_capability": await _unit_capability(project_name, project, unit),
         "edit_result": result.model_dump(mode="json"),
     }
+
+
+def _h3_prompt_status(unit: dict) -> str:
+    """H3 提示词档下单元载荷的状态：current 可直接下发，stale 是正文改动后的过期，missing 是尚未写成。"""
+    try:
+        load_h3_prompt(unit)
+    except H3PromptUnavailable as exc:
+        return "stale" if exc.code == UNAVAILABLE_STALE else "missing"
+    return "current"
+
+
+class PatchH3PromptRequest(BaseModel):
+    """H3 全参考六段载荷的整体改写；六段缺一不可，绑定当前单元正文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject_definitions: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    retention_analysis: str = Field(min_length=1)
+    detailed_description: str = Field(min_length=1)
+    overall_soundscape: str = Field(min_length=1)
+    non_diegetic_music: str = Field(min_length=1)
+
+
+class RegenerateH3PromptRequest(BaseModel):
+    """重新生成 H3 提示词：点名单元，缺省即本集全部单元。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    unit_ids: list[str] | None = None
+
+
+def _require_h3_profile(project: dict, _t: Translator) -> None:
+    if not is_h3_ref2va(project):
+        raise HTTPException(status_code=409, detail=_t("ref_h3_profile_required"))
+
+
+@router.patch("/episodes/{episode}/units/{unit_id}/h3-prompt")
+async def patch_unit_h3_prompt(
+    project_name: str,
+    episode: int,
+    unit_id: str,
+    req: PatchH3PromptRequest,
+    _t: Translator,
+) -> dict[str, Any]:
+    """手写 H3 六段载荷：按当前单元正文机械校验后落盘，并把它绑定到这份正文。"""
+    project, current, script_file = _load_episode_script(project_name, episode, _t)
+    _require_h3_profile(project, _t)
+    unit = _find_unit(current, unit_id, _t)
+    sections = req.model_dump()
+    text = str(unit.get("text") or "")
+    try:
+        validate_h3_prompt(
+            f"unit {unit_id}",
+            text,
+            sections,
+            duration_seconds=int(unit.get("duration_seconds") or 0),
+            project=project,
+        )
+    except DraftViolation as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = execute_current_episode_edit(
+        get_project_manager(),
+        project_name,
+        episode,
+        script_file,
+        current,
+        [{"op": "update", "id": unit_id, "fields": {"h3_prompt": bind_h3_prompt(text, sections).model_dump()}}],
+    )
+    require_script_edit_result(result, operation_not_found=True)
+    saved = get_project_manager().load_script(project_name, result.script)
+    saved_unit = _find_unit(saved, unit_id, _t)
+    return {"unit": saved_unit, "h3_prompt_status": _h3_prompt_status(saved_unit)}
+
+
+@router.post("/episodes/{episode}/h3-prompt/regenerate")
+async def regenerate_h3_prompts(
+    project_name: str,
+    episode: int,
+    user: CurrentUser,
+    _t: Translator,
+    req: RegenerateH3PromptRequest,
+) -> dict[str, Any]:
+    """重新生成 H3 提示词：单元正文原样保留，只重写六段载荷；入队文本任务，不同步等模型。"""
+    project, script, _script_file = _load_episode_script(project_name, episode, _t)
+    _require_h3_profile(project, _t)
+    units = [unit for unit in (script.get("video_units") or []) if isinstance(unit, dict)]
+    known = [str(unit.get("unit_id")) for unit in units if str(unit.get("text") or "").strip()]
+    requested = list(dict.fromkeys(req.unit_ids)) if req.unit_ids is not None else known
+    if not requested:
+        raise BadRequestError("ref_batch_empty_selection")
+    unknown = [unit_id for unit_id in requested if unit_id not in known]
+    if unknown:
+        raise HTTPException(status_code=404, detail=_t("ref_unit_not_found", unit_id=unknown[0]))
+    project_path = get_project_manager().get_project_path(project_name)
+    try:
+        await asyncio.to_thread(prompt_authoring_preflight, project_path, episode)
+    except TextGenerationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    request = TextGenerationRequest(episode=episode, entry_ids=tuple(requested), keep_text=True)
+    try:
+        result = await enqueue_task_only(
+            project_name=project_name,
+            task_type=TEXT_EPISODE_SCRIPT_TASK_TYPE,
+            media_type="text",
+            resource_id=f"episode-{episode}",
+            payload=request.to_payload(),
+            source="webui",
+            user_id=user.id,
+        )
+    except WorkerOfflineError as exc:
+        raise HTTPException(status_code=503, detail=_t("worker_offline")) from exc
+    return {"task_id": result["task_id"], "deduped": result.get("deduped", False), "unit_ids": requested}
 
 
 @router.delete("/episodes/{episode}/units/{unit_id}", status_code=status.HTTP_204_NO_CONTENT)
