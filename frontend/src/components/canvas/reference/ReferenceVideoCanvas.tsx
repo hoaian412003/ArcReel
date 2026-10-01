@@ -920,7 +920,11 @@ export function ReferenceVideoCanvas({
   const listMode: "rail" | "full" = containerWidth < LIST_RAIL_BREAKPOINT ? "rail" : "full";
   const stackPreview = containerWidth < STACK_PREVIEW_BREAKPOINT;
   const listColW = listMode === "rail" ? 56 : 320;
-  const previewColW = containerWidth < WIDE_BREAKPOINT ? PREVIEW_COL_NARROW : PREVIEW_COL_WIDE;
+  // 编辑区与预览区各占列表之外宽度的一半；编辑区过宽时脚本框大片留白
+  const previewColW = Math.max(
+    containerWidth < WIDE_BREAKPOINT ? PREVIEW_COL_NARROW : PREVIEW_COL_WIDE,
+    Math.round((containerWidth - listColW) / 2),
+  );
   const gridCols = stackPreview
     ? `${listColW}px minmax(0, 1fr)`
     : `${listColW}px minmax(0, 1fr) ${previewColW}px`;

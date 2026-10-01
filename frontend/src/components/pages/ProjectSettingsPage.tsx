@@ -13,7 +13,8 @@ import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
 import { DEFAULT_TEMPLATE_ID, STYLE_TEMPLATES } from "@/data/style-templates";
 import type { CharacterVoiceBinding, CustomProviderInfo, H3GuidePreset, ProviderInfo, VideoPromptProfile } from "@/types";
-import { DEFAULT_CHARACTER_VOICE_BINDING, DEFAULT_VIDEO_PROMPT_PROFILE, H3_GUIDE_PRESETS, parseH3GuidePreset } from "@/types";
+import { DEFAULT_CHARACTER_VOICE_BINDING, DEFAULT_H3_GUIDE_PRESET, DEFAULT_VIDEO_PROMPT_PROFILE, H3_GUIDE_PRESETS, parseH3GuidePreset } from "@/types";
+import { H3GuideEditor } from "@/components/pages/settings/H3GuideEditor";
 import { useDisplayNames } from "@/hooks/useDisplayNames";
 import { useModelCandidates } from "@/hooks/useModelCandidates";
 import { ROUTE_META, RouteLockBadge } from "@/components/shared/GenerationRouteCards";
@@ -160,6 +161,10 @@ export function ProjectSettingsPage() {
   const [promptProfile, setPromptProfile] = useState<VideoPromptProfile>(DEFAULT_VIDEO_PROMPT_PROFILE);
   // 空串 = 继承全局设置
   const [guidePreset, setGuidePreset] = useState<H3GuidePreset | "">("");
+  // 空串 = 继承全局自定义（没有全局自定义时用所选预设的内置指南）
+  const [guideCustom, setGuideCustom] = useState("");
+  const [globalGuidePreset, setGlobalGuidePreset] = useState<H3GuidePreset>(DEFAULT_H3_GUIDE_PRESET);
+  const [globalGuideCustom, setGlobalGuideCustom] = useState("");
   const [textDefault, setTextDefault] = useState<string>("");
   const [textSimple, setTextSimple] = useState<string>("");
   const [textComplex, setTextComplex] = useState<string>("");
@@ -208,6 +213,7 @@ export function ProjectSettingsPage() {
     voiceBinding: DEFAULT_CHARACTER_VOICE_BINDING,
     promptProfile: DEFAULT_VIDEO_PROMPT_PROFILE,
     guidePreset: "",
+    guideCustom: "",
     textDefault: "", textSimple: "", textComplex: "",
     aspectRatio: "", gridStoryboard: false,
     defaultDuration: null as number | null,
@@ -246,7 +252,7 @@ export function ProjectSettingsPage() {
 
     voidCall(Promise.all([
       API.getSystemConfig(),
-      API.getProject(projectName),
+      API.getProject(projectName, { view: "config" }),
       getProviderModels().catch(() => [] as ProviderInfo[]),
       getCustomProviderModels().catch(() => [] as CustomProviderInfo[]),
     ]).then(([configRes, projectRes, providerList, customProviderList]) => {
@@ -274,6 +280,8 @@ export function ProjectSettingsPage() {
         audio: configRes.settings?.default_audio_backend ?? "",
       };
       setGlobalDefaults(nextGlobals);
+      setGlobalGuidePreset(parseH3GuidePreset(configRes.settings?.h3_guide_preset) ?? DEFAULT_H3_GUIDE_PRESET);
+      setGlobalGuideCustom(configRes.settings?.h3_guide_custom ?? "");
       setGlobalGenerateAudio(configRes.settings?.video_generate_audio ?? true);
       setProviders(providerList);
       setCustomProviders(customProviderList);
@@ -313,6 +321,7 @@ export function ProjectSettingsPage() {
         project.video_prompt_profile === "h3_ref2va" ? "h3_ref2va" : DEFAULT_VIDEO_PROMPT_PROFILE;
 
       const gpreset: H3GuidePreset | "" = parseH3GuidePreset(project.h3_guide_preset) ?? "";
+      const gcustom = typeof project.h3_guide_custom === "string" ? project.h3_guide_custom : "";
 
       setVideoBackend(vb);
       setVideoProviderI2V(vpi2v);
@@ -377,6 +386,7 @@ export function ProjectSettingsPage() {
         voiceBinding: vbind,
         promptProfile: pprofile,
         guidePreset: gpreset,
+        guideCustom: gcustom,
         textDefault: td, textSimple: tsi, textComplex: tcx,
         aspectRatio: ar, gridStoryboard: grid, defaultDuration: dd, speechRate: sr,
         episodeTargetDuration: etd,
@@ -432,6 +442,7 @@ export function ProjectSettingsPage() {
     voiceBinding !== initialRef.current.voiceBinding ||
     promptProfile !== initialRef.current.promptProfile ||
     guidePreset !== initialRef.current.guidePreset ||
+    guideCustom !== initialRef.current.guideCustom ||
     textDefault !== initialRef.current.textDefault ||
     textSimple !== initialRef.current.textSimple ||
     textComplex !== initialRef.current.textComplex ||
@@ -491,7 +502,7 @@ export function ProjectSettingsPage() {
         });
       }
       // Refetch project to reset styleValue from canonical server state
-      const refreshed = await API.getProject(projectName);
+      const refreshed = await API.getProject(projectName, { view: "config" });
       const nextStyle = deriveStyleValue(refreshed.project as unknown as Record<string, unknown>, projectName);
       setStyleValue(nextStyle);
       initialStyleRef.current = nextStyle;
@@ -549,7 +560,7 @@ export function ProjectSettingsPage() {
         // 提示词档仅剧情 / 解说的参考生视频项目持有；null 即清除、回落默认档
         ...(promptProfileVisible ? { video_prompt_profile: promptProfile === DEFAULT_VIDEO_PROMPT_PROFILE ? null : promptProfile } : {}),
         // 写作指南预设只在 H3 档下有意义；空串 = 清除项目级覆盖、继承全局设置
-        ...(promptProfileVisible ? { h3_guide_preset: guidePreset || null } : {}),
+        ...(promptProfileVisible ? { h3_guide_preset: guidePreset || null, h3_guide_custom: guideCustom || null } : {}),
         // null 即清除项目级覆盖、回退语言默认
         speech_rate_units_per_second: speechRate,
         default_text_backend: textDefault || null,
@@ -576,6 +587,7 @@ export function ProjectSettingsPage() {
         voiceBinding,
         promptProfile,
         guidePreset,
+        guideCustom,
         textDefault, textSimple, textComplex,
         aspectRatio, gridStoryboard, defaultDuration, speechRate,
         episodeTargetDuration,
@@ -590,7 +602,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, promptProfile, guidePreset, promptProfileVisible, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolutions, imageResolution, projectName, t, globalDefaults]);
+  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, promptProfile, guidePreset, guideCustom, promptProfileVisible, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolutions, imageResolution, projectName, t, globalDefaults]);
 
   const handleResetAgentProfile = useCallback(async () => {
     if (profileResetProject !== projectName) {
@@ -1029,6 +1041,19 @@ export function ProjectSettingsPage() {
                     <p className="mt-1 text-[11px] leading-relaxed text-text-4">
                       {guidePreset ? t(`h3_guide_preset_${guidePreset}_desc`) : t("h3_guide_preset_inherit_desc")}
                     </p>
+                    <label
+                      htmlFor="h3-guide-custom"
+                      className="mb-1.5 mt-4 block font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4"
+                    >
+                      {t("h3_guide_custom_label")}
+                    </label>
+                    <H3GuideEditor
+                      id="h3-guide-custom"
+                      preset={guidePreset || globalGuidePreset}
+                      value={guideCustom}
+                      onChange={setGuideCustom}
+                      inheritedText={globalGuideCustom}
+                    />
                   </div>
                 )}
               </SectionCard>

@@ -2528,6 +2528,36 @@ def test_patch_unit_dub_lines_fills_source_text_and_reports_alignment(
     assert "stale" not in saved["video_units"][0]["dub_lines"][0]
 
 
+def test_editing_a_dub_line_keeps_its_detected_start_and_synthesized_audio_only_when_text_is_unchanged(
+    reference_videos_client: TestClient, tmp_path: Path
+):
+    _enable_dubbing(tmp_path)
+    unit_id = _add_dub_unit(reference_videos_client)
+    url = f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}"
+    assert reference_videos_client.patch(url, json={"dub_lines": _DUB_PATCH_LINES}).status_code == 200
+    script_path = tmp_path / "projects" / "demo" / "scripts" / "episode_1.json"
+    saved = json.loads(script_path.read_text(encoding="utf-8"))
+    for line in saved["video_units"][0]["dub_lines"]:
+        line.update(
+            detected_start_seconds=2.5,
+            audio_path=f"audio/x{line['index']}.wav",
+            audio_duration_seconds=1.0,
+            audio_voice="v",
+            audio_text=line["text_vi"],
+        )
+    script_path.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+
+    edited = [{**_DUB_PATCH_LINES[0], "text_vi": "Chào bạn."}, _DUB_PATCH_LINES[1]]
+    assert reference_videos_client.patch(url, json={"dub_lines": edited}).status_code == 200
+
+    lines = json.loads(script_path.read_text(encoding="utf-8"))["video_units"][0]["dub_lines"]
+    # 检测时间描述原台词在成片里的位置：两条都保留
+    assert [line["detected_start_seconds"] for line in lines] == [2.5, 2.5]
+    # 合成音频对应旧台词：改过的那条作废，没改的保留
+    assert "audio_path" not in lines[0]
+    assert lines[1]["audio_path"] == "audio/x1.wav"
+
+
 def test_list_units_marks_dub_lines_stale_after_the_text_changes(reference_videos_client: TestClient, tmp_path: Path):
     _enable_dubbing(tmp_path)
     unit_id = _add_dub_unit(reference_videos_client)

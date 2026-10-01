@@ -107,7 +107,7 @@ from lib.project.project_migration_failure import (
 from lib.project.project_migration_guard import project_migration_failure
 from lib.project.project_migrations import migrate_project_with_verdict
 from lib.project.source_revision import SourceScope
-from lib.prompts.h3_guide_preset import VALID_H3_GUIDE_PRESETS
+from lib.prompts.h3_guide_preset import MAX_CUSTOM_GUIDE_CHARS, VALID_H3_GUIDE_PRESETS
 from lib.prompts.video_prompt_profile import VALID_VIDEO_PROMPT_PROFILES
 from lib.script.script_batch_edit import (
     ScriptBatchEditCommand,
@@ -1816,6 +1816,7 @@ PROJECT_SETTINGS = (
     "character_voice_binding",
     "video_prompt_profile",
     "h3_guide_preset",
+    "h3_guide_custom",
     "dub_target_language",
     "narrator_gender",
     "dub_voice_male",
@@ -2363,6 +2364,12 @@ def _coerce_setting_value(key: str, value: Any) -> Any:
         if value is not None and (not isinstance(value, str) or value not in VALID_H3_GUIDE_PRESETS):
             raise ValueError(f"h3_guide_preset 必须是 {sorted(VALID_H3_GUIDE_PRESETS)} 之一或 null,收到 {value!r}")
         return value
+    if key == "h3_guide_custom":
+        if value is not None and (
+            not isinstance(value, str) or not value.strip() or len(value.strip()) > MAX_CUSTOM_GUIDE_CHARS
+        ):
+            raise ValueError(f"h3_guide_custom 必须是 1–{MAX_CUSTOM_GUIDE_CHARS} 字符的字符串或 null")
+        return value.strip() if value is not None else None
     if key == "dub_target_language":
         if value is not None and (not isinstance(value, str) or value not in SUPPORTED_DUB_LANGUAGES):
             raise ValueError(f"dub_target_language 必须是 {list(SUPPORTED_DUB_LANGUAGES)} 之一或 null,收到 {value!r}")

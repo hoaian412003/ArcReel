@@ -112,6 +112,8 @@ export interface DubLine {
   audio_duration_seconds?: number | null;
   audio_voice?: string | null;
   audio_text?: string | null;
+  /** 语音识别从成片检测到的原台词开始时间（秒）；未检测为空。 */
+  detected_start_seconds?: number | null;
   stale?: boolean;
 }
 
@@ -133,6 +135,8 @@ export interface UnitDubLine {
   source_text: string;
   start_seconds: number;
   start_override: number | null;
+  /** 开始时间的来源：人工填写 / 从成片检测 / 按语速顺序估算。 */
+  start_source: "manual" | "detected" | "estimated";
   duration_seconds: number;
   /** 时长是按语速估算的，尚未合成真实音频。 */
   estimated: boolean;
@@ -376,4 +380,13 @@ export interface ScriptReviewQuarantine {
 /** 当前草稿按模型能力投影后的最终文本与实发图片，图片顺序对应提示词中的图号。 */
 export interface ReferenceUnitPromptPreview extends RenderedPromptPreview {
   references: { type: AssetKind; name: string; path: string }[];
+}
+
+/** 从成片检测开始时间时单个单元的结局。 */
+export interface DubTimingResult {
+  unit_id: string;
+  status: "detected" | "no_speech" | "no_match" | "no_video" | "failed";
+  /** 检测到开始时间的台词条数。 */
+  detected: number;
+  total: number;
 }

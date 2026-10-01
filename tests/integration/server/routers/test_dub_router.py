@@ -10,6 +10,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lib.project.project_manager import ProjectManager
+from lib.project.project_migrations.runner import migrate_project_dir
+from lib.project.project_migrations.v7_to_v8_artifact_manifest import migrate_v7_to_v8
+from lib.speech.asr_alignment import AsrSegment
+from lib.speech.asr_runner import AsrError
 from server.auth import CurrentUserInfo, get_current_user
 from server.error_handlers import register_error_handlers
 from server.routers import dub as dub_router
@@ -72,6 +76,9 @@ def _client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, vieneu_enabled: bool = True, **write_kwargs: Any
 ) -> tuple[TestClient, MagicMock]:
     _write_project(tmp_path / "projects", **write_kwargs)
+    # 写入类端点要求项目 schema 已升级到当前版本
+    migrate_v7_to_v8(tmp_path / "projects" / "demo")
+    migrate_project_dir(tmp_path / "projects" / "demo")
     pm = ProjectManager(tmp_path)
     monkeypatch.setattr(dub_router, "get_project_manager", lambda: pm)
     queue = MagicMock()
@@ -216,3 +223,91 @@ def test_synthesize_is_refused_with_a_clear_message_when_vieneu_is_switched_off(
     assert resp.status_code == 409
     assert "VieNeu" in resp.json()["detail"]
     queue.enqueue_task.assert_not_awaited()
+
+
+def _with_video(tmp_path: Path, unit: dict[str, Any]) -> dict[str, Any]:
+    video = tmp_path / "projects" / "demo" / "reference_videos" / "E1U1.mp4"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"video")
+    return unit
+
+
+def _fake_asr(monkeypatch: pytest.MonkeyPatch, result: Any) -> AsyncMock:
+    fake = AsyncMock(side_effect=result if isinstance(result, Exception) else None, return_value=result)
+    monkeypatch.setattr(dub_router, "transcribe_files", fake)
+    return fake
+
+
+def test_detect_timing_writes_detected_starts_and_the_timeline_uses_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    client, _ = _client(tmp_path, monkeypatch, units=[_with_video(tmp_path, _unit())])
+    video = tmp_path / "projects" / "demo" / "reference_videos" / "E1U1.mp4"
+    fake = _fake_asr(
+        monkeypatch,
+        {
+            video.resolve(): [AsrSegment(1.0, 2.0, "你好"), AsrSegment(5.0, 6.0, "再见")],
+        },
+    )
+
+    resp = client.post("/api/v1/projects/demo/dub/episodes/1/detect-timing", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"] == [{"unit_id": "E1U1", "status": "detected", "detected": 2, "total": 2}]
+    assert fake.await_count == 1
+    lines = client.get("/api/v1/projects/demo/dub/episodes/1/units/E1U1").json()["lines"]
+    assert [line["start_source"] for line in lines] == ["detected", "detected"]
+    assert lines[0]["start_seconds"] == pytest.approx(1.0, abs=0.05)
+    assert lines[1]["start_seconds"] == pytest.approx(5.0, abs=0.05)
+
+
+def test_detect_timing_reports_units_without_a_video_and_does_not_start_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    client, _ = _client(tmp_path, monkeypatch, units=[_unit()])
+    fake = _fake_asr(monkeypatch, {})
+
+    resp = client.post("/api/v1/projects/demo/dub/episodes/1/detect-timing", json={})
+
+    assert resp.json()["results"] == [{"unit_id": "E1U1", "status": "no_video", "detected": 0, "total": 2}]
+    fake.assert_not_awaited()
+
+
+def test_detect_timing_distinguishes_silence_from_speech_that_matches_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    client, _ = _client(tmp_path, monkeypatch, units=[_with_video(tmp_path, _unit())])
+    video = (tmp_path / "projects" / "demo" / "reference_videos" / "E1U1.mp4").resolve()
+
+    _fake_asr(monkeypatch, {video: []})
+    assert (
+        client.post("/api/v1/projects/demo/dub/episodes/1/detect-timing", json={}).json()["results"][0]["status"]
+        == "no_speech"
+    )
+
+    _fake_asr(monkeypatch, {video: [AsrSegment(0.0, 2.0, "something unrelated")]})
+    assert (
+        client.post("/api/v1/projects/demo/dub/episodes/1/detect-timing", json={}).json()["results"][0]["status"]
+        == "no_match"
+    )
+
+
+def test_detect_timing_failure_of_the_recogniser_is_a_clear_503(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    client, _ = _client(tmp_path, monkeypatch, units=[_with_video(tmp_path, _unit())])
+    _fake_asr(monkeypatch, AsrError("model download failed"))
+
+    resp = client.post("/api/v1/projects/demo/dub/episodes/1/detect-timing", json={})
+
+    assert resp.status_code == 503
+    assert "model download failed" in resp.json()["detail"]
+
+
+def test_detect_timing_validates_the_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    client, _ = _client(tmp_path, monkeypatch, units=[_unit()])
+    _fake_asr(monkeypatch, {})
+
+    assert client.post("/api/v1/projects/demo/dub/episodes/1/detect-timing", json={"unit_ids": []}).status_code == 400
+    assert (
+        client.post("/api/v1/projects/demo/dub/episodes/1/detect-timing", json={"unit_ids": ["NOPE"]}).status_code
+        == 404
+    )

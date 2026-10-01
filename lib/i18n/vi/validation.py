@@ -36,6 +36,7 @@ MESSAGES = {
     "val_source_kind_invalid": "source_kind không hợp lệ: '{value}', phải thuộc {allowed}",
     "val_generation_mode_invalid": "generation_mode không hợp lệ: '{value}', phải thuộc {allowed}",
     "val_h3_guide_preset_invalid": "h3_guide_preset không hợp lệ: '{value}', phải thuộc {allowed}",
+    "val_h3_guide_custom_invalid": "h3_guide_custom không hợp lệ: phải là văn bản không rỗng, tối đa {max} ký tự",
     "val_video_prompt_profile_invalid": "video_prompt_profile không hợp lệ: '{value}', phải thuộc {allowed}",
     "val_deprecated_clues": (
         "project.json chứa trường clues đã ngừng dùng; hãy chờ di trú tự động hoặc khởi động lại dịch vụ"

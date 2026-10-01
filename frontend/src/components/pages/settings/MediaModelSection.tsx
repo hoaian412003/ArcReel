@@ -20,6 +20,7 @@ import {
 import { TextTierFields } from "@/components/shared/TextTierFields";
 import { VideoModelSpecBar, videoOptionMetaRenderer } from "@/components/shared/VideoModelSpecBar";
 import { InlineWarning } from "@/components/ui/InlineWarning";
+import { H3GuideEditor } from "@/components/pages/settings/H3GuideEditor";
 import { useAppStore } from "@/stores/app-store";
 import { useCapabilitiesStore } from "@/stores/capabilities-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
@@ -264,6 +265,7 @@ export function MediaModelSection() {
   const renderVideoOptionMeta = videoOptionMetaRenderer({ t, providers, customProviders, endpointToMediaType });
   const currentAudioBackend = draft.default_audio_backend ?? settings.default_audio_backend ?? "";
   const currentGuidePreset = parseH3GuidePreset(draft.h3_guide_preset ?? settings.h3_guide_preset) ?? DEFAULT_H3_GUIDE_PRESET;
+  const currentGuideCustom = draft.h3_guide_custom ?? settings.h3_guide_custom ?? "";
   const currentNarrationVoice = draft.narration_voice ?? settings.narration_voice ?? "";
   const currentNarrationSpeed =
     "narration_speed" in draft ? draft.narration_speed : settings.narration_speed;
@@ -555,6 +557,20 @@ export function MediaModelSection() {
           ))}
         </select>
         <p className="mt-1 text-[11px] leading-relaxed text-text-4">{t(`h3_guide_preset_${currentGuidePreset}_desc`)}</p>
+        <div className="mt-4">
+          <label
+            htmlFor="h3-guide-custom-global"
+            className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4"
+          >
+            {t("h3_guide_custom_label")}
+          </label>
+          <H3GuideEditor
+            id="h3-guide-custom-global"
+            preset={currentGuidePreset}
+            value={currentGuideCustom}
+            onChange={(next) => setDraft((prev) => ({ ...prev, h3_guide_custom: next }))}
+          />
+        </div>
       </SectionCard>
 
       <SectionCard

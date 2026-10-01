@@ -1,13 +1,15 @@
 """越南语配音台词在 unit 内的时间排布。
 
-没有人工覆盖时，台词按顺序首尾相接（相邻之间留一个固定间隙）；每行时长取已合成音频的真实
-时长，尚未合成时按 ``vi`` 语速估算。人工覆盖的开始时间优先，覆盖之后的行从该行结束处继续。
+开始时间的优先级：人工覆盖 > 从成片检测到的时间（不早于前一条配音的结束）> 按顺序首尾相接（相邻之间
+留一个固定间隙）。每行时长取已合成音频的真实时长，尚未合成时按 ``vi`` 语速估算；任何一行之后的行都
+从该行结束处继续。
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from lib.speech.speech_rate import estimate_spoken_seconds
 
@@ -15,6 +17,9 @@ from lib.speech.speech_rate import estimate_spoken_seconds
 DUB_LINE_GAP_SECONDS = 0.2
 
 DUB_LANGUAGE = "vi"
+
+
+StartSource = Literal["manual", "detected", "estimated"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +31,8 @@ class DubTimingInput:
     start_override: float | None = None
     #: 已合成音频的真实时长（秒）；None 即按语速估算。
     audio_duration: float | None = None
+    #: 从成片里检测到的原台词开始时间（秒）；无人工覆盖时优先于顺序排布。
+    detected_start: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +44,8 @@ class DubSlot:
     duration_seconds: float
     #: 时长是估算值而非已合成音频的真实时长。
     estimated: bool
+    #: 开始时间的来源：人工覆盖 / 从成片检测 / 顺序排布估算。
+    source: StartSource = "estimated"
 
     @property
     def end_seconds(self) -> float:
@@ -55,8 +64,16 @@ def schedule_dub_lines(lines: Sequence[DubTimingInput], *, speech_rate_override:
             if estimated
             else float(line.audio_duration or 0.0)
         )
-        start = line.start_override if line.start_override is not None else cursor
-        slots.append(DubSlot(index=index, start_seconds=start, duration_seconds=duration, estimated=estimated))
+        if line.start_override is not None:
+            start, source = line.start_override, "manual"
+        elif line.detected_start is not None:
+            # 检测到的时间不让相邻两条配音重叠：前一条还没念完就顺延到它结束之后
+            start, source = max(line.detected_start, cursor), "detected"
+        else:
+            start, source = cursor, "estimated"
+        slots.append(
+            DubSlot(index=index, start_seconds=start, duration_seconds=duration, estimated=estimated, source=source)
+        )
         cursor = start + duration + DUB_LINE_GAP_SECONDS
     return slots
 
@@ -74,6 +91,7 @@ __all__ = [
     "DUB_LINE_GAP_SECONDS",
     "DubSlot",
     "DubTimingInput",
+    "StartSource",
     "dub_overflow_seconds",
     "schedule_dub_lines",
 ]

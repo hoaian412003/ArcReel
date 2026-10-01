@@ -26,6 +26,7 @@ slots:
   units_content: 已确认视频单元的渲染文本（由代码投影：序号 + 时长 + 正文）
   episode: 当前集号
   h3_guide_preset: H3 写作指南预设（standard / dialogue / action），决定 detailed_description 的细节取向与篇幅
+  h3_guide_custom: 用户自定义的写作指南正文；非空时替换预设的内置指南，缺值传 null
   max_refs: 单个视频单元的参考图上限；不限时传 null
   instructions: 附加指令正文；缺值传 null
 protected: false
@@ -126,7 +127,11 @@ protected: false
   - `text` 里 `@[角色]{台词}` 的每一句都必须逐字放进某个 `<d>`，条数一致。`text` 里的画外音 `{…}`
     **不要**写进 `<d>`——旁白由后期配音承担，写进去视频模型会念出来。
   - 画面上真实可见的文字放进英文双引号，保留原文。
+{% if h3_guide_custom %}
+{{ h3_guide_custom }}
+{% else %}
 {{ variant("shared/h3_guide", h3_guide_preset) }}
+{% endif %}
 - `overall_soundscape`：1–4 句英文，概括全片的环境音、动作物理声和非言语人声。台词与和某一镜同步的声音留在
   `detailed_description`，不在这里重复。
 - `non_diegetic_music`：只有观众听得到的背景配乐，1–3 句英文，写乐器、速度、节奏与力度变化，不写抽象情绪词。

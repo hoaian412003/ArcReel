@@ -145,6 +145,22 @@ class TestProjectsRouter:
             assert resp.status_code == 200
             assert "h3_guide_preset" not in fake_pm.project_data["ready"]
 
+    def test_update_project_persists_clears_and_limits_h3_guide_custom(self, tmp_path, monkeypatch):
+        fake_pm = _FakePM(tmp_path)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"h3_guide_custom": "  - rule  "})
+            assert resp.status_code == 200
+            assert fake_pm.project_data["ready"]["h3_guide_custom"] == "- rule"
+
+            resp = client.patch("/api/v1/projects/ready", json={"h3_guide_custom": "x" * 4001})
+            assert resp.status_code == 422
+            assert fake_pm.project_data["ready"]["h3_guide_custom"] == "- rule"
+
+            resp = client.patch("/api/v1/projects/ready", json={"h3_guide_custom": ""})
+            assert resp.status_code == 200
+            assert "h3_guide_custom" not in fake_pm.project_data["ready"]
+
     def test_update_project_rejects_unknown_h3_guide_preset(self, tmp_path, monkeypatch):
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)

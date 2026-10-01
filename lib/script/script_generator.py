@@ -863,8 +863,9 @@ class ScriptGenerator:
         if self.content_mode == "ad":
             return self._build_ad_reference_prompt_authoring_prompt(episode, targets, instructions)
         facts = await self._fetch_video_request_facts()
+        guide_preset, guide_custom = await self._resolve_h3_guide()
         return self._build_reference_prompt_authoring_prompt(
-            episode, targets, facts, instructions, h3_guide_preset=await self._resolve_h3_guide_preset()
+            episode, targets, facts, instructions, h3_guide_preset=guide_preset, h3_guide_custom=guide_custom
         )
 
     @property
@@ -1324,12 +1325,15 @@ class ScriptGenerator:
                     raise enriched[0] from exc
                 raise DraftViolations(enriched) from exc
 
-    async def _resolve_h3_guide_preset(self) -> str:
-        """H3 提示词档下的写作指南预设；其它提示词档不读全局设置。"""
+    async def _resolve_h3_guide(self) -> tuple[str, str | None]:
+        """H3 提示词档下的写作指南（预设, 自定义正文）；其它提示词档不读全局设置。"""
         if not is_h3_ref2va(self.project_json):
-            return DEFAULT_H3_GUIDE_PRESET
+            return DEFAULT_H3_GUIDE_PRESET, None
         resolver = self.config_resolver or ConfigResolver(async_session_factory)
-        return await resolver.resolve_h3_guide_preset(self.project_json)
+        return (
+            await resolver.resolve_h3_guide_preset(self.project_json),
+            await resolver.resolve_h3_guide_custom(self.project_json),
+        )
 
     def _build_reference_prompt_authoring_prompt(
         self,
@@ -1339,6 +1343,7 @@ class ScriptGenerator:
         instructions: str | None,
         *,
         h3_guide_preset: str,
+        h3_guide_custom: str | None,
     ) -> str:
         if is_h3_ref2va(self.project_json):
             return build_reference_video_h3_ref2va_prompt(
@@ -1354,6 +1359,7 @@ class ScriptGenerator:
                 episode=episode,
                 audio_reference_names=self._audio_reference_names(),
                 h3_guide_preset=h3_guide_preset,
+                h3_guide_custom=h3_guide_custom,
                 target_language=self.project_json.get("source_language") or "中文",
                 instructions=instructions,
             )
@@ -1412,10 +1418,11 @@ class ScriptGenerator:
         logger.info("正在为第 %d 集编写提示词（video_units，%d/%d 个单元）...", episode, len(units), len(targets.items))
         if keep_text:
             instructions = "\n\n".join(part for part in (instructions, KEEP_TEXT_INSTRUCTION) if part)
+        guide_preset, guide_custom = await self._resolve_h3_guide()
         result = await self._generate_text(
             TextGenerationRequest(
                 prompt=self._build_reference_prompt_authoring_prompt(
-                    episode, targets, facts, instructions, h3_guide_preset=await self._resolve_h3_guide_preset()
+                    episode, targets, facts, instructions, h3_guide_preset=guide_preset, h3_guide_custom=guide_custom
                 ),
                 response_schema=(
                     ReferencePromptAuthoringH3FlatScript

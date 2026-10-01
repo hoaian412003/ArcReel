@@ -1,0 +1,13 @@
+[project]
+name = "arcreel-asr"
+version = "0.1.0"
+description = "One-shot speech recognition helper: prints phrase-level timestamps for media files as JSON."
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "faster-whisper>=1.1.0",
+    # faster-whisper 仍以 metadata_errors 参数调用 av.open，av 17 起不再接受
+    "av>=14,<17",
+]
+
+[tool.uv]
+package = false

@@ -158,6 +158,7 @@ class TestGetSystemConfig:
             "default_audio_backend",
             "narration_voice",
             "h3_guide_preset",
+            "h3_guide_custom",
             "narration_speed",
             "market_github_proxy_prefix",
         }
@@ -486,6 +487,22 @@ class TestPatchSystemConfig:
             assert res.json()["settings"]["h3_guide_preset"] == "dialogue"
             res = client.patch("/api/v1/system/config", json={"h3_guide_preset": ""})
             assert res.json()["settings"]["h3_guide_preset"] == "standard"
+
+    def test_patch_sets_and_clears_h3_guide_custom(self):
+        mock_svc = _make_mock_svc()
+        with TestClient(self._make_patch_app(mock_svc)) as client:
+            res = client.patch("/api/v1/system/config", json={"h3_guide_custom": "  - my rule  "})
+            assert res.status_code == 200
+            assert res.json()["settings"]["h3_guide_custom"] == "- my rule"
+            res = client.patch("/api/v1/system/config", json={"h3_guide_custom": ""})
+            assert res.json()["settings"]["h3_guide_custom"] == ""
+
+    def test_patch_rejects_overlong_h3_guide_custom(self):
+        mock_svc = _make_mock_svc()
+        with TestClient(self._make_patch_app(mock_svc)) as client:
+            res = client.patch("/api/v1/system/config", json={"h3_guide_custom": "x" * 4001})
+        assert res.status_code == 422
+        mock_svc.set_setting.assert_not_called()
 
     def test_patch_rejects_unknown_h3_guide_preset(self):
         mock_svc = _make_mock_svc()

@@ -48,6 +48,20 @@ class TestProjectsRouter:
         assert resp.status_code == 200
         assert fake_summaries.currencies == ["verified"]
 
+    def test_get_project_config_view_skips_summary_and_scripts(self, tmp_path, monkeypatch):
+        """配置视图只返回 project.json 配置：不算项目摘要、不读剧本、不扫指纹。"""
+        fake_summaries = _FakeSummaries()
+        client = build_projects_client(monkeypatch, _FakePM(tmp_path), fake_summaries)
+        with client:
+            resp = client.get("/api/v1/projects/ready?view=config")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert fake_summaries.currencies == []
+        assert body["scripts"] == {}
+        assert body["asset_fingerprints"] == {}
+        assert "status" not in body["project"]
+
     def test_list_projects_status_comes_from_the_project_summary(self, tmp_path, monkeypatch):
         """列表页的阶段与计数一律来自项目摘要：四值阶段在，五值 current_phase 不在。"""
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))

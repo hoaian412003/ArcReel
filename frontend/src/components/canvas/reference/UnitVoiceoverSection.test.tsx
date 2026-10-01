@@ -11,7 +11,7 @@ function dub(overrides: Partial<UnitDub> = {}): UnitDub {
     unit_id: "E1U1",
     duration_seconds: 8,
     overflow_seconds: 0,
-    video_path: null,
+    video_path: "reference_videos/E1U1.mp4",
     original_volume: 0.5,
     lines: [
       {
@@ -22,6 +22,7 @@ function dub(overrides: Partial<UnitDub> = {}): UnitDub {
         source_text: "你好",
         start_seconds: 0,
         start_override: null,
+        start_source: "detected",
         duration_seconds: 1.5,
         estimated: false,
         audio_path: "audio/a0.wav",
@@ -35,6 +36,7 @@ function dub(overrides: Partial<UnitDub> = {}): UnitDub {
         source_text: "再见",
         start_seconds: 1.7,
         start_override: null,
+        start_source: "estimated",
         duration_seconds: 1,
         estimated: true,
         audio_path: null,
@@ -104,6 +106,39 @@ describe("UnitVoiceoverSection", () => {
 
     await waitFor(() => expect(patch).toHaveBeenCalled());
     expect(patch.mock.calls[0][3].dub_lines?.[1].start_seconds).toBeNull();
+  });
+
+  it("labels where each start time came from", async () => {
+    vi.spyOn(API, "getUnitDub").mockResolvedValue(dub());
+    mount();
+
+    await screen.findByDisplayValue("Xin chào");
+    expect(screen.getByText(/^(from video|成片检测)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^(estimated|估算)$/)).toBeInTheDocument();
+  });
+
+  it("detects start times from the video for this unit and refreshes the table", async () => {
+    const getDub = vi.spyOn(API, "getUnitDub").mockResolvedValueOnce(dub());
+    const detect = vi.spyOn(API, "detectDubTiming").mockResolvedValue({
+      results: [{ unit_id: "E1U1", status: "detected", detected: 2, total: 2 }],
+    });
+    const after = dub();
+    after.lines[1] = { ...after.lines[1], start_seconds: 5.2, start_source: "detected" };
+    getDub.mockResolvedValue(after);
+    mount();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Detect start times|检测开始时间/ }));
+
+    await waitFor(() => expect(detect).toHaveBeenCalledWith("proj", 1, ["E1U1"]));
+    await waitFor(() => expect(screen.getByLabelText(/Start time of line 2|第 2 行开始时间/)).toHaveValue(5.2));
+  });
+
+  it("offers detection only when the unit has a video", async () => {
+    vi.spyOn(API, "getUnitDub").mockResolvedValue(dub({ video_path: null }));
+    mount();
+
+    await screen.findByDisplayValue("Xin chào");
+    expect(screen.queryByRole("button", { name: /Detect start times|检测开始时间/ })).not.toBeInTheDocument();
   });
 
   it("warns when the voice-over runs past the unit", async () => {

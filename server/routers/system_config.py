@@ -42,9 +42,12 @@ from lib.i18n import DEFAULT_LOCALE, translate_or
 from lib.infra.api_errors import UnprocessableError
 from lib.infra.httpx_shared import get_http_client
 from lib.market.sources import PROXY_PREFIX_SETTING
+from lib.prompts.h3_guide_preset import CUSTOM_SETTING_KEY as H3_GUIDE_CUSTOM_SETTING
 from lib.prompts.h3_guide_preset import (
     DEFAULT_H3_GUIDE_PRESET,
+    MAX_CUSTOM_GUIDE_CHARS,
     VALID_H3_GUIDE_PRESETS,
+    parse_h3_guide_custom,
     parse_h3_guide_preset,
 )
 from lib.prompts.h3_guide_preset import SETTING_KEY as H3_GUIDE_PRESET_SETTING
@@ -310,6 +313,8 @@ class SystemConfigPatchRequest(BaseModel):
     narration_voice: str | None = None
     # H3 写作指南预设（全局默认，项目可覆盖）；空串 = 清除回落缺省预设
     h3_guide_preset: str | None = None
+    # H3 自定义写作指南正文；空串 = 清除、回到所选预设的内置指南
+    h3_guide_custom: str | None = None
     narration_speed: float | None = None
     # 市场源 GitHub raw 代理前缀：空串 = 直连
     market_github_proxy_prefix: str | None = None
@@ -392,6 +397,7 @@ async def get_system_config(
         "default_audio_backend": all_s.get("default_audio_backend", ""),
         "narration_voice": all_s.get("narration_voice", ""),
         "h3_guide_preset": parse_h3_guide_preset(all_s.get("h3_guide_preset")) or DEFAULT_H3_GUIDE_PRESET,
+        "h3_guide_custom": parse_h3_guide_custom(all_s.get("h3_guide_custom")) or "",
         "narration_speed": narration_speed,
         "video_generate_audio": video_generate_audio,
         "video_poll_timeout_seconds": ConfigService.parse_video_poll_timeout_seconds(
@@ -546,6 +552,13 @@ async def patch_system_config(
         if preset and preset not in VALID_H3_GUIDE_PRESETS:
             raise UnprocessableError("h3_guide_preset_invalid")
         await svc.set_setting(H3_GUIDE_PRESET_SETTING, preset)
+
+    # H3 自定义写作指南正文：整段进入提示词，限长；空串 = 清除
+    if "h3_guide_custom" in patch:
+        custom = str(patch["h3_guide_custom"] or "").strip()
+        if len(custom) > MAX_CUSTOM_GUIDE_CHARS:
+            raise UnprocessableError("h3_guide_custom_too_long")
+        await svc.set_setting(H3_GUIDE_CUSTOM_SETTING, custom)
 
     # 市场源 GitHub raw 代理前缀：只拼在 raw.githubusercontent.com 地址前，须是带主机名、不含空白与控制字符、不含用户名与密码的
     # https 地址（该值经 GET 原样回显，不当作凭证存放），且不带查询串与 fragment（raw 地址按路径拼在前缀之后）；空串 = 清除

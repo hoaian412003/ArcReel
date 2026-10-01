@@ -860,12 +860,16 @@ class DubLine(BaseModel):
     audio_duration_seconds: SkipJsonSchema[float | None] = Field(default=None, ge=0, description="音频真实时长（秒）")
     audio_voice: SkipJsonSchema[str | None] = Field(default=None, description="合成时使用的音色 id")
     audio_text: SkipJsonSchema[str | None] = Field(default=None, description="合成时使用的越南语台词")
+    # 语音识别从成片里检测到的这条台词的开始时间（相对 unit 起点，秒）；人工覆盖 ``start_seconds`` 优先。
+    detected_start_seconds: SkipJsonSchema[float | None] = Field(
+        default=None, ge=0, description="从成片检测到的开始时间（秒）"
+    )
 
     @model_serializer(mode="wrap")
     def _omit_unset_audio(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """尚未合成音频的配音行不落盘四个 ``audio_*`` 键，规划草稿与存量剧本的形状保持不变。"""
+        """尚未合成音频 / 尚未检测开始时间的配音行不落盘对应的 ``audio_*`` 与 ``detected_start_seconds`` 键，规划草稿与存量剧本的形状保持不变。"""
         data = handler(self)
-        for key in ("audio_path", "audio_duration_seconds", "audio_voice", "audio_text"):
+        for key in ("audio_path", "audio_duration_seconds", "audio_voice", "audio_text", "detected_start_seconds"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data

@@ -72,6 +72,7 @@ import type {
   ReferenceUnitCapabilityMap,
   ReferenceVideoUnit,
   DubLinePatch,
+  DubTimingResult,
   UnitDub,
   VieneuSettings,
   VieneuStatus,
@@ -420,13 +421,14 @@ class API {
 
   static async getProject(
     name: string,
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; view?: "full" | "config" } = {}
   ): Promise<{
     project: ProjectData;
     scripts: Record<string, EpisodeScript>;
     asset_fingerprints?: Record<string, number>;
   }> {
-    return this.request(`/projects/${encodeURIComponent(name)}`, { signal: options.signal });
+    const query = options.view === "config" ? "?view=config" : "";
+    return this.request(`/projects/${encodeURIComponent(name)}${query}`, { signal: options.signal });
   }
 
   static async updateProject(
@@ -3113,6 +3115,18 @@ class API {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/dub/episodes/${episode}/synthesize`,
       { method: "POST", body: JSON.stringify(payload) },
+    );
+  }
+
+  /** 用语音识别从成片读出每条原台词的实际开始时间；整批单元共用一次模型加载，可能耗时数十秒。 */
+  static async detectDubTiming(
+    projectName: string,
+    episode: number,
+    unitIds?: string[],
+  ): Promise<{ results: DubTimingResult[] }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/dub/episodes/${episode}/detect-timing`,
+      { method: "POST", body: JSON.stringify(unitIds ? { unit_ids: unitIds } : {}) },
     );
   }
 

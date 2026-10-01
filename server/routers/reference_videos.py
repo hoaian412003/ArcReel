@@ -482,6 +482,9 @@ async def patch_unit(
         for line in req.dub_lines:
             merged = line.model_dump(exclude_none=False)
             previous = existing_by_index.get(line.index)
+            # 检测到的开始时间描述的是原台词在成片里的位置，与越南语台词怎么改无关，编辑时一律保留
+            if previous:
+                merged["detected_start_seconds"] = previous.get("detected_start_seconds")
             # 台词没改就保留已合成音频的登记；台词一改，音频即过期，登记随之丢弃
             if previous and previous.get("audio_text") == line.text_vi:
                 for key in ("audio_path", "audio_duration_seconds", "audio_voice", "audio_text"):

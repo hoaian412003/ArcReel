@@ -43,8 +43,9 @@ from lib.project.asset_types import (
 )
 from lib.project.project_manager import VALID_GENERATION_MODES as _VALID_GENERATION_MODES
 from lib.project.project_manager import VALID_SOURCE_KINDS as _VALID_SOURCE_KINDS
+from lib.prompts.h3_guide_preset import CUSTOM_PROJECT_FIELD as H3_GUIDE_CUSTOM_FIELD
+from lib.prompts.h3_guide_preset import MAX_CUSTOM_GUIDE_CHARS, VALID_H3_GUIDE_PRESETS
 from lib.prompts.h3_guide_preset import PROJECT_FIELD as H3_GUIDE_PRESET_FIELD
-from lib.prompts.h3_guide_preset import VALID_H3_GUIDE_PRESETS
 from lib.prompts.video_prompt_profile import PROJECT_FIELD as VIDEO_PROMPT_PROFILE_FIELD
 from lib.prompts.video_prompt_profile import VALID_VIDEO_PROMPT_PROFILES
 from lib.references.reference_catalog import ReferenceCatalog, build_reference_catalog
@@ -442,6 +443,12 @@ class DataValidator:
                     allowed=_allowed(VALID_H3_GUIDE_PRESETS),
                 )
             )
+
+        guide_custom = project.get(H3_GUIDE_CUSTOM_FIELD)
+        if guide_custom is not None and (
+            not isinstance(guide_custom, str) or not guide_custom.strip() or len(guide_custom) > MAX_CUSTOM_GUIDE_CHARS
+        ):
+            errors.append(_m("val_h3_guide_custom_invalid", max=MAX_CUSTOM_GUIDE_CHARS))
 
         # 配音设置：可选字段，缺省即不配音 / 画外音男声；出现即须是已知取值。
         for dub_field, allowed_values in (

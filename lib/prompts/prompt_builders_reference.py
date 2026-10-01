@@ -298,6 +298,7 @@ def build_reference_video_h3_ref2va_prompt(
     episode: int,
     audio_reference_names: list[str],
     h3_guide_preset: str = DEFAULT_H3_GUIDE_PRESET,
+    h3_guide_custom: str | None = None,
     aspect_ratio: str = "9:16",
     target_language: str = "中文",
     instructions: str | None = None,
@@ -306,7 +307,7 @@ def build_reference_video_h3_ref2va_prompt(
 
     与 :func:`build_reference_video_prompt` 同一套输入，产出多一份六段英文载荷；
     ``audio_reference_names`` 是已挂参考音频、允许用 ``<Audio @[名称]>`` 引用的角色名，为空时模版不使用音频标签；
-    ``h3_guide_preset`` 选定 ``detailed_description`` 的写作指南预设。
+    ``h3_guide_preset`` 选定 ``detailed_description`` 的写作指南预设；``h3_guide_custom`` 非空时整段替换预设的内置指南。
     """
     return builtin_templates.render(
         "text/reference_video_prompt_authoring_h3_ref2va",
@@ -319,6 +320,7 @@ def build_reference_video_h3_ref2va_prompt(
         **_candidate_names(characters, scenes, props),
         audio_reference_names=audio_reference_names,
         h3_guide_preset=h3_guide_preset,
+        h3_guide_custom=h3_guide_custom,
         units_content=render_reference_units_for_prompt_authoring(script_plan_units),
         episode=episode,
         max_refs=max_refs,

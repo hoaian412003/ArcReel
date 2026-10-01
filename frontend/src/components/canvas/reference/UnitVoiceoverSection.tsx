@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Download, Film, Loader2, Play, Save } from "lucide-react";
+import { AlertTriangle, AudioWaveform, Download, Film, Loader2, Play, Save } from "lucide-react";
 import { API } from "@/api";
+import { notifyDubTiming } from "@/actions/dub";
 import { useAppStore } from "@/stores/app-store";
 import { useReferenceVideoStore } from "@/stores/reference-video-store";
 import { errMsg } from "@/utils/async";
@@ -48,6 +49,7 @@ export function UnitVoiceoverSection({ projectName, episode, unitId, refreshKey 
   const [drafts, setDrafts] = useState<Record<number, LineDraft>>({});
   const [saving, setSaving] = useState(false);
   const [rendering, setRendering] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [rendered, setRendered] = useState<{ path: string; at: number } | null>(null);
   const lineAudioRef = useRef<HTMLAudioElement>(null);
 
@@ -98,6 +100,20 @@ export function UnitVoiceoverSection({ projectName, episode, unitId, refreshKey 
       useAppStore.getState().pushToast(t("dub_save_failed", { error: errMsg(e) }), "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDetect = async () => {
+    if (detecting) return;
+    setDetecting(true);
+    try {
+      const { results } = await API.detectDubTiming(projectName, episode, [unitId]);
+      notifyDubTiming(results);
+      setDub(await API.getUnitDub(projectName, episode, unitId));
+    } catch (e: unknown) {
+      useAppStore.getState().pushToast(t("dub_detect_failed", { error: errMsg(e) }), "error");
+    } finally {
+      setDetecting(false);
     }
   };
 
@@ -154,6 +170,22 @@ export function UnitVoiceoverSection({ projectName, episode, unitId, refreshKey 
       <div className="flex items-center gap-1.5">
         <h3 className="text-xs font-semibold text-[var(--color-text-2)]">{t("dub_section_title")}</h3>
         <span className="flex-1" />
+        {lines.length > 0 && dub.video_path && (
+          <button
+            type="button"
+            onClick={() => void handleDetect()}
+            disabled={detecting}
+            title={t("dub_detect_hint")}
+            className="focus-ring inline-flex items-center gap-1 rounded-md border border-[var(--color-hairline)] px-2 py-0.5 text-[11px] text-[var(--color-text-2)] hover:text-[var(--color-text)] disabled:opacity-60"
+          >
+            {detecting ? (
+              <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            ) : (
+              <AudioWaveform className="h-3 w-3" aria-hidden="true" />
+            )}
+            {detecting ? t("dub_detect_running") : t("dub_detect")}
+          </button>
+        )}
         {dirty && (
           <button
             type="button"
@@ -199,11 +231,14 @@ export function UnitVoiceoverSection({ projectName, episode, unitId, refreshKey 
                       onChange={(e) => updateDraft(line.index, { start: e.target.value })}
                       aria-label={t("dub_start_label", { index: line.index + 1 })}
                       className={`focus-ring w-full rounded border border-[var(--color-hairline-soft)] bg-transparent px-1 py-0.5 font-mono tabular-nums ${
-                        line.start_override === null && draft?.start === undefined
+                        line.start_source === "estimated" && draft?.start === undefined
                           ? "text-[var(--color-text-3)]"
                           : "text-[var(--color-text)]"
                       }`}
                     />
+                    <span className="mt-0.5 block text-[10px] text-[var(--color-text-4)]">
+                      {t(`dub_start_source_${draft?.start !== undefined ? "manual" : line.start_source}`)}
+                    </span>
                   </td>
                   <td className="pr-1.5 pt-0.5">
                     <select

@@ -124,3 +124,7 @@ mutants/
 
 # Local third-party checkouts (e.g. managed VieNeu-TTS server)
 third_party/
+
+# Local ASR helper: virtualenv and downloaded models
+tools/asr/.venv/
+tools/asr/models/

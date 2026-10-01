@@ -58,8 +58,9 @@ from lib.project.asset_fingerprints import compute_asset_fingerprints
 from lib.project.asset_types import asset_name_comparison_key
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import EmptySourceError, EpisodeScriptReboundError, SourceKind, get_project_manager
+from lib.prompts.h3_guide_preset import CUSTOM_PROJECT_FIELD as H3_GUIDE_CUSTOM_FIELD
+from lib.prompts.h3_guide_preset import MAX_CUSTOM_GUIDE_CHARS, VALID_H3_GUIDE_PRESETS
 from lib.prompts.h3_guide_preset import PROJECT_FIELD as H3_GUIDE_PRESET_FIELD
-from lib.prompts.h3_guide_preset import VALID_H3_GUIDE_PRESETS
 from lib.prompts.style_templates import is_known_template, resolve_template_prompt
 from lib.prompts.video_prompt_profile import (
     DEFAULT_VIDEO_PROMPT_PROFILE,
@@ -310,6 +311,8 @@ class UpdateProjectRequest(BaseModel):
     video_prompt_profile: str | None = None
     # H3 写作指南预设：null / 空串 = 清除、继承全局设置
     h3_guide_preset: str | None = None
+    # H3 自定义写作指南正文：null / 空串 = 清除、继承全局设置
+    h3_guide_custom: str | None = None
     # 旁白配音（TTS）项目级覆盖：音频后端 / 音色 / 语速；留空 = 跟随全局默认
     audio_backend: str | None = None
     narration_voice: str | None = None
@@ -862,8 +865,13 @@ async def get_project(
     name: str,
     _t: Translator,
     summaries: WorkflowStateServiceDep,
+    view: Annotated[Literal["full", "config"], Query()] = "full",
 ):
-    """获取项目详情（含实时计算字段）"""
+    """获取项目详情（含实时计算字段）。
+
+    ``view=config`` 只返回 project.json 里的配置：不算项目摘要、不读剧本、不扫媒体指纹，
+    给只关心配置字段的页面（项目设置）用。
+    """
     try:
 
         def _sync():
@@ -872,6 +880,9 @@ async def get_project(
                 raise HTTPException(status_code=404, detail=_t("project_not_found", name=name))
 
             project = manager.load_project(name)
+
+            if view == "config":
+                return {"project": project, "scripts": {}, "asset_fingerprints": {}}
 
             # 阶段、产物计数与每集明细一律来自项目摘要投影（读时计算，不写入 JSON）
             summary = summaries.get_project_summary(name)
@@ -1020,6 +1031,14 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                         project[H3_GUIDE_PRESET_FIELD] = preset
                     else:
                         raise HTTPException(status_code=422, detail=_t("h3_guide_preset_invalid"))
+                if "h3_guide_custom" in req.model_fields_set:
+                    custom = (req.h3_guide_custom or "").strip()
+                    if not custom:
+                        project.pop(H3_GUIDE_CUSTOM_FIELD, None)
+                    elif len(custom) <= MAX_CUSTOM_GUIDE_CHARS:
+                        project[H3_GUIDE_CUSTOM_FIELD] = custom
+                    else:
+                        raise HTTPException(status_code=422, detail=_t("h3_guide_custom_too_long"))
                 # 旁白音色：照供应商文档填的字符串 id；空串 = 清除回落全局默认
                 if "narration_voice" in req.model_fields_set:
                     voice = (req.narration_voice or "").strip()
