@@ -115,6 +115,10 @@ MESSAGES = {
     "val_unit_id_duplicate": "{prefix}: unit_id trùng lặp '{value}'",
     "val_video_units_missing": "Kịch bản reference_video thiếu mảng video_units hoặc mảng rỗng",
     "val_unit_duration_range": "{prefix}: duration_seconds phải là số nguyên trong khoảng {low}-{high}",
+    "val_dub_setting_invalid": "{field} không hợp lệ: '{value}', phải thuộc {allowed}",
+    "val_dub_lines_must_be_array": "{prefix}: dub_lines phải là mảng",
+    "val_dub_line_invalid": "{prefix}: dub_lines[{index}] không hợp lệ; phải là đối tượng có index nằm trong phạm vi lời thoại của unit, gender là male hoặc female và text_vi là chuỗi không rỗng",
+    "val_dub_speech_overflow": "{prefix}: lời lồng tiếng tiếng Việt kéo dài khoảng {spoken:.1f}s, dài hơn unit {duration}s (chỉ cảnh báo, không chặn lưu)",
     # ---- khung xương và chế độ tạo video ----
     "val_skeleton_noun_segments": "phân cảnh",
     "val_skeleton_noun_scenes": "cảnh",

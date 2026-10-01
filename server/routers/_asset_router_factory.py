@@ -76,6 +76,10 @@ def _is_string_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+#: 角色配音性别的合法取值；空串表示未登记。
+_VALID_GENDER_VALUES = ("", "male", "female")
+
+
 def _not_a_string(field: str) -> UnprocessableError:
     return UnprocessableError("asset_field_must_be_string").with_diagnostic(f"field '{field}' must be a string")
 
@@ -175,6 +179,10 @@ def build_asset_router(
                 extras.pop(field, None)
             elif not isinstance(value, str):
                 raise _not_a_string(field)
+            elif field == "gender" and value not in _VALID_GENDER_VALUES:
+                raise UnprocessableError("asset_field_invalid_value").with_diagnostic(
+                    f"field '{field}' has an invalid value"
+                )
             elif field == "voice_notice_dismissed_at":
                 # 新建角色尚无 voice_updated_at，PATCH 侧「必须等于当前 voice_updated_at」的
                 # 校验在此处恒不成立（值不存在）；直接拒绝创建时携带该字段，防止绕过
@@ -246,6 +254,9 @@ def build_asset_router(
                             # 回填角色自己的 voice_updated_at；放行任意字符串会让客户端写入
                             # 远未来时间戳，永久压制存量过渡横幅。
                             if field == "voice_notice_dismissed_at" and req[field] != entry.get("voice_updated_at"):
+                                raise _InvalidFieldValue(field)
+                            # gender 只收 male / female，空串表示清除登记。
+                            if field == "gender" and req[field] not in _VALID_GENDER_VALUES:
                                 raise _InvalidFieldValue(field)
                             # reference_audio 经通用 PATCH 修改时必须同步刷新 voice_updated_at：
                             # 该字段仍在此处的可写集合内，若不补戳，经这条路径改声音会让

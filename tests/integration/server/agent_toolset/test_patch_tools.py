@@ -1404,6 +1404,32 @@ class TestPatchProjectSettings:
         assert ctx.pm.load_project("demo")["characters"]["李白"]["description"] == "白衣剑客"
 
 
+class TestPatchProjectDubSettings:
+    """dub_target_language / narrator_gender 经 settings 白名单写入、清除与校验。"""
+
+    async def test_set_and_clear_dub_settings(self, ctx: ToolHarness) -> None:
+        out = await run_declared_tool(
+            PATCH_PROJECT, ctx, {"settings": {"dub_target_language": "vi", "narrator_gender": "female"}}
+        )
+        assert out.problem is None
+        project = ctx.pm.load_project("demo")
+        assert (project["dub_target_language"], project["narrator_gender"]) == ("vi", "female")
+
+        out = await run_declared_tool(
+            PATCH_PROJECT, ctx, {"settings": {"dub_target_language": None, "narrator_gender": None}}
+        )
+        assert out.problem is None
+        project = ctx.pm.load_project("demo")
+        assert "dub_target_language" not in project
+        assert "narrator_gender" not in project
+
+    @pytest.mark.parametrize(("key", "bad"), [("dub_target_language", "fr"), ("narrator_gender", "robot")])
+    async def test_invalid_dub_setting_rejected(self, ctx: ToolHarness, key: str, bad: Any) -> None:
+        out = await run_declared_tool(PATCH_PROJECT, ctx, {"settings": {key: bad}})
+        assert out.problem is not None
+        assert key not in ctx.pm.load_project("demo")
+
+
 class TestPatchProjectNarrationSettings:
     """narration_voice / narration_speed 经 settings 白名单写入/清除/校验（项目级旁白覆盖）。"""
 

@@ -141,6 +141,29 @@ class TestProjectsRouter:
             assert resp.status_code == 422
             assert "character_voice_binding" not in fake_pm.project_data["ready"]
 
+    def test_update_project_persists_and_clears_dub_settings(self, tmp_path, monkeypatch):
+        """PATCH 配音设置：dub_target_language / narrator_gender 合法枚举写入，null 或空串清除，非法取值 422。"""
+        fake_pm = _FakePM(tmp_path)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch(
+                "/api/v1/projects/ready", json={"dub_target_language": "vi", "narrator_gender": "female"}
+            )
+            assert resp.status_code == 200
+            assert fake_pm.project_data["ready"]["dub_target_language"] == "vi"
+            assert fake_pm.project_data["ready"]["narrator_gender"] == "female"
+
+            resp = client.patch("/api/v1/projects/ready", json={"dub_target_language": "fr"})
+            assert resp.status_code == 422
+            resp = client.patch("/api/v1/projects/ready", json={"narrator_gender": "robot"})
+            assert resp.status_code == 422
+            assert fake_pm.project_data["ready"]["dub_target_language"] == "vi"
+
+            resp = client.patch("/api/v1/projects/ready", json={"dub_target_language": None, "narrator_gender": ""})
+            assert resp.status_code == 200
+            assert "dub_target_language" not in fake_pm.project_data["ready"]
+            assert "narrator_gender" not in fake_pm.project_data["ready"]
+
     def test_update_project_persists_video_prompt_profile_for_reference_video_project(self, tmp_path, monkeypatch):
         """PATCH 提示词档：参考生视频的剧情项目可写入 h3_ref2va，默认档与空值从 project.json 移除。"""
         fake_pm = _FakePM(tmp_path)

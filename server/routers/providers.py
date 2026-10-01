@@ -492,7 +492,7 @@ async def get_provider_config(
     # 计算状态：基于凭证表是否有生效凭证
     cred_repo = CredentialRepository(session)
     has_active = await cred_repo.has_active_credential(provider_id)
-    status = "ready" if has_active else "unconfigured"
+    status = "ready" if has_active or not meta.required_keys else "unconfigured"
 
     # 构建字段列表：先必填，再可选，跳过凭证字段
     fields: list[FieldInfo] = []

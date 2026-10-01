@@ -13,6 +13,7 @@ MESSAGES: dict[str, str] = {
     "provider_name_minimax": "MiniMax",
     "provider_name_kling": "Kling",
     "provider_name_agnes": "Agnes",
+    "provider_name_vieneu": "VieNeu-TTS (Local)",
     "provider_name_runninghub": "RunningHub",
     # Provider descriptions
     "provider_desc_gemini-aistudio": "Google AI Studio provides Gemini models with image and video generation, ideal for rapid prototyping and personal projects.",
@@ -27,6 +28,7 @@ MESSAGES: dict[str, str] = {
     "provider_desc_kling": "Kuaishou Kling video and image generation platform. API Key authentication works with all models; Access Key + Secret Key (JWT) only supports 3.0-and-earlier models. Choose either — when both are set, API Key takes priority.",
     "provider_desc_agnes": "Agnes multimodal platform (OpenAI-style), authenticated with a Bearer API key; currently supports image, text and video generation.",
     "provider_desc_runninghub": "RunningHub AI Apps for hosted video workflows, text-to-image, and image-to-image generation.",
+    "provider_desc_vieneu": "Local Vietnamese speech synthesis with VieNeu-TTS v3 Turbo. No API key needed; the local service starts automatically on the first dub.",
     # Model display names (registry entries written in a non-Latin script; brand-only
     # names are absent on purpose and fall back to lib/config/registry.py display_name)
     "model_name_ark_doubao-seed-2-0-pro-260215": "Doubao Seed 2.0 Pro",

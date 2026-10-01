@@ -61,6 +61,7 @@ from server.routers import (
     cost_estimation,
     custom_endpoints,
     custom_providers,
+    dub,
     edit_timelines,
     end_frames,
     files,
@@ -84,6 +85,7 @@ from server.routers import (
     tasks,
     usage,
     versions,
+    vieneu,
 )
 from server.routers import auth as auth_router
 from server.services.project.project_events import ProjectEventService
@@ -491,6 +493,10 @@ async def lifespan(app: FastAPI):
     from lib.custom_provider.endpoint_test import shutdown_trial_runs
 
     await shutdown_trial_runs()
+    # 托管的 VieNeu 本地服务是子进程，随应用关停一并回收。
+    from lib.speech.vieneu_service import shutdown_vieneu_manager
+
+    await shutdown_vieneu_manager()
     await shutdown_http_client()
     await close_db()
 
@@ -637,6 +643,8 @@ app.include_router(
 )
 app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["任务队列"])
 app.include_router(providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["供应商管理"])
+app.include_router(dub.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["越南语配音"])
+app.include_router(vieneu.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["VieNeu 本地语音"])
 app.include_router(system_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统配置"])
 app.include_router(system.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统"])
 app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["API Key 管理"])

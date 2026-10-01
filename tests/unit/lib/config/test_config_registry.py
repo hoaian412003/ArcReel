@@ -21,6 +21,7 @@ def test_all_providers_registered():
         "kling",
         "agnes",
         "runninghub",
+        "vieneu",
     }
 
 

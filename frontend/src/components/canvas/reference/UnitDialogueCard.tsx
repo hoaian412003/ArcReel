@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Loader2, MessageSquareText, Pencil } from "lucide-react";
 import { API } from "@/api";
@@ -18,13 +18,15 @@ export interface UnitDialogueCardProps {
   assets: string | undefined;
   /** 跳回编辑器修改正文；未提供时不显示入口。 */
   onEdit?: () => void;
+  /** 标题栏右侧的操作区（如「创建配音」）。 */
+  actions?: ReactNode;
 }
 
 /**
  * 生成前的台词核对卡：把该单元正文解析出的逐条台词与画外音只读地摆在生成按钮上方。
  * 台词由正文机械派生，卡片不提供就地编辑，改动一律回到编辑器。
  */
-export function UnitDialogueCard({ projectName, episode, text, assets, onEdit }: UnitDialogueCardProps) {
+export function UnitDialogueCard({ projectName, episode, text, assets, onEdit, actions }: UnitDialogueCardProps) {
   const { t } = useTranslation("dashboard");
   const [preview, setPreview] = useState<ScriptPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +71,7 @@ export function UnitDialogueCard({ projectName, episode, text, assets, onEdit }:
           </span>
         )}
         <span className="flex-1" />
+        {actions}
         {onEdit && (
           <button
             type="button"

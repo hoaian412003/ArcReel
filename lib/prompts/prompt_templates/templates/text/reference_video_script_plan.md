@@ -30,6 +30,7 @@ slots:
   max_duration: 单次生成的时长上限（秒）
   max_reference_images: 单个视频单元的参考图上限；不限时传 null
   episode_target_duration: 单集目标秒数；未设置时传 null
+  dub: 越南语配音要求，对象 {speech_rate, narrator_gender, characters}（characters 为 [{name, gender}]，gender 未登记时为 null）；项目未启用配音时传 null
   instructions: 附加指令正文；缺值传 null
 protected: false
 ---
@@ -114,6 +115,23 @@ protected: false
 - 每个 unit 的正文都要 `@` 引用它发生地的场景资产；地点切换到新 unit 时换成新地点的场景，
   地点不变的连续 unit 逐条重复引用同一个场景（候选表里没有匹配的场景时才用文字写地点）。
 - 本阶段不写景别 / 构图 / 运镜（prompt_authoring 补），把叙事内容与动作过程写清楚即可。
+{% if dub %}
+
+# 越南语配音台词（dub_lines）
+
+本项目需要把成片配成越南语。每个 unit 在 `dub_lines` 里为正文中的**每一条发声**（台词记号 `@[角色]{台词}` 与画外音记号 `{台词}`，按它们在正文里的出现顺序合并编号，从 0 起）各写一行越南语配音，`dub_lines` 的行数与发声条数严格相等；正文里没有任何发声记号的 unit，`dub_lines` 留空数组。
+
+- `index`：该发声在本 unit 正文中的序号（0 起，台词与画外音合并计序）。
+- `speaker`：台词填说话角色名（逐字等于记号里的 `@[角色]` 名称）；画外音填 null。
+- `gender`：`male` 或 `female`。台词按下表中该角色的性别取值；表中未登记性别时，依角色称谓、语气与上下文判断；画外音一律取 `{{ dub.narrator_gender }}`。
+- `text_vi`：该条发声的越南语配音台词。译自对应记号内的台词，忠实原意，用地道口语，称谓与人称代词（anh / em / chị / tôi / tao / mày / cậu ...）须符合说话人与听者的性别、年龄与关系；不要逐字硬译，不要加原文没有的内容，不要夹带中文或括号注释。
+- **篇幅预算**：越南语口播语速约 {{ dub.speech_rate }} 词/秒，一个 unit 里全部 `text_vi` 的总词数不得超过「该 unit 时长（秒）× {{ dub.speech_rate }}」，宁短勿长；译文偏长时精简措辞，而不是改动正文里的台词（正文台词是内容契约，保持不变）。
+{% if dub.characters %}
+
+角色性别（用于 `gender`）：
+{{ partial("shared/lists/dub_character_genders", characters=dub.characters) }}
+{% endif %}
+{% endif %}
 {% if instructions %}
 
 {{ partial("shared/additional_instructions") }}

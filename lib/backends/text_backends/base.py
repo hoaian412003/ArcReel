@@ -181,6 +181,7 @@ class TextTaskType(StrEnum):
     SCRIPT = "script"
     OVERVIEW = "overview"
     STYLE_ANALYSIS = "style"
+    TRANSLATE_DUB = "translate_dub"
 
 
 class TextTaskTier(StrEnum):
@@ -200,6 +201,7 @@ TEXT_TASK_TIERS: dict[TextTaskType, TextTaskTier] = {
     TextTaskType.SCRIPT: TextTaskTier.COMPLEX,
     TextTaskType.OVERVIEW: TextTaskTier.SIMPLE,
     TextTaskType.STYLE_ANALYSIS: TextTaskTier.SIMPLE,
+    TextTaskType.TRANSLATE_DUB: TextTaskTier.SIMPLE,
 }
 
 if _missing := set(TextTaskType) - set(TEXT_TASK_TIERS):

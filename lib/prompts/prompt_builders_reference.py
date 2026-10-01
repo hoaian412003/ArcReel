@@ -13,9 +13,15 @@
 from __future__ import annotations
 
 from lib.infra.text_metrics import reading_unit_noun
-from lib.prompts.prompt_builders_script import _outline_slot, _overview_slot, _project_asset_appearances
+from lib.prompts.prompt_builders_script import (
+    _neutralize_tags,
+    _outline_slot,
+    _overview_slot,
+    _project_asset_appearances,
+)
 from lib.prompts.prompt_rules.asset_appearance import asset_reference_names
 from lib.prompts.prompt_templates.builtin import builtin_templates
+from lib.speech.dub_settings import character_dub_gender
 from lib.speech.speech_rate import speech_rate_units_per_second
 
 
@@ -51,6 +57,8 @@ def build_reference_units_split_prompt(
     episode_target_duration: int | None = None,
     episode_outline: dict | None = None,
     next_episode_outline: dict | None = None,
+    dub_target_language: str | None = None,
+    narrator_gender: str = "male",
     instructions: str | None = None,
 ) -> str:
     """Step-1 video_unit 拆分 prompt：源文 → 扁平 unit 表（时长 + 原文锚 + 引用语法正文）。
@@ -78,6 +86,9 @@ def build_reference_units_split_prompt(
             未设（None）时按单次生成上限组织，与不设该项的项目行为一致。
         episode_outline / next_episode_outline: 分集账本大纲（``episode_outline_context``
             的返回值），用于约束本集内容边界；为 None 时不插入该段。
+        dub_target_language: 项目启用的配音目标语言（目前仅 ``vi``）；None 时不渲染配音分节，
+            提示词与不支持配音的项目逐字相同。
+        narrator_gender: 画外音配音性别（male / female），仅启用配音时使用。
         instructions: 附加指令正文；空 / None 时不渲染该分节。
     """
     normalized_durations = sorted({int(d) for d in supported_durations})
@@ -121,6 +132,17 @@ def build_reference_units_split_prompt(
     source_language = source_language if isinstance(source_language, str) else None
     speech_rate = speech_rate_units_per_second(source_language, speech_rate_override)
 
+    dub = None
+    if dub_target_language == "vi":
+        dub = {
+            "speech_rate": f"{speech_rate_units_per_second('vi'):g}",
+            "narrator_gender": narrator_gender if narrator_gender in ("male", "female") else "male",
+            "characters": [
+                {"name": _neutralize_tags(str(name)), "gender": character_dub_gender(raw)}
+                for name, raw in (characters or {}).items()
+            ],
+        }
+
     return builtin_templates.render(
         "text/reference_video_script_plan",
         target_language=target_language,
@@ -139,8 +161,67 @@ def build_reference_units_split_prompt(
         max_duration=max_duration,
         max_reference_images=max_reference_images,
         episode_target_duration=episode_target_duration,
+        dub=dub,
         instructions=instructions,
     )
+
+
+def build_reference_dub_lines_prompt(
+    *,
+    units: list[dict],
+    characters: dict,
+    narrator_gender: str = "male",
+    synopsis: str | None = None,
+) -> str:
+    """为已有 unit 回填越南语配音台词的 prompt（TRANSLATE_DUB，单次最多一批 unit）。
+
+    ``units`` 每项为 ``{"unit_id", "duration_seconds", "text", "utterances": [{"index", "speaker", "text"}]}``，
+    ``utterances`` 是 unit 正文派生出的台词 / 画外音序列（``speaker`` 为 None 即画外音）。
+    只翻译与配音，不改写正文；性别取角色登记值，未登记时由模型依称谓与语境判断。
+    """
+    narrator = narrator_gender if narrator_gender in ("male", "female") else "male"
+    speech_rate = f"{speech_rate_units_per_second('vi'):g}"
+    lines: list[str] = [
+        "你是一位影视配音译制编剧。下面是若干视频单元（unit）里按顺序出现的台词与画外音，请为每一条发声写一行越南语配音台词。",
+        "",
+        "规则：",
+        "- 每个 unit 的 `dub_lines` 与它的发声逐条一一对应：`index` 即发声序号（从 0 起），行数与发声条数相等；没有发声的 unit 给空数组。",
+        "- `speaker`：台词填说话角色名（与输入一致）；画外音填 null。",
+        f"- `gender`：台词按下方角色表的性别取值，表中未登记时依称谓、语气与上下文判断；画外音一律取 `{narrator}`。",
+        "- `text_vi`：译自对应发声原文，忠实原意、口语自然；称谓与人称代词（anh / em / chị / tôi / tao / mày / cậu ...）"
+        "须符合说话人与听者的性别、年龄与关系；不加原文没有的内容，不夹带中文或括号注释。",
+        f"- 篇幅预算：越南语口播语速约 {speech_rate} 词/秒，一个 unit 里全部 `text_vi` 的总词数不得超过"
+        f"「unit 时长（秒）× {speech_rate}」，宁短勿长，译文偏长时精简措辞。",
+        "- `unit_id` 原样回填，不得增删 unit。",
+    ]
+    if synopsis and synopsis.strip():
+        lines += ["", "故事梗概：", synopsis.strip()]
+    lines += ["", "角色表："]
+    if characters:
+        for name, raw in characters.items():
+            gender = character_dub_gender(raw) or "未登记"
+            description = raw.get("description", "") if isinstance(raw, dict) else ""
+            description = " ".join(str(description).split())[:200]
+            lines.append(
+                f"- {_neutralize_tags(str(name))}（{gender}）：{_neutralize_tags(description)}".rstrip("：").rstrip()
+            )
+    else:
+        lines.append("（暂无）")
+    lines += ["", "待配音的 unit："]
+    for unit in units:
+        duration = int(unit.get("duration_seconds") or 0)
+        lines += [
+            "",
+            f"## {unit['unit_id']}（时长 {duration} 秒，词数预算约 {max(1, int(duration * speech_rate_units_per_second('vi')))}）",
+        ]
+        utterances = unit.get("utterances") or []
+        if not utterances:
+            lines.append("（无台词与画外音）")
+        for item in utterances:
+            speaker = item.get("speaker")
+            label = f"{speaker}" if speaker else "画外音"
+            lines.append(f"- [{item['index']}] {_neutralize_tags(str(label))}：{item['text']}")
+    return "\n".join(lines)
 
 
 def render_reference_units_for_prompt_authoring(units: list[dict]) -> str:

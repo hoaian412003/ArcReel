@@ -60,6 +60,7 @@ Agent 供应商不一定承担实际图片和视频生成。
 | MiniMax | ✅ | ✅ | ✅ | — | 文本、图像和视频 |
 | 可灵 Kling | — | ✅ | ✅ | — | 图像、图生视频和参考生视频 |
 | Agnes | ✅ | ✅ | ✅ | — | 文本、图像和视频 |
+| VieNeu-TTS（本地） | — | — | — | ✅ | 本地越南语旁白配音，无需 API Key、零费用 |
 | 自定义供应商 | 取决于接口 | 取决于接口 | 取决于接口 | 取决于接口 | 私有网关、本地模型或第三方兼容服务 |
 
 内置 OpenAI 供应商提供文本、图像和视频能力；OpenAI 兼容 TTS 通过自定义供应商的 TTS 调用端点接入。
@@ -305,6 +306,23 @@ ArcReel 的旁白能力可以使用阿里百炼 Qwen TTS 或兼容的 TTS 接口
 - 输出音频格式。
 
 批量生成前，先试听一段包含典型专有名词的文本。
+
+### 9.1 VieNeu-TTS（本地越南语） {#vieneu-tts}
+
+内置的 VieNeu-TTS 供应商把本机运行的 [VieNeu-TTS v3 Turbo](https://github.com/pnnbao97/VieNeu-TTS)（Apache-2.0）当作 TTS 后端，无需 API Key，费用为零，音色带性别与区域标注。
+
+1. 在项目根目录安装到项目内（默认目录，已加入 `.gitignore`）：
+
+   ```bash
+   git clone https://github.com/pnnbao97/VieNeu-TTS third_party/VieNeu-TTS
+   (cd third_party/VieNeu-TTS && uv sync)
+   ```
+
+2. 在「设置 → 供应商 → VieNeu-TTS」里查看状态、启动 / 停止，并调整目录、启动命令、端口、设备、int8、空闲自动停止等；目录留空即使用 `third_party/VieNeu-TTS`，相对路径相对项目根目录。设置保存在系统设置的 `vieneu_*` 键中，下次启动服务时生效。
+3. 把项目（或全局）的音频供应商选为 VieNeu-TTS。首次配音时 ArcReel 自动拉起服务并等待就绪（首次启动会下载模型），之后复用；也可通过 `/api/v1/vieneu/start`、`/stop`、`/status` 手动管理。
+4. 若已自行运行服务，在供应商配置里填写 `base_url`（如 `http://127.0.0.1:8000/v1`），ArcReel 将直连而不再托管。
+
+CPU 合成速度约为实时的 0.35–0.55 倍耗时（int8 更快），GPU 约 0.02 倍；在 Apple Silicon 的 CPU 上实测一句 5 秒的台词约 1.4 秒合成完（约 0.25–0.3 倍）。
 
 ## 10. 自定义供应商 {#custom-providers}
 

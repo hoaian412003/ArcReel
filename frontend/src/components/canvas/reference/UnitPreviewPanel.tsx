@@ -8,7 +8,9 @@ import { NarrationAudioCard } from "@/components/canvas/timeline/NarrationAudioC
 import { UPLOAD_VIDEO_ACCEPT, UploadIconButton } from "@/components/ui/UploadIconButton";
 import { formatCost } from "@/utils/cost-format";
 import { StatusBadge, resolveUnitStatus } from "./unit-status";
+import { CreateVoiceoverButton } from "./CreateVoiceoverButton";
 import { UnitDialogueCard } from "./UnitDialogueCard";
+import { UnitVoiceoverSection } from "./UnitVoiceoverSection";
 import type { CostBreakdown, ReferenceVideoUnit, UnitStatus } from "@/types";
 
 export interface UnitPreviewPanelProps {
@@ -97,6 +99,7 @@ export function UnitPreviewPanel({
   const clip = unit?.generated_assets?.video_clip ?? null;
   // 上传/还原后路径不变，靠 fingerprint cache-bust 让 <video> 重新拉取
   const clipFp = useProjectsStore((s) => (clip ? s.getAssetFingerprint(clip) : null));
+  const dubEnabled = useProjectsStore((s) => s.currentProjectData?.dub_target_language === "vi");
 
   if (!unit) {
     return (
@@ -240,6 +243,19 @@ export function UnitPreviewPanel({
           text={unit.text}
           assets={dialogueAssets}
           onEdit={onEditDialogue}
+          actions={
+            <CreateVoiceoverButton projectName={projectName} episode={episode} fallbackUnitId={unit.unit_id} />
+          }
+        />
+      )}
+
+      {projectName && episode !== undefined && dubEnabled && (
+        <UnitVoiceoverSection
+          key={`dub-${unit.unit_id}`}
+          projectName={projectName}
+          episode={episode}
+          unitId={unit.unit_id}
+          refreshKey={`${unit.text}|${unit.dub_lines?.length ?? 0}`}
         />
       )}
 

@@ -15,6 +15,7 @@ from lib.episode.episode_ledger import episode_outline_context
 from lib.episode.episode_target_duration import project_episode_target_duration
 from lib.infra.text_metrics import reading_unit_noun
 from lib.infra.text_utils import normalize_newlines
+from lib.speech.dub_settings import project_dub_target_language, project_narrator_gender
 from lib.speech.speech_rate import project_speech_rate_override, speech_rate_units_per_second
 
 _STRUCTURED_CONTENT_MODES = frozenset({"narration", "drama"})
@@ -169,6 +170,18 @@ def project_script_plan_prompt_inputs(
             }
         )
 
+    if variant == "reference_video":
+        # 配音目标语言与画外音性别随提示词下发；未启用配音时两键都不进 projection，
+        # 存量项目的提示词与 basis 保持原样。
+        dub_target_language = project_dub_target_language(project)
+        if dub_target_language is not None:
+            inputs.update(
+                {
+                    "dub_target_language": dub_target_language,
+                    "narrator_gender": project_narrator_gender(project),
+                }
+            )
+
     if variant == "drama":
         raw_source_kind = project.get("source_kind")
         source_kind = "novel" if raw_source_kind is None else raw_source_kind
@@ -199,6 +212,12 @@ def _freeze_script_plan_prompt_inputs(
                 {
                     "name": name,
                     "description": (raw.get("description", "") if isinstance(raw, Mapping) else ""),
+                    # 启用配音时角色性别决定配音音色，进 basis；未启用时保持原形状。
+                    **(
+                        {"gender": raw.get("gender")}
+                        if field == "characters" and "dub_target_language" in prompt_inputs and isinstance(raw, Mapping)
+                        else {}
+                    ),
                 }
                 for name, raw in raw_assets.items()
             ]

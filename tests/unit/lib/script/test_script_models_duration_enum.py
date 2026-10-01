@@ -197,7 +197,19 @@ class TestReferenceUnitsScriptPlanModel:
         unit_def = next(d for d in schema.get("$defs", {}).values() if "text" in d.get("properties", {}))
         assert unit_def["properties"]["duration_seconds"]["enum"] == [4, 6, 8]
         # 机械可派生的字段一律不进 LLM 输出 schema
-        assert set(unit_def["properties"]) == {"duration_seconds", "source_text", "text"}
+        assert set(unit_def["properties"]) == {"duration_seconds", "source_text", "text", "dub_lines"}
+        # 配音行只让 LLM 写序号 / 说话人 / 性别 / 越南语译文，原文锚与时间覆盖由服务端管理
+        dub_def = schema["$defs"]["DubLineDraft"]
+        assert set(dub_def["properties"]) == {"index", "speaker", "gender", "text_vi"}
+
+    def test_dub_lines_optional_and_validated(self):
+        draft = self._model().model_validate({"units": [self._unit()]})
+        assert draft.model_dump()["units"][0]["dub_lines"] == []
+        line = {"index": 0, "speaker": "甲", "gender": "male", "text_vi": "Chào anh."}
+        draft = self._model().model_validate({"units": [self._unit(dub_lines=[line])]})
+        assert draft.model_dump()["units"][0]["dub_lines"] == [line]
+        with pytest.raises(ValidationError):
+            self._model().model_validate({"units": [self._unit(dub_lines=[{**line, "gender": "other"}])]})
 
     def test_member_duration_accepted(self):
         draft = self._model().model_validate({"units": [self._unit()]})

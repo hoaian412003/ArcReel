@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { API } from "@/api";
 import { errMsg } from "@/utils/async";
 import type {
+  DubLinePatch,
   H3PromptSections,
   H3PromptStatus,
   ReferenceUnitCapabilityMap,
@@ -22,6 +23,7 @@ interface PatchUnitPayload {
   duration_seconds?: number;
   transition_to_next?: TransitionType;
   note?: string | null;
+  dub_lines?: DubLinePatch[];
 }
 
 /** Cache key isolating units per (project, episode) — switching projects with
@@ -43,6 +45,11 @@ interface ReferenceVideoStore {
    */
   h3PromptStatusByEpisode: Record<string, Record<string, H3PromptStatus>>;
   selectedUnitId: string | null;
+  /**
+   * 同 key 下被勾选的 unit id（批量生成、配音等批量动作的作用对象）。空即未启用勾选，
+   * 批量动作回落到各自的默认口径。随单元列表加载与删除同步剔除已不存在的 id。
+   */
+  checkedUnitIdsByEpisode: Record<string, string[]>;
   loading: boolean;
   error: string | null;
 
@@ -52,6 +59,9 @@ interface ReferenceVideoStore {
   deleteUnit: (projectName: string, episode: number, unitId: string) => Promise<void>;
   reorderUnits: (projectName: string, episode: number, unitIds: string[]) => Promise<void>;
   select: (unitId: string | null) => void;
+  toggleChecked: (projectName: string, episode: number, unitId: string) => void;
+  /** 整体替换该剧集的勾选集合；传空数组即清空。 */
+  setChecked: (projectName: string, episode: number, unitIds: string[]) => void;
   /** 手写 H3 六段载荷；校验不过时抛出后端给出的原因。 */
   saveH3Prompt: (projectName: string, episode: number, unitId: string, sections: H3PromptSections) => Promise<void>;
   /**
@@ -91,6 +101,7 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set, get) => 
   unitCapabilitiesByEpisode: {},
   h3PromptStatusByEpisode: {},
   selectedUnitId: null,
+  checkedUnitIdsByEpisode: {},
   loading: false,
   error: null,
 
@@ -110,6 +121,7 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set, get) => 
           h3PromptStatusByEpisode: h3_prompt_status
             ? { ...otherStatuses, [cacheKey]: h3_prompt_status }
             : otherStatuses,
+          checkedUnitIdsByEpisode: pruneChecked(s.checkedUnitIdsByEpisode, cacheKey, units),
           loading: false,
         };
       });
@@ -169,6 +181,11 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set, get) => 
       return {
         unitsByEpisode: { ...s.unitsByEpisode, [key]: list.filter((u) => u.unit_id !== unitId) },
         unitCapabilitiesByEpisode: { ...s.unitCapabilitiesByEpisode, [key]: remaining },
+        checkedUnitIdsByEpisode: pruneChecked(
+          s.checkedUnitIdsByEpisode,
+          key,
+          list.filter((u) => u.unit_id !== unitId),
+        ),
         selectedUnitId: s.selectedUnitId === unitId ? null : s.selectedUnitId,
       };
     });
@@ -183,6 +200,22 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set, get) => 
   },
 
   select: (unitId) => set({ selectedUnitId: unitId }),
+
+  toggleChecked: (projectName, episode, unitId) =>
+    set((s) => {
+      const key = referenceVideoCacheKey(projectName, episode);
+      const current = s.checkedUnitIdsByEpisode[key] ?? [];
+      const next = current.includes(unitId) ? current.filter((id) => id !== unitId) : [...current, unitId];
+      return { checkedUnitIdsByEpisode: { ...s.checkedUnitIdsByEpisode, [key]: next } };
+    }),
+
+  setChecked: (projectName, episode, unitIds) =>
+    set((s) => ({
+      checkedUnitIdsByEpisode: {
+        ...s.checkedUnitIdsByEpisode,
+        [referenceVideoCacheKey(projectName, episode)]: Array.from(new Set(unitIds)),
+      },
+    })),
 
   saveH3Prompt: async (projectName, episode, unitId, sections) => {
     const { unit, h3_prompt_status } = await API.patchReferenceUnitH3Prompt(projectName, episode, unitId, sections);
@@ -213,6 +246,19 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set, get) => 
     }
   },
 }));
+
+/** 勾选集合只保留仍存在的 unit；无变化时返回原对象，避免无谓的订阅刷新。 */
+function pruneChecked(
+  checked: Record<string, string[]>,
+  key: string,
+  units: ReferenceVideoUnit[],
+): Record<string, string[]> {
+  const current = checked[key];
+  if (!current || current.length === 0) return checked;
+  const alive = new Set(units.map((u) => u.unit_id));
+  const next = current.filter((id) => alive.has(id));
+  return next.length === current.length ? checked : { ...checked, [key]: next };
+}
 
 /**
  * 单元正文的增改会让 H3 提示词过期或缺席：该项目使用 H3 提示词档时（状态表存在）重拉一次列表，

@@ -51,7 +51,12 @@ TEXT_TASK_TYPES = frozenset(
 
 UNIT_TASK_TYPES = frozenset({"storyboard", "grid", "tts", "video", "reference_video"})
 
-FIXED_TASK_TYPES = TEXT_TASK_TYPES | UNIT_TASK_TYPES | {"image_edit", "voice_sample", DERIVATIVE_TASK_TYPE}
+#: 越南语配音的两类任务（撰写台词、合成音频）只出现在任务面板，不是工作流步骤挂载的任务。
+DUB_TASK_TYPES = frozenset({"dub_tts", "text_reference_dub_lines"})
+
+FIXED_TASK_TYPES = (
+    TEXT_TASK_TYPES | UNIT_TASK_TYPES | DUB_TASK_TYPES | {"image_edit", "voice_sample", DERIVATIVE_TASK_TYPE}
+)
 
 ALL_TASK_TYPES = FIXED_TASK_TYPES | frozenset(ASSET_SPECS.keys())
 

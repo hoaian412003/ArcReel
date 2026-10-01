@@ -46,6 +46,7 @@ from lib.project.project_manager import VALID_SOURCE_KINDS as _VALID_SOURCE_KIND
 from lib.prompts.video_prompt_profile import PROJECT_FIELD as VIDEO_PROMPT_PROFILE_FIELD
 from lib.prompts.video_prompt_profile import VALID_VIDEO_PROMPT_PROFILES
 from lib.references.reference_catalog import ReferenceCatalog, build_reference_catalog
+from lib.script.reference_video.dub_lines import dub_spoken_seconds, unit_utterances
 from lib.script.script_models import (
     AD_TARGET_DURATION_DRIFT_THRESHOLD,
     REFERENCE_UNIT_DURATION_RANGE,
@@ -58,6 +59,13 @@ from lib.script.script_skeleton import (
     ensure_route_skeleton,
     resolve_declared_kind,
     resolve_script_kind,
+)
+from lib.speech.dub_settings import (
+    CHARACTER_GENDER_FIELD,
+    DUB_TARGET_LANGUAGE_FIELD,
+    NARRATOR_GENDER_FIELD,
+    SUPPORTED_DUB_LANGUAGES,
+    VALID_DUB_GENDERS,
 )
 from lib.speech.speech_rate import (
     MAX_SPEECH_RATE_UPS,
@@ -420,6 +428,17 @@ class DataValidator:
                 )
             )
 
+        # 配音设置：可选字段，缺省即不配音 / 画外音男声；出现即须是已知取值。
+        for dub_field, allowed_values in (
+            (DUB_TARGET_LANGUAGE_FIELD, SUPPORTED_DUB_LANGUAGES),
+            (NARRATOR_GENDER_FIELD, VALID_DUB_GENDERS),
+        ):
+            dub_value = project.get(dub_field)
+            if dub_value is not None and (not isinstance(dub_value, str) or dub_value not in allowed_values):
+                errors.append(
+                    _m("val_dub_setting_invalid", field=dub_field, value=dub_value, allowed=_allowed(allowed_values))
+                )
+
         # 项目级语速覆盖（阅读单位 / 秒）：可选字段，缺省即回退语言默认；出现即须落在硬区间内。
         speech_rate = project.get(SPEECH_RATE_FIELD)
         if speech_rate is not None:
@@ -547,6 +566,17 @@ class DataValidator:
                                 value=repr(val),
                             )
                         )
+                # 角色配音性别：空串 / 缺省视为未登记，出现非空值须是 male / female。
+                gender = char_data.get(CHARACTER_GENDER_FIELD)
+                if isinstance(gender, str) and gender and gender not in VALID_DUB_GENDERS:
+                    errors.append(
+                        _m(
+                            "val_dub_setting_invalid",
+                            field=f"characters.{char_name}.{CHARACTER_GENDER_FIELD}",
+                            value=gender,
+                            allowed=_allowed(VALID_DUB_GENDERS),
+                        )
+                    )
                 # voice_updated_at 不在 extra_string_fields 里（系统专用戳字段，故意不开放
                 # 通用 PATCH 覆写），但仍需校验类型与值：外部编辑/导入的 project.json 若把它写成
                 # 非字符串或不可解析的字符串，会在前端 computeVoiceLegacyNotice 的日期解析处
@@ -1339,6 +1369,8 @@ class DataValidator:
             if not valid_duration:
                 errors.append(_m("val_unit_duration_range", prefix=prefix, low=low, high=high))
 
+            self._validate_unit_dub_lines(prefix, unit, errors, warnings)
+
             # 正文里未登记的 `@[名称]` 不在此报错：参考图是执行期派生物，未解析的提及只在
             # 渲染与预览侧发一条非阻断 warning（见 ADR 0064），校验器不把它升级成结构错误。
 
@@ -1349,6 +1381,48 @@ class DataValidator:
                     unit.get("generated_assets"),
                     errors,
                 )
+
+    @staticmethod
+    def _validate_unit_dub_lines(
+        prefix: str,
+        unit: dict[str, Any],
+        errors: list[ValidationMessage],
+        warnings: list[ValidationMessage],
+    ) -> None:
+        """校验 unit 的越南语配音台词：结构 / 序号范围 / 性别为错误；念白超出 unit 时长仅 warning。
+
+        配音行与正文是否仍相符（过期）不在此判：过期是读时派生状态，不阻断保存。
+        """
+        if "dub_lines" not in unit:
+            return
+        dub_lines = unit["dub_lines"]
+        if not isinstance(dub_lines, list):
+            errors.append(_m("val_dub_lines_must_be_array", prefix=prefix))
+            return
+        text = unit.get("text")
+        utterance_count = len(unit_utterances(text)) if isinstance(text, str) else 0
+        valid_lines: list[dict[str, Any]] = []
+        for line_index, line in enumerate(dub_lines):
+            index = line.get("index") if isinstance(line, dict) else None
+            text_vi = line.get("text_vi") if isinstance(line, dict) else None
+            ok = (
+                isinstance(line, dict)
+                and isinstance(index, int)
+                and not isinstance(index, bool)
+                and 0 <= index < utterance_count
+                and line.get("gender") in VALID_DUB_GENDERS
+                and isinstance(text_vi, str)
+                and bool(text_vi.strip())
+            )
+            if not ok:
+                errors.append(_m("val_dub_line_invalid", prefix=prefix, index=line_index))
+            else:
+                valid_lines.append(line)
+        duration = unit.get("duration_seconds")
+        if valid_lines and isinstance(duration, int) and not isinstance(duration, bool) and duration > 0:
+            spoken = dub_spoken_seconds(valid_lines)
+            if spoken > duration:
+                warnings.append(_m("val_dub_speech_overflow", prefix=prefix, spoken=spoken, duration=duration))
 
     def _validate_episode_payload(
         self,

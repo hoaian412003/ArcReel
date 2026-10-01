@@ -105,6 +105,10 @@ MESSAGES = {
     "val_unit_id_duplicate": "{prefix}: unit_id 重复 '{value}'",
     "val_video_units_missing": "reference_video 脚本缺少 video_units 数组或为空",
     "val_unit_duration_range": "{prefix}: duration_seconds 必须是 {low}-{high} 之间的整数",
+    "val_dub_setting_invalid": "{field} 值无效: '{value}'，必须是 {allowed}",
+    "val_dub_lines_must_be_array": "{prefix}: dub_lines 必须是数组",
+    "val_dub_line_invalid": "{prefix}: dub_lines[{index}] 无效，须为对象，index 在正文发声序号范围内，gender 为 male 或 female，text_vi 为非空字符串",
+    "val_dub_speech_overflow": "{prefix}: 越南语配音念白约 {spoken:.1f} 秒，超过 unit 时长 {duration} 秒（仅提示，不阻塞保存）",
     # ---- 骨架与生成模式失配 ----
     "val_skeleton_noun_segments": "分镜",
     "val_skeleton_noun_scenes": "分镜",

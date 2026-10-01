@@ -20,6 +20,7 @@ from tests.integration.server.agent_tool_support import (
     run_rv_split,
     rv_character_sheet,
     rv_generator_returning,
+    rv_project,
     rv_script_plan_path,
     rv_source,
     rv_unit,
@@ -608,3 +609,121 @@ async def test_split_reference_video_units_keeps_voice_warnings_on_per_image_bac
 
     assert out.problem is None, out
     assert "参考音频最多 1 段" in said(out)
+
+
+# ---------------------------------------------------------------------------
+# 越南语配音台词（dub_lines）
+# ---------------------------------------------------------------------------
+
+_DUB_TEXT = "门开了\n@[张三]：{我来了。}\n@[张三]：{夜深了。}"
+
+
+def _enable_dub(fake_ctx: ToolHarness, **project_fields: Any) -> None:
+    fake_ctx.pm.project_payload["dub_target_language"] = "vi"
+    fake_ctx.pm.project_payload.update(project_fields)
+    if (fake_ctx.project_path / "source").exists():
+        rv_project(fake_ctx)
+    else:
+        rv_source(fake_ctx)
+
+
+def _dub_unit(*lines: dict[str, Any], text: str = _DUB_TEXT, duration: int = 8) -> dict[str, Any]:
+    return {**rv_unit(text, duration=duration), "dub_lines": list(lines)}
+
+
+_DUB_LINE_0 = {"index": 0, "speaker": "张三", "gender": "male", "text_vi": "Tôi đến rồi."}
+_DUB_LINE_1 = {"index": 1, "speaker": "张三", "gender": "male", "text_vi": "Đêm đã khuya."}
+
+
+async def test_split_prompt_asks_for_dub_lines_only_when_the_project_enables_dubbing(
+    fake_ctx: ToolHarness, video_request_facts
+) -> None:
+    rv_source(fake_ctx)
+    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1, "dry_run": True})
+    assert "dub_lines" not in said(out)
+
+    fake_ctx.pm.project_payload["characters"]["张三"]["gender"] = "female"
+    _enable_dub(fake_ctx, narrator_gender="female")
+    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1, "dry_run": True})
+    prompt = said(out)
+    assert "dub_lines" in prompt
+    assert "张三：female" in prompt
+    assert "画外音一律取 `female`" in prompt  # 画外音取项目旁白性别
+    assert "2.5 词/秒" in prompt
+
+
+async def test_split_persists_dub_lines_with_source_text_filled_by_the_server(
+    fake_ctx: ToolHarness, monkeypatch, video_request_facts
+) -> None:
+    _enable_dub(fake_ctx)
+    out = await run_rv_split(fake_ctx, monkeypatch, [_dub_unit(_DUB_LINE_0, _DUB_LINE_1)])
+    assert out.problem is None, out
+
+    saved = json.loads(rv_script_plan_path(fake_ctx).read_text(encoding="utf-8"))
+    assert saved["units"][0]["dub_lines"] == [
+        {**_DUB_LINE_0, "source_text": "我来了。"},
+        {**_DUB_LINE_1, "source_text": "夜深了。"},
+    ]
+
+
+async def test_split_without_dubbing_enabled_ignores_dub_lines(
+    fake_ctx: ToolHarness, monkeypatch, video_request_facts
+) -> None:
+    rv_source(fake_ctx)
+    out = await run_rv_split(fake_ctx, monkeypatch, [_dub_unit(_DUB_LINE_0)])
+    assert out.problem is None, out
+    saved = json.loads(rv_script_plan_path(fake_ctx).read_text(encoding="utf-8"))
+    assert "dub_lines" not in saved["units"][0] or saved["units"][0]["dub_lines"] == []
+
+
+async def test_split_rejects_missing_or_misnumbered_dub_lines_when_dubbing_is_enabled(
+    fake_ctx: ToolHarness, monkeypatch, video_request_facts
+) -> None:
+    _enable_dub(fake_ctx)
+    out = await run_rv_split(fake_ctx, monkeypatch, [_dub_unit(_DUB_LINE_0)])
+    assert out.problem is not None
+    assert "dub_lines" in said(out)
+    assert not rv_script_plan_path(fake_ctx).exists()
+
+
+async def test_split_rejects_blank_vietnamese_translation(
+    fake_ctx: ToolHarness, monkeypatch, video_request_facts
+) -> None:
+    _enable_dub(fake_ctx)
+    blank = {**_DUB_LINE_1, "text_vi": "   "}
+    out = await run_rv_split(fake_ctx, monkeypatch, [_dub_unit(_DUB_LINE_0, blank)])
+    assert out.problem is not None
+    assert "text_vi" in said(out)
+
+
+async def test_split_warns_but_keeps_dub_lines_that_exceed_the_unit_duration(
+    fake_ctx: ToolHarness, monkeypatch, video_request_facts
+) -> None:
+    _enable_dub(fake_ctx)
+    long_line = {**_DUB_LINE_0, "text_vi": " ".join(["từ"] * 40)}
+    out = await run_rv_split(fake_ctx, monkeypatch, [_dub_unit(long_line, _DUB_LINE_1)])
+    assert out.problem is None, out
+    text = said(out)
+    assert "越南语念白" in text
+    assert "unit E1U01：" in text
+
+
+def test_formal_units_flatten_into_the_draft_shape_with_slim_dub_lines() -> None:
+    """正式 unit 转可编辑草稿时，配音行只留 Agent 可改的四个字段，source_text 在晋升时重新派生。"""
+    from server.draft_workflow import _flatten_reference_script_plan_units
+
+    flat = _flatten_reference_script_plan_units(
+        [
+            {
+                "unit_id": "E1U01",
+                "text": _DUB_TEXT,
+                "duration_seconds": 8,
+                "source_text": _RV_NOVEL,
+                "dub_lines": [{**_DUB_LINE_0, "source_text": "我来了。", "start_seconds": 1.5}],
+            },
+            {"unit_id": "E1U02", "text": "无台词", "duration_seconds": 4, "source_text": _RV_NOVEL},
+        ]
+    )
+
+    assert flat[0]["dub_lines"] == [_DUB_LINE_0]
+    assert "dub_lines" not in flat[1]

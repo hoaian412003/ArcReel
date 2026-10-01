@@ -6,6 +6,7 @@ import { useWarnUnsaved } from "@/hooks/useWarnUnsaved";
 import { API } from "@/api";
 import { ProviderIcon } from "@/components/ui/ProviderIcon";
 import { CredentialList } from "@/components/pages/CredentialList";
+import { VieneuServicePanel } from "@/components/pages/settings/VieneuServicePanel";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, GHOST_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
 import { FieldLabel } from "@/components/ui/FieldLabel";
 import type { ProviderConfigDetail, ProviderField } from "@/types";
@@ -443,6 +444,9 @@ export function ProviderDetail({ providerId, onSaved }: Props) {
             ))}
         </div>
       )}
+
+      {/* 本地语音服务：启停与运行设置 */}
+      {providerId === "vieneu" && <VieneuServicePanel />}
 
       {/* Credentials */}
       <CredentialList

@@ -81,6 +81,7 @@ export interface ReferenceVideoCanvasProps {
   requestOptions?: ReferenceRequestOptions;
 }
 
+const EMPTY_CHECKED_IDS: readonly string[] = [];
 const EMPTY_UNITS: readonly ReferenceVideoUnit[] = Object.freeze([]);
 const EMPTY_CAPABILITIES: ReferenceUnitCapabilityMap = Object.freeze({});
 
@@ -193,6 +194,12 @@ export function ReferenceVideoCanvas({
       (s) => s.unitCapabilitiesByEpisode[referenceVideoCacheKey(projectName, episode)],
     ) ?? EMPTY_CAPABILITIES;
   const selectedUnitId = useReferenceVideoStore((s) => s.selectedUnitId);
+  const checkedUnitIds =
+    useReferenceVideoStore(
+      (s) => s.checkedUnitIdsByEpisode[referenceVideoCacheKey(projectName, episode)],
+    ) ?? EMPTY_CHECKED_IDS;
+  const toggleCheckedInStore = useReferenceVideoStore((s) => s.toggleChecked);
+  const setCheckedInStore = useReferenceVideoStore((s) => s.setChecked);
   const error = useReferenceVideoStore((s) => s.error);
   const loading = useReferenceVideoStore((s) => s.loading);
   const project = useProjectsStore((s) => s.currentProjectData);
@@ -571,9 +578,20 @@ export function ReferenceVideoCanvas({
   // 批量生成的作用对象：全部尚无成片的 unit（含 needs_replan、在途、失败重试）。按钮禁用须与
   // 它同一口径——只看当前选中 unit 是否在跑、与作用对象无关的判定会脱节：选中项空闲时按钮会在
   // 没有任何待生成 unit 的情况下仍可点击，选中项在跑时又会挡住其余 unit 的批量生成。
-  const batchTargets = useMemo(
-    () => units.filter((u) => statusMap[u.unit_id] !== "ready"),
-    [units, statusMap],
+  // 有勾选时只处理被勾选的 unit，无勾选回落到全部待生成 unit。
+  const batchTargets = useMemo(() => {
+    const pending = units.filter((u) => statusMap[u.unit_id] !== "ready");
+    if (checkedUnitIds.length === 0) return pending;
+    const checked = new Set(checkedUnitIds);
+    return pending.filter((u) => checked.has(u.unit_id));
+  }, [units, statusMap, checkedUnitIds]);
+  const onToggleChecked = useCallback(
+    (unitId: string) => toggleCheckedInStore(projectName, episode, unitId),
+    [toggleCheckedInStore, projectName, episode],
+  );
+  const onSetChecked = useCallback(
+    (unitIds: string[]) => setCheckedInStore(projectName, episode, unitIds),
+    [setCheckedInStore, projectName, episode],
   );
   const batchDurationEndpointFixed = batchTargets.some(
     (unit) => unitCapabilities[unit.unit_id]?.duration_endpoint_fixed ?? false,
@@ -1001,7 +1019,11 @@ export function ReferenceVideoCanvas({
               className="focus-ring inline-flex items-center gap-1.5 rounded-md border border-[var(--color-hairline)] bg-[oklch(0.22_0.011_265_/_0.5)] px-2.5 py-1 text-[11.5px] text-[var(--color-text-2)] transition-colors hover:bg-[oklch(0.26_0.013_265_/_0.7)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{t("reference_batch_generate")}</span>
+              <span>
+                {checkedUnitIds.length > 0
+                  ? t("reference_batch_generate_checked", { count: checkedUnitIds.length })
+                  : t("reference_batch_generate")}
+              </span>
             </button>
           </>
         )}
@@ -1052,6 +1074,9 @@ export function ReferenceVideoCanvas({
                 onAdd={onAdd}
                 dirtyMap={dirtyMap}
                 statusMap={statusMap}
+                checkedIds={checkedUnitIds}
+                onToggleChecked={onToggleChecked}
+                onSetChecked={onSetChecked}
               />
             ) : (
               <UnitRail
@@ -1463,6 +1488,9 @@ export function ReferenceVideoCanvas({
                   onAdd={onAdd}
                   dirtyMap={dirtyMap}
                   statusMap={statusMap}
+                  checkedIds={checkedUnitIds}
+                  onToggleChecked={onToggleChecked}
+                  onSetChecked={onSetChecked}
                 />
               </div>
             </>

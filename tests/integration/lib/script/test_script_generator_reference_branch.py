@@ -1613,3 +1613,42 @@ async def test_default_profile_drops_a_stale_h3_payload(reference_project: Path)
     gen = ScriptGenerator(reference_project, generator=_fake_prompt_authoring_generator(PROMPT_AUTHORING_UNIT_TEXT))
     await gen.generate(episode=1)
     assert "h3_prompt" not in _formal_units(reference_project)["E1U01"]
+
+
+_DUB_LINE = {
+    "index": 0,
+    "speaker": None,
+    "gender": "male",
+    "source_text": "夜深了。",
+    "text_vi": "Đêm đã khuya.",
+}
+
+
+@pytest.mark.asyncio
+async def test_dub_lines_survive_plan_confirmation_and_prompt_authoring(tmp_path: Path):
+    """脚本规划里的配音行经内容确认进入正式剧本，之后提示词编写按 id 合并视觉层时原样保留。"""
+    project_dir = _write_reference_project(tmp_path, video_backend="vidu/vidu2.0")
+    unit = {**SCRIPT_PLAN_UNIT, "text": "@[酒馆] 夜景。\n{夜深了。}", "dub_lines": [_DUB_LINE]}
+    _write_script_plan(project_dir, _json.dumps({"units": [unit]}, ensure_ascii=False))
+
+    await _materialize(ScriptGenerator(project_dir))
+
+    confirmed = _formal_units(project_dir)["E1U01"]
+    assert confirmed["dub_lines"] == [{**_DUB_LINE, "start_seconds": None}]
+
+    authored_text = "镜头1：中景，平视。@[酒馆] 夜景，灯火稀疏。\n{夜深了。}"
+    generator = _fake_prompt_authoring_generator(authored_text)
+    await ScriptGenerator(project_dir, generator=generator).generate(episode=1)
+
+    authored = _formal_units(project_dir)["E1U01"]
+    assert authored["text"] == authored_text
+    assert authored["dub_lines"] == confirmed["dub_lines"]
+
+
+@pytest.mark.asyncio
+async def test_plan_without_dub_lines_confirms_to_units_without_the_key(tmp_path: Path):
+    project_dir = _write_reference_project(tmp_path, video_backend="vidu/vidu2.0")
+
+    await _materialize(ScriptGenerator(project_dir))
+
+    assert "dub_lines" not in _formal_units(project_dir)["E1U01"]

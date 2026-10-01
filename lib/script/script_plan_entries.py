@@ -49,7 +49,7 @@ PLAN_VARIANTS: dict[str, ScriptPlanVariant] = {
         skeleton_kind="video_units",
         plan_items_key="units",
         draft_model=ReferenceScriptPlanDraft,
-        script_fields=("unit_id", "text", "duration_seconds", "source_text"),
+        script_fields=("unit_id", "text", "duration_seconds", "source_text", "dub_lines"),
     ),
 }
 
@@ -73,13 +73,18 @@ def plan_entry_content(kind: ScriptPlanKind, entry: Mapping[str, object]) -> dic
     """脚本规划条目 → 剧本条目的内容层（不含视觉层）。
 
     drama / narration 整条透传（drama 的 ``scene_description`` 随之进入正式脚本，作为提示词编写的
-    视觉基底），参考生视频只取 ``unit_id`` / ``text`` / ``duration_seconds`` / ``source_text``。返回新
+    视觉基底），参考生视频只取 ``unit_id`` / ``text`` / ``duration_seconds`` / ``source_text`` / ``dub_lines``（非空时）。返回新
     dict，不就地修改入参。
     """
 
     variant = plan_variant(kind)
     if variant.script_fields is not None:
-        return {field: entry[field] for field in variant.script_fields if field in entry}
+        # dub_lines 为空（未启用配音）时不写入剧本条目，保持存量项目的落盘形状不变。
+        return {
+            field: entry[field]
+            for field in variant.script_fields
+            if field in entry and not (field == "dub_lines" and not entry[field])
+        }
     return dict(entry)
 
 

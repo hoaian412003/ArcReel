@@ -14,11 +14,28 @@ export interface UnitListProps {
   /** Optional per-unit derived status for color/label. Falls back to
    *  `video_clip ? 'ready' : 'pending'` based on persisted assets. */
   statusMap?: Record<string, UnitStatus>;
+  /** 被勾选的 unit id；与 onToggleChecked / onSetChecked 同时提供时才渲染勾选框。 */
+  checkedIds?: readonly string[];
+  onToggleChecked?: (unitId: string) => void;
+  /** 全选 / 清空：传入完整的新勾选集合。 */
+  onSetChecked?: (unitIds: string[]) => void;
 }
 
-export function UnitList({ units, selectedId, onSelect, onAdd, dirtyMap, statusMap }: UnitListProps) {
+export function UnitList({
+  units,
+  selectedId,
+  onSelect,
+  onAdd,
+  dirtyMap,
+  statusMap,
+  checkedIds,
+  onToggleChecked,
+  onSetChecked,
+}: UnitListProps) {
   const { t } = useTranslation("dashboard");
   const [query, setQuery] = useState("");
+  const checkable = checkedIds !== undefined && !!onToggleChecked && !!onSetChecked;
+  const checkedSet = useMemo(() => new Set(checkedIds ?? []), [checkedIds]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -62,6 +79,30 @@ export function UnitList({ units, selectedId, onSelect, onAdd, dirtyMap, statusM
           />
         </label>
       </div>
+
+      {checkable && units.length > 0 && (
+        <div className="flex items-center gap-2 px-3 pb-2">
+          <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] text-[var(--color-text-3)]">
+            <input
+              type="checkbox"
+              checked={checkedSet.size > 0 && checkedSet.size === units.length}
+              ref={(el) => {
+                if (el) el.indeterminate = checkedSet.size > 0 && checkedSet.size < units.length;
+              }}
+              onChange={(e) => onSetChecked(e.target.checked ? units.map((u) => u.unit_id) : [])}
+              className="focus-ring h-3.5 w-3.5 accent-[var(--color-accent)]"
+              aria-label={t("reference_unit_check_all")}
+            />
+            {t("reference_unit_check_all")}
+          </label>
+          <span className="flex-1" />
+          {checkedSet.size > 0 && (
+            <span className="font-mono text-[10px] tabular-nums text-[var(--color-text-4)]">
+              {t("reference_unit_checked_count", { count: checkedSet.size })}
+            </span>
+          )}
+        </div>
+      )}
 
       {units.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-6 text-sm text-[var(--color-text-4)]">
@@ -108,6 +149,17 @@ export function UnitList({ units, selectedId, onSelect, onAdd, dirtyMap, statusM
                   />
                 )}
                 <div className="mb-1.5 flex items-center gap-1.5">
+                  {checkable && (
+                    <input
+                      type="checkbox"
+                      checked={checkedSet.has(u.unit_id)}
+                      onChange={() => onToggleChecked(u.unit_id)}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      className="focus-ring h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--color-accent)]"
+                      aria-label={t("reference_unit_check", { id: u.unit_id })}
+                    />
+                  )}
                   <span
                     className={`rounded px-1.5 py-0.5 font-mono text-[11px] font-bold tracking-wider ${
                       selected

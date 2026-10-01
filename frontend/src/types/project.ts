@@ -209,6 +209,13 @@ export interface ProjectData {
   audio_backend?: string | null;
   narration_voice?: string | null;
   narration_speed?: number | null;
+  /** 越南语配音：目标语言（目前仅 "vi"），缺省即未启用。 */
+  dub_target_language?: "vi" | null;
+  /** 画外音配音性别，缺省 male。 */
+  narrator_gender?: "male" | "female" | null;
+  /** 按性别指定的配音音色 id，缺省取音色目录里该性别的第一个。 */
+  dub_voice_male?: string | null;
+  dub_voice_female?: string | null;
   /** 源文语言码（zh / en / vi），由内容分析写入；界面只读，用于口播语速的单位名词 */
   source_language?: string | null;
   /** 口播语速估算（阅读单位 / 秒）项目级覆盖；留空即按项目语言的默认速度估算 */

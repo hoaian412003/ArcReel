@@ -164,7 +164,8 @@ class ConfigService:
         for name, meta in PROVIDER_REGISTRY.items():
             has_active = name in active_creds
             configured = all_configured.get(name, [])
-            if has_active:
+            # 无必填 key 的本地供应商（如 vieneu）无需凭证即就绪。
+            if has_active or not meta.required_keys:
                 status: Literal["ready", "unconfigured", "error"] = "ready"
                 missing: list[str] = []
             else:

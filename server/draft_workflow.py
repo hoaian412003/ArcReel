@@ -264,6 +264,7 @@ async def revalidate_reference_script_plan_draft(
         project,
         episode=episode,
         voice=split_caps.voice,
+        dub_units=flat_units,
     )
     return ReferenceDraftRevalidation(
         violations,
@@ -537,13 +538,21 @@ def _flatten_reference_script_plan_units(units: list[Any]) -> list[dict[str, Any
             flat.append({"duration_seconds": None, "source_text": "", "text": ""})
             continue
         text = unit.get("text")
-        flat.append(
-            {
-                "duration_seconds": unit.get("duration_seconds"),
-                "source_text": unit.get("source_text", ""),
-                "text": text if isinstance(text, str) else "",
-            }
-        )
+        flat_unit: dict[str, Any] = {
+            "duration_seconds": unit.get("duration_seconds"),
+            "source_text": unit.get("source_text", ""),
+            "text": text if isinstance(text, str) else "",
+        }
+        # 配音行去掉服务端派生的 source_text / start_seconds，只留 Agent 可改的四个字段。
+        dub_lines = unit.get("dub_lines")
+        if isinstance(dub_lines, list) and dub_lines:
+            flat_unit["dub_lines"] = [
+                {key: line[key] for key in ("index", "speaker", "gender", "text_vi") if key in line}
+                if isinstance(line, dict)
+                else line
+                for line in dub_lines
+            ]
+        flat.append(flat_unit)
     return flat
 
 

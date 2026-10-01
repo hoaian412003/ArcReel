@@ -1694,7 +1694,8 @@ class ConfigResolver:
         ready = {s.name for s in statuses if s.status == "ready"}
 
         for provider_id, meta in PROVIDER_REGISTRY.items():
-            if provider_id not in ready:
+            # 无必填 key 的本地供应商（如 vieneu）恒为 ready，但只在被显式选择时使用，不参与自动推断。
+            if provider_id not in ready or not meta.required_keys:
                 continue
             for model_id, model_info in meta.models.items():
                 if model_info.media_type == media_type and model_info.default:

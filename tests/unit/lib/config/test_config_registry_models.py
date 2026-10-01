@@ -111,9 +111,9 @@ class TestProviderMeta:
 
 
 class TestProviderRegistry:
-    # vidu / runninghub 仅图片或视频，kling 为仅身份注册（无 models），均跳过文本相关断言
+    # vidu / runninghub 仅图片或视频，vieneu 仅音频，kling 为仅身份注册（无 models），均跳过文本相关断言
     _TEXT_PROVIDERS: ClassVar[list[str]] = [
-        pid for pid in PROVIDER_REGISTRY if pid not in ("vidu", "kling", "runninghub")
+        pid for pid in PROVIDER_REGISTRY if pid not in ("vidu", "kling", "runninghub", "vieneu")
     ]
 
     def test_all_providers_have_text_models(self):

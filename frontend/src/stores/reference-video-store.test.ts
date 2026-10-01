@@ -36,6 +36,7 @@ describe("reference-video-store", () => {
       unitsByEpisode: {},
       unitCapabilitiesByEpisode: {},
       selectedUnitId: null,
+      checkedUnitIdsByEpisode: {},
       loading: false,
       error: null,
     });
@@ -236,5 +237,34 @@ describe("reference-video-store", () => {
     const state = useReferenceVideoStore.getState();
     expect(state.unitsByEpisode["projA::1"].map((u) => u.unit_id)).toEqual(["A-E1-U1"]);
     expect(state.unitsByEpisode["projB::1"].map((u) => u.unit_id)).toEqual(["B-E1-U1"]);
+  });
+  it("勾选按 project+episode 隔离，toggle/set 互不串扰", () => {
+    const { toggleChecked, setChecked } = useReferenceVideoStore.getState();
+    toggleChecked("projA", 1, "U1");
+    toggleChecked("projA", 1, "U2");
+    toggleChecked("projA", 1, "U1");
+    setChecked("projB", 1, ["U9", "U9"]);
+
+    const state = useReferenceVideoStore.getState();
+    expect(state.checkedUnitIdsByEpisode["projA::1"]).toEqual(["U2"]);
+    expect(state.checkedUnitIdsByEpisode["projB::1"]).toEqual(["U9"]);
+  });
+
+  it("loadUnits 与 deleteUnit 剔除已不存在的勾选", async () => {
+    vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
+      units: [mkUnit("U1"), mkUnit("U2")],
+      unit_capabilities: {},
+    });
+    useReferenceVideoStore.getState().setChecked("proj", 1, ["U1", "U2", "GONE"]);
+    await act(async () => {
+      await useReferenceVideoStore.getState().loadUnits("proj", 1);
+    });
+    expect(useReferenceVideoStore.getState().checkedUnitIdsByEpisode["proj::1"]).toEqual(["U1", "U2"]);
+
+    vi.spyOn(API, "deleteReferenceVideoUnit").mockResolvedValue(undefined as never);
+    await act(async () => {
+      await useReferenceVideoStore.getState().deleteUnit("proj", 1, "U1");
+    });
+    expect(useReferenceVideoStore.getState().checkedUnitIdsByEpisode["proj::1"]).toEqual(["U2"]);
   });
 });

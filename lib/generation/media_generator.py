@@ -686,6 +686,7 @@ class MediaGenerator:
         before_submit: Callable[[], Awaitable[None]] | None = None,
         before_commit: Callable[[Path], Awaitable[None]] | None = None,
         commit_staged: Callable[[Path, Path], int | PaidVersionCommit] | None = None,
+        language: str | None = None,
         **version_metadata,
     ) -> tuple[Path, int]:
         """
@@ -699,6 +700,7 @@ class MediaGenerator:
             voice: 音色（如 Cherry）
             language_type: 语种，默认 Chinese
             speed: 语速预留（同步模型忽略）
+            language: 可选语种提示（如 "vi"），仅按语种切换的后端消费，其余后端忽略
             task_id: 本次合成所属的生成任务；记账据此回指任务，直接调用（无队列任务）留空
             before_submit: 首次 provider 提交紧前执行一次的异步准入钩子
             **version_metadata: 额外元数据
@@ -752,6 +754,7 @@ class MediaGenerator:
                     voice=voice,
                     language_type=language_type,
                     speed=speed,
+                    language=language,
                 )
                 if before_submit is not None:
                     await before_submit()

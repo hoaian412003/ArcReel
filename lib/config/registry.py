@@ -288,6 +288,11 @@ def _dashscope_audio_pricing(model_id: str, per_10k_chars: float) -> PerCharacte
     return PerCharacter(rates={model_id: per_10k_chars}, default_model=model_id, currency="CNY")
 
 
+# VieNeu 本地 TTS 零成本：仍走 PerCharacter 以保持账本与费用聚合的既有路径（金额恒为 0）。
+def _free_audio_pricing(model_id: str) -> PerCharacter:
+    return PerCharacter(rates={model_id: 0.0}, default_model=model_id, currency="USD")
+
+
 # MiniMax（海螺）文本费率（元/百万 token），标准在线推理价；缓存折扣首批不建模。
 def _minimax_text_pricing(model_id: str, input_rate: float, output_rate: float) -> PerToken:
     return PerToken(
@@ -1171,6 +1176,26 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             ),
         },
         default_base_url=DASHSCOPE_BASE_URL,
+    ),
+    # 本地越南语 TTS（VieNeu-TTS v3 Turbo）：无需 API Key（required_keys 为空即视为就绪）。
+    # base_url 留空 = 使用 ArcReel 托管的本地服务（端口等见系统设置 vieneu_*）；填写则直连该外部服务。
+    # 故意不设 default_base_url，否则无法区分「用户显式填写」与「默认值」。
+    "vieneu": ProviderMeta(
+        display_name="VieNeu-TTS (Local)",
+        description="本地越南语语音合成（VieNeu-TTS v3 Turbo），无需 API Key，首次配音时自动启动本地服务。",
+        required_keys=[],
+        optional_keys=["base_url", "audio_max_workers"],
+        secret_keys=[],
+        models={
+            "vieneu-tts-v3-turbo": ModelInfo(
+                display_name="VieNeu-TTS v3 Turbo",
+                media_type="audio",
+                capabilities=["text_to_speech"],
+                default=True,
+                pricing=_free_audio_pricing("vieneu-tts-v3-turbo"),
+            ),
+        },
+        default_concurrency={"audio": 1},
     ),
     "minimax": ProviderMeta(
         display_name="MiniMax",

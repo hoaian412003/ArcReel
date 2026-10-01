@@ -131,6 +131,29 @@ class TestCharactersRouter:
             assert delete_resp.status_code == 200
             assert "已删除" in delete_resp.json()["message"]
 
+    def test_gender_is_stored_on_add_and_update_and_restricted_to_male_female(self, monkeypatch):
+        fake_pm = _FakePM()
+        with _client(monkeypatch, fake_pm) as client:
+            added = client.post(
+                "/api/v1/projects/demo/characters", json={"name": "Bob", "description": "x", "gender": "male"}
+            )
+            assert added.status_code == 200
+            assert added.json()["character"]["gender"] == "male"
+
+            updated = client.patch("/api/v1/projects/demo/characters/Alice", json={"gender": "female"})
+            assert updated.status_code == 200
+            assert fake_pm.projects["demo"]["characters"]["Alice"]["gender"] == "female"
+
+            cleared = client.patch("/api/v1/projects/demo/characters/Alice", json={"gender": ""})
+            assert cleared.status_code == 200
+
+            bad_patch = client.patch("/api/v1/projects/demo/characters/Alice", json={"gender": "other"})
+            bad_add = client.post(
+                "/api/v1/projects/demo/characters", json={"name": "Eve", "description": "x", "gender": "other"}
+            )
+            assert bad_patch.status_code == 422
+            assert bad_add.status_code == 422
+
     def test_error_mapping(self, monkeypatch):
         fake_pm = _FakePM()
         with _client(monkeypatch, fake_pm) as client:

@@ -409,6 +409,7 @@ _SIMPLE_MEDIA_PAIRS: list[tuple[str, str]] = [
     *((p, "image") for p in _SIMPLE_IMAGE_VIDEO_PROVIDERS),
     *((p, "video") for p in _SIMPLE_IMAGE_VIDEO_PROVIDERS if p != "dashscope"),
     ("dashscope", "audio"),
+    ("vieneu", "audio"),  # 本地服务，无 api_key；base_url 仅在用户显式填写时传入（空 = 托管服务）
 ]
 
 # gemini 两个 provider_id → backend_type，每个 × image/video 登记一行。

@@ -139,6 +139,7 @@ from lib.script.source_loader import (
     UnsupportedFormatError,
 )
 from lib.speech.character_voice import VALID_CHARACTER_VOICE_BINDINGS
+from lib.speech.dub_settings import SUPPORTED_DUB_LANGUAGES, VALID_DUB_GENDERS
 from lib.speech.narration_delivery import TtsSettingsResolver
 from lib.speech.speech_composition import SpeechProblemCode
 from lib.workflow.workflow_plan import WorkflowPlan, WorkflowPlanRequest
@@ -169,6 +170,7 @@ from server.text_generation import (
     TextGenerationResult,
     generate_drama_script_plan,
     generate_narration_script_plan,
+    generate_reference_dub_lines_task,
     generate_reference_script_plan,
     prompt_authoring_preflight,
 )
@@ -543,6 +545,8 @@ TEXT_EPISODE_SCRIPT_TASK_TYPE = _TEXT_EPISODE_SCRIPT
 _TEXT_DRAMA_SCRIPT_PLAN = "text_drama_script_plan"
 _TEXT_NARRATION_SCRIPT_PLAN = "text_narration_script_plan"
 _TEXT_REFERENCE_SCRIPT_PLAN = "text_reference_script_plan"
+#: WebUI 的「生成 / 补全越南语配音台词」文本任务类型。
+TEXT_REFERENCE_DUB_LINES_TASK_TYPE = "text_reference_dub_lines"
 _TEXT_EPISODE_PLAN = "text_episode_plan"
 #: 嵌入式宿主在本进程内提交、并在本进程内等待的文本任务：worker 沿用提交方的数据根与服务。
 #: 只在内存里，不进任务载荷；没有登记的任务（MCP 提交、重启后的存量任务）按当前配置解析。
@@ -1810,6 +1814,10 @@ PROJECT_SETTINGS = (
     "narration_speed",
     "character_voice_binding",
     "video_prompt_profile",
+    "dub_target_language",
+    "narrator_gender",
+    "dub_voice_male",
+    "dub_voice_female",
 )
 PROJECT_OVERVIEW_FIELDS = ("synopsis", "genre", "theme", "world_setting")
 EPISODE_META_FIELDS = ("title",)
@@ -2204,6 +2212,7 @@ async def execute_queued_text_task(
             _TEXT_DRAMA_SCRIPT_PLAN: ("generate_script_plan", generate_drama_script_plan),
             _TEXT_NARRATION_SCRIPT_PLAN: ("generate_script_plan", generate_narration_script_plan),
             _TEXT_REFERENCE_SCRIPT_PLAN: ("generate_script_plan", generate_reference_script_plan),
+            TEXT_REFERENCE_DUB_LINES_TASK_TYPE: ("generate_dub_lines", generate_reference_dub_lines_task),
         }
         try:
             operation, handler = handlers[task_type]
@@ -2348,9 +2357,17 @@ def _coerce_setting_value(key: str, value: Any) -> Any:
                 f"video_prompt_profile 必须是 {sorted(VALID_VIDEO_PROMPT_PROFILES)} 之一或 null,收到 {value!r}"
             )
         return value
-    if key == "narration_voice":
+    if key == "dub_target_language":
+        if value is not None and (not isinstance(value, str) or value not in SUPPORTED_DUB_LANGUAGES):
+            raise ValueError(f"dub_target_language 必须是 {list(SUPPORTED_DUB_LANGUAGES)} 之一或 null,收到 {value!r}")
+        return value
+    if key == "narrator_gender":
+        if value is not None and (not isinstance(value, str) or value not in VALID_DUB_GENDERS):
+            raise ValueError(f"narrator_gender 必须是 {list(VALID_DUB_GENDERS)} 之一或 null,收到 {value!r}")
+        return value
+    if key in ("narration_voice", "dub_voice_male", "dub_voice_female"):
         if value is not None and (not isinstance(value, str) or not value.strip()):
-            raise ValueError(f"narration_voice 必须是非空字符串或 null,收到 {value!r}")
+            raise ValueError(f"{key} 必须是非空字符串或 null,收到 {value!r}")
         return value
     if key == "narration_speed":
         if value is None:

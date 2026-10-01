@@ -3,6 +3,7 @@
 import pytest
 
 from lib.prompts.prompt_builders_reference import (
+    build_reference_dub_lines_prompt,
     build_reference_units_split_prompt,
     build_reference_video_prompt,
     render_reference_units_for_prompt_authoring,
@@ -368,3 +369,51 @@ def test_reference_prompts_keep_every_empty_asset_block():
     for prompt in (_split_prompt(), _prompt_authoring_prompt(characters={})):
         for tag in ("characters", "scenes", "props"):
             assert f"<{tag}>\n（暂无）\n</{tag}>" in prompt
+
+
+def test_split_prompt_has_no_dubbing_section_by_default():
+    """未启用配音的项目提示词不出现配音要求。"""
+    prompt = _split_prompt(characters={"李明": {"description": "少年", "gender": "male"}})
+    assert "dub_lines" not in prompt
+    assert "越南语" not in prompt
+
+
+def test_split_prompt_dubbing_section_lists_character_genders_and_budget():
+    prompt = _split_prompt(
+        dub_target_language="vi",
+        narrator_gender="female",
+        characters={"李明": {"description": "少年", "gender": "male"}, "路人": {"description": "x"}},
+    )
+    assert "dub_lines" in prompt
+    assert "李明：male" in prompt
+    assert "路人：未登记" in prompt
+    assert "画外音一律取 `female`" in prompt
+    # 词数预算与 lib.speech.speech_rate 的 vi 语速同一把尺
+    assert "约 2.5 词/秒" in prompt
+
+
+def test_split_prompt_dubbing_falls_back_to_male_narrator_for_bad_values():
+    assert "画外音一律取 `male`" in _split_prompt(dub_target_language="vi", narrator_gender="robot")
+
+
+def test_dub_lines_backfill_prompt_lists_utterances_with_index_and_budget():
+    prompt = build_reference_dub_lines_prompt(
+        units=[
+            {
+                "unit_id": "E1U01",
+                "duration_seconds": 8,
+                "text": "@[李明]{你好}",
+                "utterances": [{"index": 0, "speaker": "李明", "text": "你好"}],
+            },
+            {"unit_id": "E1U02", "duration_seconds": 4, "text": "无台词", "utterances": []},
+        ],
+        characters={"李明": {"description": "少年", "gender": "female"}},
+        narrator_gender="female",
+        synopsis="少年入江湖",
+    )
+    assert "## E1U01（时长 8 秒，词数预算约 20）" in prompt
+    assert "- [0] 李明：你好" in prompt
+    assert "李明（female）" in prompt
+    assert "## E1U02" in prompt
+    assert "（无台词与画外音）" in prompt
+    assert "少年入江湖" in prompt

@@ -13,6 +13,7 @@ MESSAGES: dict[str, str] = {
     "provider_name_minimax": "MiniMax",
     "provider_name_kling": "可灵 Kling",
     "provider_name_agnes": "Agnes",
+    "provider_name_vieneu": "VieNeu-TTS（本地）",
     "provider_name_runninghub": "RunningHub",
     # Provider descriptions
     "provider_desc_gemini-aistudio": "Google AI Studio 提供 Gemini 系列模型，支持图片和视频生成，适合快速原型和个人项目。",
@@ -27,6 +28,7 @@ MESSAGES: dict[str, str] = {
     "provider_desc_kling": "快手可灵 Kling 视频与图像生成平台。API Key 鉴权适用于全部模型；Access Key + Secret Key（JWT）仅适用于 3.0 及更早模型，二者二选一，同时填写时 API Key 优先。",
     "provider_desc_agnes": "Agnes 多模态平台（OpenAI 风格），使用 Bearer API Key 鉴权；当前支持图像 / 文本 / 视频生成。",
     "provider_desc_runninghub": "RunningHub AI Apps，支持托管视频工作流以及文生图、图生图。",
+    "provider_desc_vieneu": "VieNeu-TTS v3 Turbo 本地越南语语音合成，无需 API Key，首次配音时自动启动本地服务。",
     # Model display names（registry 里非拉丁写法的条目；纯品牌名条目不入表，由
     # translate_or 回退到 lib/config/registry.py 的 display_name）
     "model_name_ark_doubao-seed-2-0-pro-260215": "豆包 Seed 2.0 Pro",

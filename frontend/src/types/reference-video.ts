@@ -92,6 +92,64 @@ export interface ReferenceVideoUnit {
   source_text?: string;
   /** H3 提示词档下的六段载荷；其它提示词档不带。 */
   h3_prompt?: H3PromptSections & { source_text_hash?: string };
+  /** 越南语配音台词；项目未启用配音或尚未生成时缺席。 */
+  dub_lines?: DubLine[];
+}
+
+export type DubGender = "male" | "female";
+
+/** 一条越南语配音台词，与单元正文按出现顺序派生的第 `index` 条发声一一对应。 */
+export interface DubLine {
+  index: number;
+  speaker: string | null;
+  gender: DubGender;
+  /** 所对应发声的原文；正文改动后与现行发声不符即过期。 */
+  source_text: string;
+  text_vi: string;
+  /** 人工覆盖的开始时间（相对单元起点，秒）；null 即顺序排布。 */
+  start_seconds: number | null;
+  audio_path?: string | null;
+  audio_duration_seconds?: number | null;
+  audio_voice?: string | null;
+  audio_text?: string | null;
+  stale?: boolean;
+}
+
+/** 保存配音台词时提交的一行。 */
+export interface DubLinePatch {
+  index: number;
+  speaker: string | null;
+  gender: DubGender;
+  text_vi: string;
+  start_seconds: number | null;
+}
+
+/** 配音时间线上的一行：生效开始时间与时长已按语速或真实音频排布好。 */
+export interface UnitDubLine {
+  index: number;
+  speaker: string | null;
+  gender: DubGender;
+  text_vi: string;
+  source_text: string;
+  start_seconds: number;
+  start_override: number | null;
+  duration_seconds: number;
+  /** 时长是按语速估算的，尚未合成真实音频。 */
+  estimated: boolean;
+  /** 仍对应现行台词的已合成音频；未合成或台词已改为 null。 */
+  audio_path: string | null;
+  stale: boolean;
+}
+
+export interface UnitDub {
+  unit_id: string;
+  duration_seconds: number;
+  /** 配音末行结束时刻超出单元时长的秒数。 */
+  overflow_seconds: number;
+  lines: UnitDubLine[];
+  video_path: string | null;
+  /** 配音预览与成片里原视频音量（0–1）。 */
+  original_volume: number;
 }
 
 export interface ReferenceRequestOptions {

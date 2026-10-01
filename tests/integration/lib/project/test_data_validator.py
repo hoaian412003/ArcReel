@@ -1998,3 +1998,89 @@ class TestPendingPromptValidation:
         result = DataValidator(projects_dir=str(tmp_path / "projects")).validate_episode("demo", "episode_1.json")
 
         assert not any("image_prompt" in error or "video_prompt" in error for error in result.errors)
+
+
+class TestReferenceUnitDubLines:
+    """参考生视频 unit 的越南语配音台词与项目 / 角色配音设置校验。"""
+
+    @staticmethod
+    def _unit(**overrides) -> dict:
+        unit = {
+            "unit_id": "E1U1",
+            "text": "@[主播]：{大家好}\n@[主播]：{欢迎光临}",
+            "duration_seconds": 8,
+            "generated_assets": {"status": "pending"},
+        }
+        unit.update(overrides)
+        return unit
+
+    @staticmethod
+    def _line(index: int, text_vi: str = "Xin chào mọi người.") -> dict:
+        return {"index": index, "speaker": "主播", "gender": "female", "source_text": "大家好", "text_vi": text_vi}
+
+    def _validate(self, tmp_path, units, **project_overrides):
+        project_dir = tmp_path / "projects" / "demo"
+        project = _ad_project_payload(
+            generation_mode="reference_video",
+            products={"速干杯": {"description": "主推商品"}},
+            **project_overrides,
+        )
+        _write_json(project_dir / "project.json", project)
+        _write_json(
+            project_dir / "scripts" / "episode_1.json",
+            {"episode": 1, "title": "速干杯带货", "content_mode": "ad", "video_units": units},
+        )
+        return DataValidator(projects_dir=str(tmp_path / "projects")).validate_episode("demo", "episode_1.json")
+
+    def test_valid_dub_lines_pass_without_warnings(self, tmp_path):
+        result = self._validate(tmp_path, [self._unit(dub_lines=[self._line(0), self._line(1)])])
+        assert result.valid, result.errors
+        assert not any("越南语" in warning for warning in result.warnings)
+
+    @pytest.mark.parametrize(
+        "bad_line",
+        [
+            {"index": 5},  # 越过正文发声范围
+            {"gender": "robot"},
+            {"text_vi": "  "},
+            "not-an-object",
+        ],
+    )
+    def test_malformed_dub_line_is_an_error(self, tmp_path, bad_line):
+        line = bad_line if isinstance(bad_line, str) else {**self._line(0), **bad_line}
+        result = self._validate(tmp_path, [self._unit(dub_lines=[line])])
+        assert not result.valid
+        assert any("dub_lines[0]" in error for error in result.errors)
+
+    def test_dub_lines_must_be_an_array(self, tmp_path):
+        result = self._validate(tmp_path, [self._unit(dub_lines={"index": 0})])
+        assert not result.valid
+        assert any("dub_lines" in error for error in result.errors)
+
+    def test_speech_longer_than_the_unit_only_warns(self, tmp_path):
+        long_line = " ".join(["từ"] * 30)
+        result = self._validate(tmp_path, [self._unit(duration_seconds=4, dub_lines=[self._line(0, long_line)])])
+        assert result.valid, result.errors
+        assert any("越南语" in warning for warning in result.warnings)
+
+    @staticmethod
+    def _validate_project(tmp_path, **overrides):
+        payload = {**_project_payload(), "generation_mode": "reference_video", **overrides}
+        _write_json(tmp_path / "projects" / "demo" / "project.json", payload)
+        return DataValidator(projects_dir=str(tmp_path / "projects")).validate_project("demo")
+
+    def test_project_dub_settings_must_be_known_values(self, tmp_path):
+        ok = self._validate_project(tmp_path, dub_target_language="vi", narrator_gender="female")
+        assert ok.valid, ok.errors
+        result = self._validate_project(tmp_path, dub_target_language="fr", narrator_gender="robot")
+        assert not result.valid
+        assert any("dub_target_language" in error for error in result.errors)
+        assert any("narrator_gender" in error for error in result.errors)
+
+    def test_character_gender_must_be_male_or_female_when_set(self, tmp_path):
+        for gender in ("male", "female", ""):
+            ok = self._validate_project(tmp_path, characters={"主播": {"description": "x", "gender": gender}})
+            assert ok.valid, ok.errors
+        bad = self._validate_project(tmp_path, characters={"主播": {"description": "x", "gender": "other"}})
+        assert not bad.valid
+        assert any("gender" in error for error in bad.errors)

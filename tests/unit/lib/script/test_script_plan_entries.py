@@ -115,6 +115,15 @@ class TestPlanEntryContent:
             "source_text": entry["source_text"],
         }
 
+    def test_reference_video_carries_dub_lines_but_omits_an_empty_list(self) -> None:
+        line = {"index": 0, "speaker": "主角", "gender": "male", "source_text": "来一杯", "text_vi": "Cho tôi một ly."}
+        [with_dub] = plan_entries_from_document(
+            "reference_video", {"units": [reference_plan_entry("E1U01", dub_lines=[line])]}
+        )
+        assert plan_entry_content("reference_video", with_dub)["dub_lines"] == [{**line, "start_seconds": None}]
+        [without_dub] = plan_entries_from_document("reference_video", {"units": [reference_plan_entry("E1U01")]})
+        assert "dub_lines" not in plan_entry_content("reference_video", without_dub)
+
     def test_unknown_plan_kind_fails_loud(self) -> None:
         with pytest.raises(ValueError, match="未知的脚本规划变体"):
             plan_entry_content("ad", {})

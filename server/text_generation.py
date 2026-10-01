@@ -47,7 +47,10 @@ from lib.infra.schema_guards import is_int, is_str
 from lib.infra.text_utils import strip_json_code_fences
 from lib.project.asset_types import BUCKET_KEY, asset_name_comparison_key
 from lib.project.project_manager import ProjectManager, is_reference_video_project
-from lib.prompts.prompt_builders_reference import build_reference_units_split_prompt
+from lib.prompts.prompt_builders_reference import (
+    build_reference_dub_lines_prompt,
+    build_reference_units_split_prompt,
+)
 from lib.prompts.prompt_builders_script import build_narration_split_prompt, build_normalize_prompt
 from lib.references.reference_catalog import ReferenceCatalog, build_reference_catalog
 from lib.script import script_review
@@ -69,6 +72,12 @@ from lib.script.reference_video.draft_validation import (
     validate_source_text_anchor,
     validate_unit_text,
 )
+from lib.script.reference_video.dub_lines import (
+    build_dub_lines_from_drafts,
+    dub_line_violations,
+    dub_lines_need_regeneration,
+    unit_utterances,
+)
 from lib.script.reference_video.script_preview import (
     WARN_REFERENCE_AUDIO_OVERFLOW,
     WARN_SILENT_EPISODE,
@@ -82,13 +91,18 @@ from lib.script.reference_video.script_preview import (
 from lib.script.reference_video.text_parser import extract_mentions
 from lib.script.reference_video.unit_capabilities import hydrate_reference_units
 from lib.script.reference_video.voice_settings import VoiceRenderSettings
+from lib.script.script_batch_edit import ScriptBatchEditCommand, ScriptBatchEditor, script_revision
 from lib.script.script_generator import PromptAuthoringTargetError, ScriptGenerator
 from lib.script.script_models import (
+    DubLine,
+    DubLineDraft,
     NarrationScriptPlanDraft,
+    ReferenceDubLinesBackfill,
     build_drama_normalized_script_model,
     build_reference_units_script_plan_model,
 )
 from lib.script.storyboard_mentions import render_storyboard_mention_warnings, storyboard_mention_warnings
+from lib.speech.dub_settings import project_dub_target_language, project_narrator_gender
 from lib.speech.speech_composition import admit_script_unit
 from lib.speech.speech_rate import project_speech_rate_override
 from server.services.tasks.video_caps import reference_request_facts_lookup, storyboard_request_facts
@@ -853,6 +867,7 @@ def _collect_reference_flat_violations(
     """
     # 台词口播量的语速与 prompt 侧同源：项目级覆盖优先，否则按语言默认。
     speech_rate_override = project_speech_rate_override(project)
+    dub_enabled = project_dub_target_language(project) is not None
     hydrations = hydrate_reference_units(project, project_path, flat_units)
     violations: list[DraftViolation] = []
     for index, (flat, hydration) in enumerate(zip(flat_units, hydrations, strict=True), start=1):
@@ -876,10 +891,42 @@ def _collect_reference_flat_violations(
                     lambda la=label, tx=text, d=duration: validate_dialogue_load(
                         la, tx, d, source_language, speech_rate_override
                     ),
+                    lambda la=label, fu=flat: _validate_reference_dub_lines(la, fu) if dub_enabled else None,
                 ]
             )
         )
     return violations
+
+
+def _flat_dub_line_dicts(flat: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """扁平 unit 里的 ``dub_lines`` 取成 dict 列表；缺失 / 非数组 / 非 dict 元素按空处理。"""
+    raw = flat.get("dub_lines")
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) if isinstance(item, Mapping) else {} for item in raw]
+
+
+def _validate_reference_dub_lines(label: str, flat: Mapping[str, Any]) -> None:
+    """启用配音时：每条台词 / 画外音恰好一行越南语配音，序号对应、译文非空。"""
+    hard, _soft = dub_line_violations(flat["text"], flat["duration_seconds"], _flat_dub_line_dicts(flat))
+    if hard:
+        raise DraftViolation(
+            f"{label} 的越南语配音台词不合规：" + "；".join(hard),
+            code="dub_lines_invalid",
+            label=label,
+        )
+
+
+def _reference_dub_budget_warning_lines(flat_units: Sequence[Mapping[str, Any]], *, episode: int) -> list[str]:
+    """启用配音时：越南语念白超出 unit 时长的软提示，逐 unit 带定位。"""
+    lines: list[str] = []
+    for index, flat in enumerate(flat_units, start=1):
+        dub_lines = _flat_dub_line_dicts(flat)
+        if not dub_lines:
+            continue
+        _hard, soft = dub_line_violations(flat["text"], flat["duration_seconds"], dub_lines)
+        lines.extend(f"{_reference_unit_label(episode, index)}：{message}" for message in soft)
+    return lines
 
 
 def _build_reference_units_from_flat(
@@ -897,17 +944,21 @@ def _build_reference_units_from_flat(
     文本」与「落盘的正文」出自同一次解析。
     """
     units: list[dict] = []
+    dub_enabled = project_dub_target_language(project) is not None
     for index, flat in enumerate(flat_units, start=1):
         unit_id = _reference_unit_id(episode, index)
         validate_unit_text(f"unit {unit_id}", flat["text"], project, max_refs=max_refs)
-        units.append(
-            {
-                "unit_id": unit_id,
-                "text": flat["text"],
-                "duration_seconds": flat["duration_seconds"],
-                "source_text": flat["source_text"],
-            }
-        )
+        unit: dict[str, Any] = {
+            "unit_id": unit_id,
+            "text": flat["text"],
+            "duration_seconds": flat["duration_seconds"],
+            "source_text": flat["source_text"],
+        }
+        # 配音行的 source_text 由服务端按现行发声补全；未启用配音的项目不落盘该键。
+        if dub_enabled and flat.get("dub_lines"):
+            drafts = [DubLineDraft.model_validate(item) for item in _flat_dub_line_dicts(flat)]
+            unit["dub_lines"] = build_dub_lines_from_drafts(flat["text"], drafts)
+        units.append(unit)
     return units
 
 
@@ -979,8 +1030,9 @@ def _reference_soft_violation_lines(
     *,
     episode: int,
     voice: VoiceRenderSettings,
+    dub_units: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[str]:
-    """一份扁平产出的全部软违约（声音降级 + 未引用场景）文本行，拆分与草稿流共用的单一出口。
+    """一份扁平产出的全部软违约（声音降级 + 未引用场景 + 配音超时）文本行，拆分与草稿流共用的单一出口。
 
     软违约不阻断落盘、不进违约报告，但每条呈现路径都要给出同一组结论：拆分回执、晋升回执、
     以及拆分 / 晋升被违约挡下时回给 Agent 的报告。派生须留在本函数内，新增一类软违约才会同时
@@ -989,9 +1041,12 @@ def _reference_soft_violation_lines(
     顺序固定为「声音在前、场景在后」：报告与回执并排比对时，同一份产物在不同路径上给出的
     行序不该抖动。
     """
-    return _reference_voice_warning_lines(unit_texts, project, voice) + _reference_scene_warning_lines(
+    lines = _reference_voice_warning_lines(unit_texts, project, voice) + _reference_scene_warning_lines(
         unit_texts, project, episode=episode
     )
+    if dub_units and project_dub_target_language(project) is not None:
+        lines += _reference_dub_budget_warning_lines(dub_units, episode=episode)
+    return lines
 
 
 #: 晋升被违约挡下时，软违约段的处置说明：草稿仍在场、这些提示不是要修的违约。
@@ -1277,6 +1332,8 @@ async def generate_reference_script_plan(
             episode_target_duration=cast(int | None, prompt_inputs["episode_target_duration"]),
             episode_outline=cast(dict[str, Any] | None, prompt_inputs["episode_outline"]),
             next_episode_outline=cast(dict[str, Any] | None, prompt_inputs["next_episode_outline"]),
+            dub_target_language=cast(str | None, prompt_inputs.get("dub_target_language")),
+            narrator_gender=cast(str, prompt_inputs.get("narrator_gender", "male")),
             instructions=instructions,
         )
 
@@ -1320,7 +1377,9 @@ async def generate_reference_script_plan(
             source_language=project.get("source_language"),
         )
         unit_texts = [flat_unit["text"] for flat_unit in flat_units]
-        soft_violations = _reference_soft_violation_lines(unit_texts, project, episode=episode, voice=split_caps.voice)
+        soft_violations = _reference_soft_violation_lines(
+            unit_texts, project, episode=episode, voice=split_caps.voice, dub_units=flat_units
+        )
         if violations:
             async with ProjectManager.for_project_dir(project_path).async_file_lock(draft_path):
                 _assert_draft_revision(draft_path, draft_baseline)
@@ -1384,6 +1443,162 @@ async def generate_reference_script_plan(
         raise TextGenerationError(_video_facts_failure_text(exc.failure)) from exc
     except Exception as exc:
         raise TextGenerationError(f"generate_script_plan 失败: {exc}") from exc
+
+
+#: 配音回填单次调用处理的 unit 数上限：一批台词连同角色表放进同一个 prompt，批太大既拖慢也稀释预算约束。
+REFERENCE_DUB_CHUNK_SIZE = 10
+
+
+def _dub_backfill_targets(script: Mapping[str, Any], unit_ids: Sequence[str] | None) -> list[str]:
+    """需要回填的 unit id：点名时取点名且有发声的 unit；缺省取全部「缺失 / 过期」且有发声的 unit。"""
+    named = None if unit_ids is None else set(unit_ids)
+    units = [unit for unit in script.get("video_units") or [] if isinstance(unit, dict)]
+    known = {str(unit.get("unit_id")) for unit in units}
+    if named is not None and (unknown := sorted(named - known)):
+        raise TextGenerationError(f"❌ 未找到 unit: {', '.join(unknown)}")
+    targets: list[str] = []
+    for unit in units:
+        unit_id = str(unit.get("unit_id"))
+        text = unit.get("text")
+        if not isinstance(text, str) or not text.strip() or not unit_utterances(text):
+            continue
+        if named is not None:
+            if unit_id in named:
+                targets.append(unit_id)
+            continue
+        lines = [DubLine.model_validate(line) for line in unit.get("dub_lines") or [] if isinstance(line, dict)]
+        if dub_lines_need_regeneration(text, lines):
+            targets.append(unit_id)
+    return targets
+
+
+async def generate_reference_dub_lines(
+    project_name: str,
+    episode: int,
+    unit_ids: Sequence[str] | None = None,
+    *,
+    projects: ProjectManager,
+) -> TextGenerationResult:
+    """为已有 unit 回填 / 重译越南语配音台词，直接写入正式剧本。
+
+    ``unit_ids`` 点名时只处理这些 unit（即使配音行仍是现行的也重译）；缺省处理本集全部缺失或过期
+    配音行的 unit。每 ``REFERENCE_DUB_CHUNK_SIZE`` 个 unit 一次 TRANSLATE_DUB 文本调用（经
+    ``TextGenerator`` 记账），校验通过的 unit 经批量编辑器带版本比对地写回，未通过的 unit 不落盘并在回执里列出。
+    """
+    project = await asyncio.to_thread(projects.load_project, project_name)
+    if not is_reference_video_project(project):
+        raise TextGenerationError("❌ 仅参考生视频项目支持配音台词")
+    if project_dub_target_language(project) is None:
+        raise TextGenerationError("❌ 项目未启用配音（dub_target_language）")
+    meta = next((e for e in project.get("episodes") or [] if e.get("episode") == episode), None)
+    script_file = meta.get("script_file") if isinstance(meta, dict) else None
+    if not isinstance(script_file, str) or not script_file:
+        raise TextGenerationError(f"❌ 第 {episode} 集没有正式脚本")
+    script = await asyncio.to_thread(projects.load_script, project_name, script_file)
+    targets = _dub_backfill_targets(script, unit_ids)
+    if not targets:
+        return TextGenerationResult("无需回填：没有缺失或过期的配音台词")
+
+    generator = await TextGenerator.create(
+        TextTaskType.TRANSLATE_DUB, project_name=project_name, purpose=CallPurpose.SCRIPT_GENERATION
+    )
+    characters = project.get(BUCKET_KEY["character"])
+    characters = characters if isinstance(characters, dict) else {}
+    overview = project.get("overview")
+    synopsis = overview.get("synopsis") if isinstance(overview, dict) else None
+    narrator = project_narrator_gender(project)
+    written: list[str] = []
+    failed: list[str] = []
+    soft: list[str] = []
+    for start in range(0, len(targets), REFERENCE_DUB_CHUNK_SIZE):
+        chunk = targets[start : start + REFERENCE_DUB_CHUNK_SIZE]
+        # 每批重新读盘：前一批已写回、期间也可能有其它写入方，基线版本以本批实际送去翻译的快照为准。
+        script = await asyncio.to_thread(projects.load_script, project_name, script_file)
+        by_id = {str(u.get("unit_id")): u for u in script.get("video_units") or [] if isinstance(u, dict)}
+        batch_units = [by_id[unit_id] for unit_id in chunk if unit_id in by_id]
+        prompt = build_reference_dub_lines_prompt(
+            units=[
+                {
+                    "unit_id": str(unit["unit_id"]),
+                    "duration_seconds": unit.get("duration_seconds") or 0,
+                    "text": unit["text"],
+                    "utterances": [
+                        {"index": i, "speaker": u.speaker, "text": u.text}
+                        for i, u in enumerate(unit_utterances(unit["text"]))
+                    ],
+                }
+                for unit in batch_units
+            ],
+            characters=characters,
+            narrator_gender=narrator,
+            synopsis=synopsis if isinstance(synopsis, str) else None,
+        )
+        result = await generator.generate(
+            BackendTextGenerationRequest(
+                prompt=prompt,
+                response_schema=ReferenceDubLinesBackfill,
+                max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+            ),
+            project_name=project_name,
+        )
+        parsed = _parse_script_plan_json(result.text, ReferenceDubLinesBackfill, label="配音台词", top_shape="{units}")
+        produced = {str(item.get("unit_id")): item for item in parsed.get("units") or [] if isinstance(item, dict)}
+        operations: list[dict[str, Any]] = []
+        for unit in batch_units:
+            unit_id = str(unit["unit_id"])
+            item = produced.get(unit_id)
+            if item is None:
+                failed.append(f"{unit_id}：模型未返回该 unit")
+                continue
+            drafts = [DubLineDraft.model_validate(line) for line in item.get("dub_lines") or []]
+            lines = build_dub_lines_from_drafts(unit["text"], drafts)
+            hard, over_budget = dub_line_violations(unit["text"], unit.get("duration_seconds") or 0, lines)
+            if hard:
+                failed.append(f"{unit_id}：" + "；".join(hard))
+                continue
+            soft.extend(f"{unit_id}：{message}" for message in over_budget)
+            operations.append({"op": "update", "id": unit_id, "fields": {"dub_lines": lines}})
+            written.append(unit_id)
+        if not operations:
+            continue
+        command = ScriptBatchEditCommand.model_validate(
+            {
+                "episode": episode,
+                "expected_script_file": script_file,
+                "expected_revision": script_revision(script),
+                "operations": operations,
+            }
+        )
+        edit = await asyncio.to_thread(ScriptBatchEditor(projects).execute, project_name, command)
+        if not edit.success:
+            raise TextGenerationError(f"❌ 写入配音台词失败：{edit.model_dump_json()}")
+
+    if not written:
+        raise TextGenerationError("❌ 配音台词均未通过校验：\n" + "\n".join(f"- {line}" for line in failed))
+    message = f"✅ 已写入 {len(written)} 个 unit 的越南语配音台词：{', '.join(written)}"
+    if failed:
+        message += "\n⚠️ 以下 unit 未通过校验、未写入：\n" + "\n".join(f"- {line}" for line in failed)
+    message += render_soft_violation_section(soft, note=SOFT_VIOLATION_NOTE_COMMITTED)
+    return TextGenerationResult(message)
+
+
+async def generate_reference_dub_lines_task(
+    request: TextGenerationRequest,
+    *,
+    project_name: str,
+    projects: ProjectManager,
+    config_resolver: ConfigResolver,
+) -> TextGenerationResult:
+    """队列文本任务入口：与其它文本 handler 同签名，``entry_ids`` 即点名的 unit（空 = 全部缺失 / 过期）。"""
+    del config_resolver
+    try:
+        return await generate_reference_dub_lines(
+            project_name, request.episode, list(request.entry_ids) or None, projects=projects
+        )
+    except TextGenerationError:
+        raise
+    except Exception as exc:
+        raise TextGenerationError(f"generate_reference_dub_lines 失败: {exc}") from exc
 
 
 async def generate_narration_script_plan(

@@ -85,4 +85,52 @@ describe("UnitList", () => {
     expect(list.className).toMatch(/\bmin-h-0\b/);
     expect(list.className).toMatch(/\boverflow-y-auto\b/);
   });
+  describe("checkboxes", () => {
+    it("renders no checkboxes unless the check props are provided", () => {
+      render(<UnitList units={[mkUnit("U1")]} selectedId={null} onSelect={vi.fn()} onAdd={vi.fn()} />);
+      expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    });
+
+    it("toggles a unit without selecting its row", () => {
+      const onSelect = vi.fn();
+      const onToggleChecked = vi.fn();
+      render(
+        <UnitList
+          units={[mkUnit("U1"), mkUnit("U2")]}
+          selectedId={null}
+          onSelect={onSelect}
+          onAdd={vi.fn()}
+          checkedIds={["U2"]}
+          onToggleChecked={onToggleChecked}
+          onSetChecked={vi.fn()}
+        />,
+      );
+      const u1 = screen.getByRole("checkbox", { name: /Select unit U1|选择单元 U1/ });
+      const u2 = screen.getByRole("checkbox", { name: /Select unit U2|选择单元 U2/ });
+      expect(u1).not.toBeChecked();
+      expect(u2).toBeChecked();
+      fireEvent.click(u1);
+      expect(onToggleChecked).toHaveBeenCalledWith("U1");
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("select-all checks every unit, and clears when all are already checked", () => {
+      const onSetChecked = vi.fn();
+      const props = {
+        units: [mkUnit("U1"), mkUnit("U2")],
+        selectedId: null,
+        onSelect: vi.fn(),
+        onAdd: vi.fn(),
+        onToggleChecked: vi.fn(),
+        onSetChecked,
+      };
+      const { rerender } = render(<UnitList {...props} checkedIds={[]} />);
+      fireEvent.click(screen.getByRole("checkbox", { name: /Select all|全选/ }));
+      expect(onSetChecked).toHaveBeenLastCalledWith(["U1", "U2"]);
+
+      rerender(<UnitList {...props} checkedIds={["U1", "U2"]} />);
+      fireEvent.click(screen.getByRole("checkbox", { name: /Select all|全选/ }));
+      expect(onSetChecked).toHaveBeenLastCalledWith([]);
+    });
+  });
 });

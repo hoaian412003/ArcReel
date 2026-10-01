@@ -116,6 +116,10 @@ class OpenAIAudioBackend:
             output_path=request.output_path,
         )
 
+    def _response_format(self, output_path: Path) -> str:
+        """请求的 ``response_format``；子类可按服务端支持的格式收窄。"""
+        return _response_format_for(output_path)
+
     @with_retry_async(retryable_errors=OPENAI_RETRYABLE_ERRORS)
     async def _request_speech(self, request: AudioSynthesisRequest) -> bytes:
         """提交合成请求（计费段），返回音频字节。"""
@@ -123,7 +127,7 @@ class OpenAIAudioBackend:
             "model": self._model,
             "input": request.text,
             "voice": request.voice,
-            "response_format": _response_format_for(request.output_path),
+            "response_format": self._response_format(request.output_path),
         }
         if request.speed is not None:
             kwargs["speed"] = request.speed

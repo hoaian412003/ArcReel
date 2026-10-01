@@ -3272,6 +3272,7 @@ class ProjectManager:
         description: str,
         voice_style: str | None = None,
         character_sheet: str | None = None,
+        gender: str | None = None,
     ) -> dict:
         """
         向项目添加角色（项目级）
@@ -3282,11 +3283,14 @@ class ProjectManager:
             description: 角色描述
             voice_style: 声音风格
             character_sheet: 角色资产图路径
+            gender: 配音性别（male / female）；None 时沿用同名旧条目已登记的性别
 
         Returns:
             更新后的项目元数据
         """
         name = validate_asset_name(name)
+        if gender is not None and gender not in ("", "male", "female"):
+            raise ValueError(f"gender 必须是 male / female 或空，收到 {gender!r}")
 
         def _mutate(project: dict) -> None:
             bucket = project["characters"]
@@ -3298,10 +3302,12 @@ class ProjectManager:
             entry = self._build_asset_entry(
                 "character",
                 description,
-                {"voice_style": voice_style or "", "character_sheet": character_sheet or ""},
+                {"voice_style": voice_style or "", "character_sheet": character_sheet or "", "gender": gender or ""},
             )
             # 覆盖写只换本体字段：衍生挂在本体条目内，整条替换会连同已登记的衍生一起抹掉。
             previous = bucket.get(key)
+            if isinstance(previous, dict) and gender is None and previous.get("gender"):
+                entry["gender"] = previous["gender"]
             if isinstance(previous, dict):
                 inherited = previous.get(DERIVATIVES_FIELD)
                 if isinstance(inherited, dict):
@@ -3574,9 +3580,11 @@ class ProjectManager:
             entry[DERIVATIVES_FIELD] = {}
         return entry
 
-    def add_character(self, project_name: str, name: str, description: str, voice_style: str = "") -> bool:
+    def add_character(
+        self, project_name: str, name: str, description: str, voice_style: str = "", gender: str = ""
+    ) -> bool:
         """直接添加角色到 project.json；同类型已存在返回 False，跨类型冲突则抛错。"""
-        entry = self._build_asset_entry("character", description, {"voice_style": voice_style})
+        entry = self._build_asset_entry("character", description, {"voice_style": voice_style, "gender": gender})
         return self._add_asset("character", project_name, name, entry)
 
     def add_project_scene(self, project_name: str, name: str, description: str) -> bool:

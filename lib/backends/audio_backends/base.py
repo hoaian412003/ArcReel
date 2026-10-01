@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 
 class AudioCapability(StrEnum):
@@ -16,10 +16,16 @@ class AudioCapability(StrEnum):
 
 @dataclass(frozen=True)
 class VoiceOption:
-    """音色目录条目。``id`` 是合成请求携带的 ``voice`` 参数值，``label`` 是给人看的展示名。"""
+    """音色目录条目。``id`` 是合成请求携带的 ``voice`` 参数值，``label`` 是给人看的展示名。
+
+    ``gender`` / ``locale`` / ``region`` 为可选的结构化标注（供应商未提供时为 None，不编造）。
+    """
 
     id: str
     label: str
+    gender: Literal["male", "female"] | None = None
+    locale: str | None = None
+    region: str | None = None
 
 
 @dataclass
@@ -33,6 +39,8 @@ class AudioSynthesisRequest:
     # 语速预留：同步 qwen3-tts-flash 不支持（speech_rate 仅 realtime WebSocket 版可用），
     # 后端记 debug log 忽略。保留字段以便将来接入实时/可调速后端。
     speed: float | None = None
+    # 语种提示（如 "vi"）：仅支持按语种切换的后端消费，其余后端忽略；None = 不指定。
+    language: str | None = None
 
 
 @dataclass

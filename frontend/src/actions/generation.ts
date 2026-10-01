@@ -394,3 +394,29 @@ export async function enqueueReferenceVideoBatch(
   }
   return res;
 }
+
+/** 为缺失越南语台词的单元入队撰写任务（文本任务）；unitIds 缺省即本集所有缺失或过期的单元。 */
+export async function enqueueDubLines(
+  projectName: string,
+  episode: number,
+  unitIds?: string[],
+): Promise<EnqueueResult> {
+  const res = await API.generateDubLines(projectName, episode, unitIds);
+  notifyEnqueued(
+    res.deduped,
+    i18n.t("dashboard:dub_lines_queued_toast", { count: res.unit_ids.length || unitIds?.length || 0 }),
+    "info",
+  );
+  return { taskIds: res.task_ids, deduped: res.deduped };
+}
+
+/** 把配音台词合成为音频：每个单元一个任务，走本地 TTS。 */
+export async function enqueueDubSynthesis(
+  projectName: string,
+  episode: number,
+  payload: { unit_ids?: string[]; line_indexes?: number[] },
+): Promise<EnqueueResult> {
+  const res = await API.synthesizeDub(projectName, episode, payload);
+  notifyEnqueued(false, i18n.t("dashboard:dub_synthesis_queued_toast", { count: res.unit_ids.length }));
+  return { taskIds: res.task_ids, deduped: false };
+}

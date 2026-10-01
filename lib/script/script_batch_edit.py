@@ -39,6 +39,7 @@ from lib.project.project_migration_failure import (
     load_migration_verdict,
 )
 from lib.script.reference_video.draft_validation import is_verbatim_source_anchor
+from lib.script.reference_video.dub_lines import fill_dub_line_source_texts
 from lib.script.script_editor import ScriptEditError, patch_field, resolve_items
 from lib.script.script_models import PENDING_AUTHORING_FIELD
 from lib.script.script_review import content_fingerprint_of_data
@@ -747,6 +748,9 @@ def _apply_operation(
         if kind == "video_units":
             if roots & {"text", "duration_seconds"}:
                 refresh_video_unit_replan_state(item)
+            if "dub_lines" in roots:
+                # 配音行的 source_text 是服务端按现行发声补的对齐锚，调用方只需写 index / gender / text_vi。
+                fill_dub_line_source_texts(item)
         else:
             after_content_admission = admit_script_unit(kind, item, ignore_marker=True)
             if (

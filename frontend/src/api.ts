@@ -71,6 +71,11 @@ import type {
   ReferenceUnitCapability,
   ReferenceUnitCapabilityMap,
   ReferenceVideoUnit,
+  DubLinePatch,
+  UnitDub,
+  VieneuSettings,
+  VieneuStatus,
+  VieneuVoices,
   H3PromptSections,
   H3PromptStatus,
   TransitionType,
@@ -435,6 +440,33 @@ class API {
       method: "PATCH",
       body: JSON.stringify(updates),
     });
+  }
+
+  // ==================== VieNeu 本地语音服务 ====================
+
+  static async getVieneuStatus(): Promise<VieneuStatus> {
+    return this.request("/vieneu/status");
+  }
+
+  /** 拉起（或复用）本地服务并等到就绪；首次启动要下载模型，可能持续数分钟。 */
+  static async startVieneu(): Promise<VieneuStatus> {
+    return this.request("/vieneu/start", { method: "POST" });
+  }
+
+  static async stopVieneu(): Promise<VieneuStatus> {
+    return this.request("/vieneu/stop", { method: "POST" });
+  }
+
+  static async getVieneuSettings(): Promise<VieneuSettings> {
+    return this.request("/vieneu/settings");
+  }
+
+  static async patchVieneuSettings(patch: Partial<VieneuSettings>): Promise<VieneuSettings> {
+    return this.request("/vieneu/settings", { method: "PATCH", body: JSON.stringify(patch) });
+  }
+
+  static async getVieneuVoices(): Promise<VieneuVoices> {
+    return this.request("/vieneu/voices");
   }
 
   static async getAgentProfileStatus(name: string): Promise<AgentProfileStatus> {
@@ -3053,6 +3085,49 @@ class API {
     );
   }
 
+  /** 为缺失越南语台词的单元入队撰写任务；unitIds 缺省即本集所有缺失或过期的单元。 */
+  static async generateDubLines(
+    projectName: string,
+    episode: number,
+    unitIds?: string[],
+  ): Promise<{ task_id: string; task_ids: string[]; deduped: boolean; unit_ids: string[] }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/dub-lines/generate`,
+      { method: "POST", body: JSON.stringify(unitIds ? { unit_ids: unitIds } : {}) },
+    );
+  }
+
+  /** 一个单元的配音时间线：逐行生效开始时间、时长、音频与过期状态。 */
+  static async getUnitDub(projectName: string, episode: number, unitId: string): Promise<UnitDub> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/dub/episodes/${episode}/units/${encodeURIComponent(unitId)}`,
+    );
+  }
+
+  /** 把配音台词合成为音频（走本地 TTS）；unit_ids 缺省即本集所有带台词的单元。 */
+  static async synthesizeDub(
+    projectName: string,
+    episode: number,
+    payload: { unit_ids?: string[]; line_indexes?: number[] },
+  ): Promise<{ success: boolean; task_ids: string[]; unit_ids: string[] }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/dub/episodes/${episode}/synthesize`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+  }
+
+  /** 把已合成的配音混入单元成片（原声压低），返回成片的项目内路径。 */
+  static async renderUnitDub(
+    projectName: string,
+    episode: number,
+    unitId: string,
+  ): Promise<{ success: boolean; file_path: string; clip_count: number }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/dub/episodes/${episode}/units/${encodeURIComponent(unitId)}/render`,
+      { method: "POST" },
+    );
+  }
+
   /** Create a new video unit on the reference-to-video path. */
   static async addReferenceVideoUnit(
     projectName: string,
@@ -3080,6 +3155,8 @@ class API {
       duration_seconds?: number;
       transition_to_next?: TransitionType;
       note?: string | null;
+      /** 整体替换该单元的配音台词；空数组即清空。 */
+      dub_lines?: DubLinePatch[];
     },
   ): Promise<{ unit: ReferenceVideoUnit; unit_capability: ReferenceUnitCapability }> {
     return this.request(

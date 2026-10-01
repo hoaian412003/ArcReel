@@ -2483,3 +2483,138 @@ def test_regenerate_h3_prompt_rejects_an_unknown_unit(
         f"{_REFERENCE_VIDEOS}/episodes/1/h3-prompt/regenerate", json={"unit_ids": ["E1U99"]}
     )
     assert resp.status_code == 404
+
+
+_DUB_UNIT_TEXT = "@[张三]站在@[酒馆]门口。\n@[张三]：{你好}\n@[张三]：{再见}"
+
+
+def _enable_dubbing(tmp_path: Path) -> None:
+    project_file = tmp_path / "projects" / "demo" / "project.json"
+    project = json.loads(project_file.read_text(encoding="utf-8"))
+    project["dub_target_language"] = "vi"
+    project_file.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+
+
+def _add_dub_unit(client: TestClient) -> str:
+    resp = client.post(f"{_REFERENCE_VIDEOS}/episodes/1/units", json={"prompt": _DUB_UNIT_TEXT, "duration_seconds": 6})
+    assert resp.status_code == 201, resp.text
+    return resp.json()["unit"]["unit_id"]
+
+
+_DUB_PATCH_LINES = [
+    {"index": 0, "speaker": "张三", "gender": "male", "text_vi": "Xin chào."},
+    {"index": 1, "speaker": "张三", "gender": "male", "text_vi": "Tạm biệt."},
+]
+
+
+def test_patch_unit_dub_lines_fills_source_text_and_reports_alignment(
+    reference_videos_client: TestClient, tmp_path: Path
+):
+    _enable_dubbing(tmp_path)
+    unit_id = _add_dub_unit(reference_videos_client)
+
+    resp = reference_videos_client.patch(
+        f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}", json={"dub_lines": _DUB_PATCH_LINES}
+    )
+
+    assert resp.status_code == 200, resp.text
+    unit = resp.json()["unit"]
+    assert [(line["index"], line["source_text"], line["stale"]) for line in unit["dub_lines"]] == [
+        (0, "你好", False),
+        (1, "再见", False),
+    ]
+    assert unit["dub_alignment"] == [{"index": 0, "status": "current"}, {"index": 1, "status": "current"}]
+    saved = json.loads((tmp_path / "projects" / "demo" / "scripts" / "episode_1.json").read_text(encoding="utf-8"))
+    assert "stale" not in saved["video_units"][0]["dub_lines"][0]
+
+
+def test_list_units_marks_dub_lines_stale_after_the_text_changes(reference_videos_client: TestClient, tmp_path: Path):
+    _enable_dubbing(tmp_path)
+    unit_id = _add_dub_unit(reference_videos_client)
+    reference_videos_client.patch(
+        f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}", json={"dub_lines": _DUB_PATCH_LINES}
+    )
+
+    reference_videos_client.patch(
+        f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}",
+        json={"prompt": "@[张三]站在@[酒馆]门口。\n@[张三]：{你好}\n@[张三]：{明天见}"},
+    )
+    [unit] = reference_videos_client.get(f"{_REFERENCE_VIDEOS}/episodes/1/units").json()["units"]
+
+    assert [line["stale"] for line in unit["dub_lines"]] == [False, True]
+    assert unit["dub_alignment"][1] == {"index": 1, "status": "stale"}
+
+
+def test_list_units_without_dubbing_keeps_the_unit_shape(reference_videos_client: TestClient):
+    _add_dub_unit(reference_videos_client)
+    [unit] = reference_videos_client.get(f"{_REFERENCE_VIDEOS}/episodes/1/units").json()["units"]
+    assert "dub_alignment" not in unit
+
+
+def test_patch_unit_rejects_duplicate_or_out_of_range_dub_line_indexes(
+    reference_videos_client: TestClient, tmp_path: Path
+):
+    _enable_dubbing(tmp_path)
+    unit_id = _add_dub_unit(reference_videos_client)
+    url = f"{_REFERENCE_VIDEOS}/episodes/1/units/{unit_id}"
+
+    duplicate = reference_videos_client.patch(url, json={"dub_lines": [_DUB_PATCH_LINES[0], _DUB_PATCH_LINES[0]]})
+    out_of_range = reference_videos_client.patch(url, json={"dub_lines": [{**_DUB_PATCH_LINES[0], "index": 9}]})
+    bad_gender = reference_videos_client.patch(url, json={"dub_lines": [{**_DUB_PATCH_LINES[0], "gender": "x"}]})
+
+    assert duplicate.status_code == 422
+    assert out_of_range.status_code == 400
+    assert bad_gender.status_code == 422
+
+
+def test_generate_dub_lines_queues_a_translate_task(
+    reference_videos_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from server.routers import reference_videos as router_mod
+
+    _enable_dubbing(tmp_path)
+    unit_id = _add_dub_unit(reference_videos_client)
+    enqueue = AsyncMock(return_value={"task_id": "task-9", "deduped": False})
+    monkeypatch.setattr(router_mod, "enqueue_task_only", enqueue)
+
+    resp = reference_videos_client.post(
+        f"{_REFERENCE_VIDEOS}/episodes/1/units/dub-lines/generate", json={"unit_ids": [unit_id]}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"task_id": "task-9", "task_ids": ["task-9"], "deduped": False, "unit_ids": [unit_id]}
+    kwargs = enqueue.await_args.kwargs
+    assert kwargs["task_type"] == "text_reference_dub_lines"
+    assert kwargs["media_type"] == "text"
+    assert kwargs["payload"]["entry_ids"] == [unit_id]
+
+
+def test_generate_dub_lines_without_unit_ids_targets_every_missing_or_stale_unit(
+    reference_videos_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from server.routers import reference_videos as router_mod
+
+    _enable_dubbing(tmp_path)
+    _add_dub_unit(reference_videos_client)
+    enqueue = AsyncMock(return_value={"task_id": "task-9"})
+    monkeypatch.setattr(router_mod, "enqueue_task_only", enqueue)
+
+    resp = reference_videos_client.post(f"{_REFERENCE_VIDEOS}/episodes/1/units/dub-lines/generate", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert enqueue.await_args.kwargs["payload"]["entry_ids"] == []
+
+
+def test_generate_dub_lines_requires_dubbing_and_known_units(
+    reference_videos_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from server.routers import reference_videos as router_mod
+
+    monkeypatch.setattr(router_mod, "enqueue_task_only", AsyncMock(return_value={"task_id": "t"}))
+    url = f"{_REFERENCE_VIDEOS}/episodes/1/units/dub-lines/generate"
+    _add_dub_unit(reference_videos_client)
+    assert reference_videos_client.post(url, json={}).status_code == 409
+
+    _enable_dubbing(tmp_path)
+    assert reference_videos_client.post(url, json={"unit_ids": ["E1U99"]}).status_code == 404
+    assert reference_videos_client.post(url, json={"unit_ids": []}).status_code == 400

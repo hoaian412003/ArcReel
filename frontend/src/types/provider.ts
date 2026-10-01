@@ -105,3 +105,40 @@ export interface ProviderCredential {
 
 export type CallType = "image" | "video" | "text" | "audio";
 
+
+/** 本地 VieNeu-TTS 托管服务的运行状态。 */
+export interface VieneuStatus {
+  state: "stopped" | "starting" | "ready" | "error";
+  pid: number | null;
+  last_error: string | null;
+  base_url: string | null;
+  /** true = 由 ArcReel 拉起并负责回收；false = 复用了端口上已有的外部服务。 */
+  managed: boolean;
+  logs: string[];
+}
+
+export interface VieneuSettings {
+  enabled: boolean;
+  command: string;
+  workdir: string;
+  host: string;
+  port: number;
+  device: "auto" | "cpu" | "cuda";
+  int8: boolean;
+  startup_timeout_seconds: number;
+  idle_minutes: number;
+}
+
+export interface VieneuVoice {
+  id: string;
+  label: string;
+  gender: "male" | "female" | null;
+  locale: string | null;
+  region: string | null;
+}
+
+export interface VieneuVoices {
+  /** server = 来自运行中的服务；catalog = 服务未运行时的内置目录。 */
+  source: "server" | "catalog";
+  voices: VieneuVoice[];
+}

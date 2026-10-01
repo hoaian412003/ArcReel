@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from lib.config.resolver import ConfigResolver, ProviderModel
 from lib.config.service import ProviderStatus
 
@@ -93,6 +95,57 @@ class TestResolveDefaultAudioBackend:
         resolver = ConfigResolver.__new__(ConfigResolver)
         svc = _FakeSvc(settings={}, ready=[_ready("dashscope", ["audio"])])
         assert await resolver._resolve_default_audio_backend(svc, None) == ("dashscope", "qwen3-tts-flash")
+
+
+class TestKeylessProviderNotAutoSelected:
+    async def test_vieneu_ready_alone_is_not_auto_resolved(self, db_factory):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        svc = _FakeSvc(settings={}, ready=[_ready("vieneu", ["audio"])])
+        async with db_factory() as session:
+            with pytest.raises(ValueError, match="未找到可用的 audio 供应商"):
+                await resolver._resolve_default_audio_backend(svc, session)
+
+    async def test_configured_provider_wins_over_ready_vieneu(self, db_factory):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        svc = _FakeSvc(settings={}, ready=[_ready("vieneu", ["audio"]), _ready("dashscope", ["audio"])])
+        async with db_factory() as session:
+            assert await resolver._resolve_default_audio_backend(svc, session) == ("dashscope", "qwen3-tts-flash")
+
+    async def test_explicit_selection_still_resolves_vieneu(self):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        svc = _FakeSvc(settings={"default_audio_backend": "vieneu/vieneu-tts-v3-turbo"})
+        assert await resolver._resolve_default_audio_backend(svc, None) == ("vieneu", "vieneu-tts-v3-turbo")
+
+
+class TestDubPayloadPinsVieneu:
+    """配音任务经 payload 固定 VieNeu：项目 / 全局没配通用音频供应商也能解析。"""
+
+    async def test_pinned_payload_resolves_with_no_audio_provider_configured(self, db_factory):
+        from server.services.tasks.dub_tasks import DUB_AUDIO_PAYLOAD
+
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        svc = _FakeSvc(settings={}, ready=[])
+        async with db_factory() as session:
+            result = await resolver._resolve_audio_provider_model(svc, session, {}, dict(DUB_AUDIO_PAYLOAD))
+        assert (result.provider_id, result.model_id) == ("vieneu", "vieneu-tts-v3-turbo")
+
+    async def test_pinned_payload_ignores_a_project_chinese_tts(self, db_factory):
+        from server.services.tasks.dub_tasks import DUB_AUDIO_PAYLOAD
+
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        svc = _FakeSvc(settings={}, ready=[_ready("dashscope", ["audio"])])
+        async with db_factory() as session:
+            result = await resolver._resolve_audio_provider_model(
+                svc, session, {"audio_backend": "dashscope/qwen3-tts-flash"}, dict(DUB_AUDIO_PAYLOAD)
+            )
+        assert result.provider_id == "vieneu"
+
+    async def test_without_the_pin_an_unconfigured_project_still_has_no_audio_provider(self, db_factory):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        svc = _FakeSvc(settings={}, ready=[_ready("vieneu", ["audio"])])
+        async with db_factory() as session:
+            with pytest.raises(ValueError, match="未找到可用的 audio 供应商"):
+                await resolver._resolve_audio_provider_model(svc, session, {}, None)
 
 
 class TestResolveNarrationVoice:

@@ -115,6 +115,10 @@ MESSAGES = {
     "val_unit_id_duplicate": "{prefix}: duplicate unit_id '{value}'",
     "val_video_units_missing": "The reference_video script is missing the video_units array, or it is empty",
     "val_unit_duration_range": "{prefix}: duration_seconds must be an integer between {low} and {high}",
+    "val_dub_setting_invalid": "Invalid {field}: '{value}', must be one of {allowed}",
+    "val_dub_lines_must_be_array": "{prefix}: dub_lines must be an array",
+    "val_dub_line_invalid": "{prefix}: dub_lines[{index}] is invalid; it must be an object with index inside the unit text utterance range, gender male or female, and a non-empty text_vi string",
+    "val_dub_speech_overflow": "{prefix}: Vietnamese dub speech takes about {spoken:.1f}s, longer than the {duration}s unit (warning only, saving is not blocked)",
     # ---- skeleton / route mismatch ----
     "val_skeleton_noun_segments": "segments",
     "val_skeleton_noun_scenes": "scenes",

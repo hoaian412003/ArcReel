@@ -70,6 +70,13 @@ from lib.script.script_editor import resolve_items
 from lib.script.script_references import annotate_derivative_references
 from lib.speech.character_voice import PROJECT_FIELD as CHARACTER_VOICE_BINDING_FIELD
 from lib.speech.character_voice import VALID_CHARACTER_VOICE_BINDINGS
+from lib.speech.dub_settings import (
+    DUB_TARGET_LANGUAGE_FIELD,
+    DUB_VOICE_FIELDS,
+    NARRATOR_GENDER_FIELD,
+    SUPPORTED_DUB_LANGUAGES,
+    VALID_DUB_GENDERS,
+)
 from lib.speech.speech_rate import MAX_SPEECH_RATE_UPS, MIN_SPEECH_RATE_UPS, SPEECH_RATE_FIELD, is_valid_speech_rate
 from lib.workflow.workflow_plan import WorkflowPlan, WorkflowPlanRequest
 from lib.workflow.workflow_state import ProjectSummary, WorkflowRequestError, WorkflowStateService, WorkflowStatus
@@ -303,6 +310,12 @@ class UpdateProjectRequest(BaseModel):
     audio_backend: str | None = None
     narration_voice: str | None = None
     narration_speed: float | None = None
+    # 越南语配音：目标语言（目前仅 "vi"；null / 空串 = 关闭）与画外音性别（male / female；null / 空串 = 回落 male）
+    dub_target_language: str | None = None
+    narrator_gender: str | None = None
+    # 越南语配音音色：按性别各指定一个音色 id；null / 空串 = 清除、回落音色目录里该性别的第一个音色
+    dub_voice_male: str | None = None
+    dub_voice_female: str | None = None
     # 口播语速估算（阅读单位 / 秒）项目级覆盖；null = 清除、回退语言默认
     speech_rate_units_per_second: SpeechRateOverride = None
     # 文本任务档位（docs/adr/0051）项目级覆盖 + 项目默认模型；空值 = 清除、继承全局
@@ -1002,6 +1015,26 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                         project["narration_voice"] = voice
                     else:
                         project.pop("narration_voice", None)
+                # 配音目标语言 / 画外音性别：枚举，null / 空串 = 清除
+                for dub_field, allowed_values, error_key in (
+                    (DUB_TARGET_LANGUAGE_FIELD, SUPPORTED_DUB_LANGUAGES, "dub_target_language_invalid"),
+                    (NARRATOR_GENDER_FIELD, VALID_DUB_GENDERS, "narrator_gender_invalid"),
+                ):
+                    if dub_field in req.model_fields_set:
+                        dub_value = (getattr(req, dub_field) or "").strip()
+                        if not dub_value:
+                            project.pop(dub_field, None)
+                        elif dub_value in allowed_values:
+                            project[dub_field] = dub_value
+                        else:
+                            raise HTTPException(status_code=422, detail=_t(error_key))
+                for voice_field in DUB_VOICE_FIELDS.values():
+                    if voice_field in req.model_fields_set:
+                        dub_voice = (getattr(req, voice_field) or "").strip()
+                        if dub_voice:
+                            project[voice_field] = dub_voice
+                        else:
+                            project.pop(voice_field, None)
                 # 旁白语速：仅做正有限数卫生校验（拒绝 0/负数/inf/nan），取值范围由各供应商约束；null = 清除
                 if "narration_speed" in req.model_fields_set:
                     if req.narration_speed is None:

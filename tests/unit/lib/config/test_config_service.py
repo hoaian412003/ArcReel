@@ -17,7 +17,18 @@ async def test_get_all_providers_status_empty(config_service: ConfigService):
     assert len(statuses) == len(PROVIDER_REGISTRY)
     assert {s.name for s in statuses} == set(PROVIDER_REGISTRY.keys())
     for s in statuses:
-        assert s.status == "unconfigured"
+        # 无必填 key 的本地供应商无需凭证即就绪，其余在无凭证时均未配置
+        expected = "ready" if not PROVIDER_REGISTRY[s.name].required_keys else "unconfigured"
+        assert s.status == expected
+
+
+async def test_keyless_provider_is_ready_without_credentials(config_service: ConfigService):
+    statuses = await config_service.get_all_providers_status()
+    vieneu = next(s for s in statuses if s.name == "vieneu")
+    assert vieneu.status == "ready"
+    assert vieneu.required_keys == []
+    assert vieneu.missing_keys == []
+    assert "audio" in vieneu.media_types
 
 
 async def test_provider_status_models_isolated_from_registry(config_service: ConfigService):

@@ -9,7 +9,17 @@ script_models.py - 剧本数据模型
 import logging
 from typing import Annotated, Any, ClassVar, Literal, get_args
 
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, create_model, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    create_model,
+    model_serializer,
+    model_validator,
+)
 from pydantic.json_schema import SkipJsonSchema
 
 from lib.script.script_skeleton import resolve_declared_kind
@@ -825,6 +835,53 @@ class H3Prompt(BaseModel):
     source_text_hash: SkipJsonSchema[str] = Field(default="", description="写入时的 text 指纹，空串表示未绑定")
 
 
+DubGender = Literal["male", "female"]
+
+
+class DubLine(BaseModel):
+    """参考生视频 unit 的一条越南语配音台词，与 unit 正文里派生出的第 ``index`` 条发声一一对应。
+
+    ``source_text`` 记录它所对应那条发声的原文（台词 / 画外音记号内的文本），原文被改动后与现行
+    发声不再相符，据此判定该配音行过期。``start_seconds`` 为人工覆盖的相对 unit 起点的开始时间，
+    缺省由语速估算或合成时长顺序排布。
+    """
+
+    model_config = _STRICT_CONFIG
+
+    index: int = Field(ge=0, description="对应 unit 正文派生出的第几条发声（从 0 起）")
+    speaker: str | None = Field(default=None, description="说话角色名；画外音为 null")
+    gender: DubGender = Field(description="配音音色性别：male / female")
+    source_text: str = Field(default="", description="所对应发声的原文")
+    text_vi: str = Field(min_length=1, description="越南语配音台词")
+    start_seconds: float | None = Field(default=None, ge=0, description="人工覆盖的开始时间（相对 unit 起点，秒）")
+    # 已合成配音音频的登记：路径相对项目目录；``audio_text`` / ``audio_voice`` 记录合成时用的台词与音色，
+    # 与现行 ``text_vi`` / 音色不符即音频过期。由配音合成任务写入，对 LLM 隐藏。
+    audio_path: SkipJsonSchema[str | None] = Field(default=None, description="已合成配音音频的项目内相对路径")
+    audio_duration_seconds: SkipJsonSchema[float | None] = Field(default=None, ge=0, description="音频真实时长（秒）")
+    audio_voice: SkipJsonSchema[str | None] = Field(default=None, description="合成时使用的音色 id")
+    audio_text: SkipJsonSchema[str | None] = Field(default=None, description="合成时使用的越南语台词")
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_audio(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """尚未合成音频的配音行不落盘四个 ``audio_*`` 键，规划草稿与存量剧本的形状保持不变。"""
+        data = handler(self)
+        for key in ("audio_path", "audio_duration_seconds", "audio_voice", "audio_text"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
+
+
+class DubLineDraft(BaseModel):
+    """script_plan 的 LLM 产出配音行：只含发声序号、说话人、性别与越南语译文，``source_text`` 由服务端补。"""
+
+    model_config = _STRICT_CONFIG
+
+    index: int = Field(ge=0, description="对应 text 中按出现顺序派生的第几条发声（台词与画外音，从 0 起）")
+    speaker: str | None = Field(default=None, description="说话角色名；画外音为 null")
+    gender: DubGender = Field(description="配音音色性别：male / female")
+    text_vi: str = Field(min_length=1, description="该条发声的越南语配音台词，口语自然、简洁")
+
+
 class ReferenceVideoUnit(BaseModel):
     """视频单元——一个视频文件的最小生成粒度。
 
@@ -858,6 +915,9 @@ class ReferenceVideoUnit(BaseModel):
     # H3 全参考提示词档下的六段载荷；其它提示词档不写入。对 LLM 的单元级 schema 隐藏（提示词编写
     # 用独立输出模型承载），落盘只在存在时出现。
     h3_prompt: SkipJsonSchema[H3Prompt | None] = Field(default=None, description="H3 全参考提示词六段")
+    # 越南语配音台词：脚本规划步骤随同一次 LLM 调用产出，创作者可在对白面板逐行编辑。
+    # 对 LLM 的单元级 schema 隐藏（规划输出用独立的扁平单元承载），落盘只在存在时出现。
+    dub_lines: SkipJsonSchema[list[DubLine]] = Field(default_factory=list, description="越南语配音台词")
 
     @model_validator(mode="after")
     def _validate_replan_shell(self) -> "ReferenceVideoUnit":
@@ -930,6 +990,8 @@ class ReferenceScriptPlanUnit(BaseModel):
     # 逐字原文锚：拆分工具校验其为源文子串后原样落盘，供内容确认时对照与失真定位。
     # 默认空串：不带该字段的存量草稿照常通过校验。
     source_text: SkipJsonSchema[str] = Field(default="", description="该 unit 所依据的逐字原文摘录（追溯锚）")
+    # 越南语配音台词：项目启用配音时随规划一并落盘；不带该字段的存量草稿照常通过校验。
+    dub_lines: SkipJsonSchema[list[DubLine]] = Field(default_factory=list, description="越南语配音台词")
 
 
 class ReferenceScriptPlanDraft(BaseModel):
@@ -966,6 +1028,11 @@ class ReferenceScriptPlanFlatUnit(BaseModel):
     )
     source_text: str = Field(min_length=1, description="该单元所依据的小说原文逐字摘录（不转述、不翻译）")
     text: str = Field(min_length=1, description="该单元的引用语法正文：画面描述 + 行内的台词 / 画外音记号")
+    # 仅在项目启用配音时由提示词要求产出；缺省空列表，是否必填由服务端后校验。
+    dub_lines: list[DubLineDraft] = Field(
+        default_factory=list,
+        description="越南语配音台词：按 text 中台词与画外音记号的出现顺序，每条发声一行（未启用配音时留空）",
+    )
 
 
 class ReferenceScriptPlanFlatDraft(BaseModel):
@@ -974,6 +1041,25 @@ class ReferenceScriptPlanFlatDraft(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     units: list[ReferenceScriptPlanFlatUnit] = Field(min_length=1, description="按叙事顺序排列的 unit 列表")
+
+
+class ReferenceDubLinesUnit(BaseModel):
+    """配音回填的 LLM 产出单元：按 ``unit_id`` 对回已有 unit，只含配音行。"""
+
+    model_config = _STRICT_CONFIG
+
+    unit_id: str = Field(min_length=1, description="输入里给出的 unit_id，原样回填")
+    dub_lines: list[DubLineDraft] = Field(
+        description="该 unit 正文中每条台词 / 画外音各一行越南语配音，按发声序号排列；无发声的 unit 给空数组"
+    )
+
+
+class ReferenceDubLinesBackfill(BaseModel):
+    """配音回填（TRANSLATE_DUB）的 LLM 产出顶层形状。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    units: list[ReferenceDubLinesUnit] = Field(description="与输入 unit 一一对应的配音行列表")
 
 
 class ReferencePromptAuthoringFlatUnit(BaseModel):

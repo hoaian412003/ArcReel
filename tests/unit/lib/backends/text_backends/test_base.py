@@ -34,6 +34,7 @@ class TestTextTaskType:
         assert TextTaskType.SCRIPT == "script"
         assert TextTaskType.OVERVIEW == "overview"
         assert TextTaskType.STYLE_ANALYSIS == "style"
+        assert TextTaskType.TRANSLATE_DUB == "translate_dub"
 
 
 class TestTextTaskTiers:
@@ -45,6 +46,7 @@ class TestTextTaskTiers:
         assert TEXT_TASK_TIERS[TextTaskType.SCRIPT] is TextTaskTier.COMPLEX
         assert TEXT_TASK_TIERS[TextTaskType.OVERVIEW] is TextTaskTier.SIMPLE
         assert TEXT_TASK_TIERS[TextTaskType.STYLE_ANALYSIS] is TextTaskTier.SIMPLE
+        assert TEXT_TASK_TIERS[TextTaskType.TRANSLATE_DUB] is TextTaskTier.SIMPLE
 
     def test_vision_required_tasks_are_valid_members(self):
         assert set(TextTaskType) >= VISION_REQUIRED_TASKS

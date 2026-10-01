@@ -21,6 +21,7 @@ PROVIDER_KLING = "kling"
 PROVIDER_AGNES = "agnes"
 PROVIDER_RUNNINGHUB = "runninghub"
 PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_VIENEU = "vieneu"
 
 CallType = Literal["image", "video", "text", "audio"]
 CALL_TYPE_IMAGE: CallType = "image"

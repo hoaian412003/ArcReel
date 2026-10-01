@@ -104,7 +104,7 @@ describe("ReferenceVideoCanvas", () => {
   beforeEach(() => {
     vi.mocked(useActiveResourceIds).mockImplementation(mockHolder.realActiveResourceIds);
     vi.mocked(useLatestTasksByResource).mockImplementation(mockHolder.realLatestTasksByResource);
-    useReferenceVideoStore.setState({ unitsByEpisode: {}, selectedUnitId: null, loading: false, error: null });
+    useReferenceVideoStore.setState({ unitsByEpisode: {}, checkedUnitIdsByEpisode: {}, selectedUnitId: null, loading: false, error: null });
     useProjectsStore.setState({ currentProjectName: "proj", currentProjectData: STUB_PROJECT });
     // 乐观标记由入队动作层写入且跨测试共享同一 store 实例，须一并重置
     useTasksStore.setState({
@@ -917,6 +917,28 @@ describe("ReferenceVideoCanvas", () => {
     await waitFor(() => expect(batchSpy).toHaveBeenCalledTimes(1));
     expect(batchSpy).toHaveBeenCalledWith("proj", 1, {
       unit_ids: ["E1U1", "E1U2", "E1U3"],
+      narration_delivery: "post_production",
+    });
+  });
+
+  it("勾选 unit 后批量生成只提交被勾选的 unit", async () => {
+    vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
+      units: [mkUnit("E1U1"), mkUnit("E1U2"), mkUnit("E1U3")], unit_capabilities: {} });
+    const batchSpy = vi.spyOn(API, "generateReferenceVideoBatch").mockResolvedValue(mkAdmission());
+    vi.mocked(useActiveResourceIds).mockReturnValue(new Set());
+    vi.mocked(useLatestTasksByResource).mockReturnValue(new Map());
+
+    render(<ReferenceVideoCanvas projectName="proj" episode={1} />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Select unit E1U2|选择单元 E1U2/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Select unit E1U3|选择单元 E1U3/ }));
+
+    const batch = await screen.findByRole("button", { name: /Generate 2 selected videos|批量生成已选视频（2）/ });
+    await waitFor(() => expect(batch).toBeEnabled());
+    fireEvent.click(batch);
+
+    await waitFor(() => expect(batchSpy).toHaveBeenCalledTimes(1));
+    expect(batchSpy).toHaveBeenCalledWith("proj", 1, {
+      unit_ids: ["E1U2", "E1U3"],
       narration_delivery: "post_production",
     });
   });

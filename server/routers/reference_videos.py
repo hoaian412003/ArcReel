@@ -42,6 +42,7 @@ from lib.project.project_manager import get_project_manager, is_reference_video_
 from lib.project.resource_paths import resource_relative_path
 from lib.prompts.video_prompt_profile import is_h3_ref2va
 from lib.script.draft_violation import DraftViolation
+from lib.script.reference_video.dub_lines import align_dub_lines
 from lib.script.reference_video.h3_prompt import (
     UNAVAILABLE_STALE,
     H3PromptUnavailable,
@@ -60,6 +61,8 @@ from lib.script.reference_video.script_preview import build_script_preview
 from lib.script.reference_video.unit_capabilities import hydrate_reference_units
 from lib.script.reference_video.voice_settings import VoiceRenderSettings
 from lib.script.script_editor import ScriptEditError
+from lib.script.script_models import DubGender, DubLine
+from lib.speech.dub_settings import project_dub_target_language
 from lib.speech.narration_delivery import (
     POST_PRODUCTION,
     USE_TTS,
@@ -105,7 +108,7 @@ from server.services.tasks.video_caps import (
     reference_unit_capabilities,
 )
 from server.text_generation import TextGenerationError, TextGenerationRequest, prompt_authoring_preflight
-from server.tool_runtime import TEXT_EPISODE_SCRIPT_TASK_TYPE
+from server.tool_runtime import TEXT_EPISODE_SCRIPT_TASK_TYPE, TEXT_REFERENCE_DUB_LINES_TASK_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -327,12 +330,37 @@ async def _unit_capability(
     return (await _unit_capabilities(project_name, project, [unit], request_facts))[str(unit.get("unit_id") or "")]
 
 
+def _with_dub_alignment(unit: dict, *, dub_enabled: bool) -> dict:
+    """响应用 unit 副本：每条 ``dub_lines`` 带 ``stale``，并附 ``dub_alignment``（逐发声序号的对齐状态）。
+
+    只在 unit 已有配音行或项目启用配音时附加，未启用配音的项目响应形状不变；不改动入参。
+    过期是读时派生状态（配音行的 ``source_text`` 与正文现行发声不符），不落盘。
+    """
+    raw_lines = unit.get("dub_lines")
+    if not raw_lines and not dub_enabled:
+        return unit
+    text = unit.get("text")
+    try:
+        lines = [DubLine.model_validate(line) for line in raw_lines or []]
+    except ValueError:
+        return unit
+    alignment = align_dub_lines(text if isinstance(text, str) else "", lines)
+    stale_by_index = {item.index for item in alignment if item.status in ("stale", "orphan")}
+    enriched = dict(unit)
+    enriched["dub_lines"] = [{**line.model_dump(mode="json"), "stale": line.index in stale_by_index} for line in lines]
+    enriched["dub_alignment"] = [{"index": item.index, "status": item.status} for item in alignment]
+    return enriched
+
+
 @router.get("/episodes/{episode}/units")
 async def list_units(project_name: str, episode: int, _t: Translator) -> dict[str, Any]:
     project, script, _sf = _load_episode_script(project_name, episode, _t)
     units = script.get("video_units") or []
+    dub_enabled = project_dub_target_language(project) is not None
     payload: dict[str, Any] = {
-        "units": units,
+        "units": [
+            _with_dub_alignment(unit, dub_enabled=dub_enabled) if isinstance(unit, dict) else unit for unit in units
+        ],
         "unit_capabilities": await _unit_capabilities(project_name, project, units),
     }
     if is_h3_ref2va(project):
@@ -388,9 +416,24 @@ async def add_unit(
 # ============ 端点：PATCH + DELETE ============
 
 
+class PatchDubLine(BaseModel):
+    """web 编辑的一条配音行；``source_text`` 由服务端按现行发声回填，写入即视为确认对齐。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(ge=0)
+    speaker: str | None = None
+    gender: DubGender
+    text_vi: str = Field(min_length=1)
+    start_seconds: float | None = Field(default=None, ge=0)
+
+
 class PatchUnitRequest(BaseModel):
     # extra="forbid" 同 ``AddUnitRequest``。
     model_config = ConfigDict(extra="forbid")
+
+    # 整体替换该 unit 的配音行（空数组 = 清空）；index 不得重复，越界由保存校验拒绝。
+    dub_lines: list[PatchDubLine] | None = None
 
     prompt: str | None = None
     duration_seconds: int | None = Field(default=None, ge=1)
@@ -428,9 +471,29 @@ async def patch_unit(
         fields["transition_to_next"] = req.transition_to_next
     if req.note is not None:
         fields["note"] = req.note
+    dub_enabled = project_dub_target_language(project) is not None
+    if req.dub_lines is not None:
+        if len({line.index for line in req.dub_lines}) != len(req.dub_lines):
+            raise HTTPException(status_code=422, detail=_t("ref_dub_line_index_duplicate"))
+        existing_by_index = {
+            line.get("index"): line for line in _find_unit(current, unit_id, _t).get("dub_lines") or []
+        }
+        merged_lines = []
+        for line in req.dub_lines:
+            merged = line.model_dump(exclude_none=False)
+            previous = existing_by_index.get(line.index)
+            # 台词没改就保留已合成音频的登记；台词一改，音频即过期，登记随之丢弃
+            if previous and previous.get("audio_text") == line.text_vi:
+                for key in ("audio_path", "audio_duration_seconds", "audio_voice", "audio_text"):
+                    merged[key] = previous.get(key)
+            merged_lines.append(merged)
+        fields["dub_lines"] = merged_lines
     if not fields:
         unit = _find_unit(current, unit_id, _t)
-        return {"unit": unit, "unit_capability": await _unit_capability(project_name, project, unit)}
+        return {
+            "unit": _with_dub_alignment(unit, dub_enabled=dub_enabled),
+            "unit_capability": await _unit_capability(project_name, project, unit),
+        }
     result = execute_current_episode_edit(
         get_project_manager(),
         project_name,
@@ -443,7 +506,7 @@ async def patch_unit(
     saved = get_project_manager().load_script(project_name, result.script)
     unit = _find_unit(saved, unit_id, _t)
     return {
-        "unit": unit,
+        "unit": _with_dub_alignment(unit, dub_enabled=dub_enabled),
         "unit_capability": await _unit_capability(project_name, project, unit),
         "edit_result": result.model_dump(mode="json"),
     }
@@ -560,6 +623,55 @@ async def regenerate_h3_prompts(
     except WorkerOfflineError as exc:
         raise HTTPException(status_code=503, detail=_t("worker_offline")) from exc
     return {"task_id": result["task_id"], "deduped": result.get("deduped", False), "unit_ids": requested}
+
+
+class GenerateDubLinesRequest(BaseModel):
+    """生成 / 补全越南语配音台词：点名单元（强制重译），缺省即本集全部缺失或过期的单元。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    unit_ids: list[str] | None = None
+
+
+@router.post("/episodes/{episode}/units/dub-lines/generate")
+async def generate_dub_lines(
+    project_name: str,
+    episode: int,
+    user: CurrentUser,
+    _t: Translator,
+    req: GenerateDubLinesRequest,
+) -> dict[str, Any]:
+    """入队 TRANSLATE_DUB 文本任务，为已有单元回填越南语配音台词；不同步等模型。"""
+    project, script, _script_file = _load_episode_script(project_name, episode, _t)
+    if project_dub_target_language(project) is None:
+        raise HTTPException(status_code=409, detail=_t("ref_dub_not_enabled"))
+    units = [unit for unit in (script.get("video_units") or []) if isinstance(unit, dict)]
+    known = [str(unit.get("unit_id")) for unit in units if str(unit.get("text") or "").strip()]
+    requested = list(dict.fromkeys(req.unit_ids)) if req.unit_ids is not None else []
+    unknown = [unit_id for unit_id in requested if unit_id not in known]
+    if unknown:
+        raise HTTPException(status_code=404, detail=_t("ref_unit_not_found", unit_id=unknown[0]))
+    if req.unit_ids is not None and not requested:
+        raise BadRequestError("ref_batch_empty_selection")
+    request = TextGenerationRequest(episode=episode, entry_ids=tuple(requested))
+    try:
+        result = await enqueue_task_only(
+            project_name=project_name,
+            task_type=TEXT_REFERENCE_DUB_LINES_TASK_TYPE,
+            media_type="text",
+            resource_id=f"episode-{episode}-dub-lines",
+            payload=request.to_payload(),
+            source="webui",
+            user_id=user.id,
+        )
+    except WorkerOfflineError as exc:
+        raise HTTPException(status_code=503, detail=_t("worker_offline")) from exc
+    return {
+        "task_id": result["task_id"],
+        "task_ids": [result["task_id"]],
+        "deduped": result.get("deduped", False),
+        "unit_ids": requested,
+    }
 
 
 @router.delete("/episodes/{episode}/units/{unit_id}", status_code=status.HTTP_204_NO_CONTENT)

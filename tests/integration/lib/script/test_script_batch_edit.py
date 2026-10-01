@@ -1346,3 +1346,43 @@ def test_removing_the_only_item_and_reinserting_in_the_same_batch_is_allowed(tmp
 
     assert result.success is True, result.problems
     assert [item["segment_id"] for item in pm.load_script("demo", "episode_1.json")["segments"]] == ["E1S01"]
+
+
+def test_agent_can_write_dub_lines_and_the_server_fills_their_source_text(tmp_path: Path) -> None:
+    pm, service = _reference_project(tmp_path, sources={})
+    result = service.execute(
+        "demo",
+        _command(
+            pm,
+            [
+                {"op": "update", "id": "E1U1", "fields": {"text": "风吹过旷野。\n{夜深了。}"}},
+                {
+                    "op": "update",
+                    "id": "E1U1",
+                    "fields": {"dub_lines": [{"index": 0, "speaker": None, "gender": "male", "text_vi": "Đêm khuya."}]},
+                },
+            ],
+        ),
+    )
+
+    assert result.success is True, result
+    saved = pm.load_script("demo", "episode_1.json")["video_units"][0]
+    assert saved["dub_lines"] == [
+        {"index": 0, "speaker": None, "gender": "male", "source_text": "夜深了。", "text_vi": "Đêm khuya."}
+    ]
+
+
+def test_dub_line_with_unknown_gender_is_rejected_without_writing(tmp_path: Path) -> None:
+    pm, service = _reference_project(tmp_path, sources={})
+    before = pm.load_script("demo", "episode_1.json")
+
+    result = service.execute(
+        "demo",
+        _command(
+            pm,
+            [{"op": "update", "id": "E1U1", "fields": {"dub_lines": [{"index": 0, "gender": "x", "text_vi": "a"}]}}],
+        ),
+    )
+
+    assert result.success is False
+    assert pm.load_script("demo", "episode_1.json") == before

@@ -13,6 +13,7 @@ MESSAGES: dict[str, str] = {
     "provider_name_minimax": "MiniMax",
     "provider_name_kling": "Kling",
     "provider_name_agnes": "Agnes",
+    "provider_name_vieneu": "VieNeu-TTS (Cục bộ)",
     "provider_name_runninghub": "RunningHub",
     # Provider descriptions
     "provider_desc_gemini-aistudio": "Google AI Studio cung cấp các mô hình Gemini hỗ trợ tạo ảnh và video, phù hợp cho việc dựng prototype nhanh và dự án cá nhân.",
@@ -27,6 +28,7 @@ MESSAGES: dict[str, str] = {
     "provider_desc_kling": "Nền tảng tạo video và ảnh Kling của Kuaishou. Xác thực bằng API Key áp dụng cho mọi model; Access Key + Secret Key (JWT) chỉ áp dụng cho model từ 3.0 trở về trước. Chọn một trong hai — nếu điền cả hai, API Key được ưu tiên.",
     "provider_desc_agnes": "Nền tảng đa phương thức Agnes (phong cách OpenAI), xác thực bằng Bearer API key; hiện hỗ trợ tạo ảnh, văn bản và video.",
     "provider_desc_runninghub": "RunningHub AI Apps cho workflow video, tạo ảnh từ văn bản và tạo ảnh từ ảnh.",
+    "provider_desc_vieneu": "Tổng hợp giọng nói tiếng Việt cục bộ với VieNeu-TTS v3 Turbo. Không cần API Key; dịch vụ cục bộ tự khởi động ở lần lồng tiếng đầu tiên.",
     # Model display names (registry entries written in a non-Latin script; brand-only
     # names are absent on purpose and fall back to lib/config/registry.py display_name)
     "model_name_ark_doubao-seed-2-0-pro-260215": "Doubao Seed 2.0 Pro",
