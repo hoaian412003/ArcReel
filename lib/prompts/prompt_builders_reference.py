@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from lib.infra.text_metrics import reading_unit_noun
+from lib.prompts.h3_authoring_template import TEMPLATE_ID as H3_AUTHORING_TEMPLATE_ID
 from lib.prompts.h3_guide_preset import DEFAULT_H3_GUIDE_PRESET
 from lib.prompts.prompt_builders_script import (
     _neutralize_tags,
@@ -299,6 +300,7 @@ def build_reference_video_h3_ref2va_prompt(
     audio_reference_names: list[str],
     h3_guide_preset: str = DEFAULT_H3_GUIDE_PRESET,
     h3_guide_custom: str | None = None,
+    template_override: str | None = None,
     aspect_ratio: str = "9:16",
     target_language: str = "中文",
     instructions: str | None = None,
@@ -307,10 +309,10 @@ def build_reference_video_h3_ref2va_prompt(
 
     与 :func:`build_reference_video_prompt` 同一套输入，产出多一份六段英文载荷；
     ``audio_reference_names`` 是已挂参考音频、允许用 ``<Audio @[名称]>`` 引用的角色名，为空时模版不使用音频标签；
-    ``h3_guide_preset`` 选定 ``detailed_description`` 的写作指南预设；``h3_guide_custom`` 非空时整段替换预设的内置指南。
+    ``h3_guide_preset`` 选定 ``detailed_description`` 的写作指南预设；``h3_guide_custom`` 非空时整段替换预设的内置指南；
+    ``template_override`` 非空时用它替换整份内置模版正文（槽位沿用内置声明）。
     """
-    return builtin_templates.render(
-        "text/reference_video_prompt_authoring_h3_ref2va",
+    slots = dict(
         target_language=target_language,
         project_overview=_overview_slot(project_overview),
         style=style,
@@ -326,3 +328,37 @@ def build_reference_video_h3_ref2va_prompt(
         max_refs=max_refs,
         instructions=instructions,
     )
+    if template_override:
+        return builtin_templates.render_body(H3_AUTHORING_TEMPLATE_ID, template_override, **slots)
+    return builtin_templates.render(H3_AUTHORING_TEMPLATE_ID, **slots)
+
+
+def preview_h3_ref2va_template(template_override: str | None = None) -> str:
+    """用示例数据渲染 H3 提示词编写模版；``template_override`` 为空时渲染内置模版。
+
+    保存替换正文前用它校验：槽位缺失、表达式出错等渲染期问题在这里暴露，而不是等到一次付费的编写调用。
+    """
+    return build_reference_video_h3_ref2va_prompt(
+        project_overview={
+            "synopsis": "(示例概述)",
+            "genre": "(示例类型)",
+            "theme": "(示例主题)",
+            "world_setting": "(示例世界观)",
+        },
+        style="(项目画风)",
+        style_description="(画风描述)",
+        characters={"阿岚": {"description": "(外观描述)"}},
+        scenes={"旧码头": {"description": "(外观描述)"}},
+        props={},
+        script_plan_units=[{"unit_id": "E1U01", "text": "@[旧码头] 夜雨。@[阿岚]{走吧。}", "duration_seconds": 8}],
+        max_refs=4,
+        episode=1,
+        audio_reference_names=["阿岚"],
+        instructions="(用户附加指令，可选)",
+        template_override=template_override,
+    )
+
+
+def validate_h3_authoring_template(body: str) -> None:
+    """校验 H3 提示词编写模版的替换正文（语法、槽位、锁定片段与示例渲染）；违约抛 ``TemplateError``。"""
+    preview_h3_ref2va_template(body)

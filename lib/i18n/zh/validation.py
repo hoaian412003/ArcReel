@@ -41,6 +41,7 @@ MESSAGES = {
     "val_generation_mode_invalid": "generation_mode 值无效: '{value}'，必须是 {allowed}",
     "val_h3_guide_preset_invalid": "h3_guide_preset 值无效: '{value}'，必须是 {allowed}",
     "val_h3_guide_custom_invalid": "h3_guide_custom 值无效：必须是不超过 {max} 个字符的非空文本",
+    "val_h3_authoring_template_invalid": "h3_authoring_template 值无效：必须是不超过 {max} 个字符的非空文本",
     "val_video_prompt_profile_invalid": "video_prompt_profile 值无效: '{value}'，必须是 {allowed}",
     "val_deprecated_clues": "project.json 含已废弃字段 clues，请等待自动迁移或手动重启服务",
     "val_deprecated_field_removable": "{field} 字段已废弃（改为读时计算），可安全移除",

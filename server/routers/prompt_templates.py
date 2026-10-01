@@ -11,9 +11,14 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from lib.infra.api_errors import NotFoundError
+from lib.config.service import ConfigService
+from lib.infra.api_errors import NotFoundError, UnprocessableError
+from lib.prompts.h3_authoring_template import MAX_TEMPLATE_CHARS
+from lib.prompts.h3_authoring_template import TEMPLATE_ID as H3_AUTHORING_TEMPLATE_ID
+from lib.prompts.prompt_builders_reference import preview_h3_ref2va_template
 from lib.prompts.prompt_templates import PartialEntry, PromptTemplates, TemplateError, TemplateMeta, UserActionTrigger
 from lib.prompts.prompt_templates.builtin import builtin_templates
+from server.dependencies import get_config_service
 
 router = APIRouter(prefix="/prompt-templates")
 
@@ -47,7 +52,63 @@ async def list_prompt_templates(templates: Templates) -> PromptTemplateListRespo
     )
 
 
-# 须注册在模版详情之前：模版详情的 ``{template_id:path}`` 会吞下任意子路径。
+class H3AuthoringOverrideResponse(BaseModel):
+    builtin: str
+    """内置模版正文，编辑器的起点与「恢复默认」的内容。"""
+    override: str | None
+    """全局替换正文；没有时为 None。"""
+    max_chars: int
+
+
+class H3AuthoringBody(BaseModel):
+    body: str
+
+
+class H3AuthoringPreviewResponse(BaseModel):
+    prompt: str
+
+
+def _checked_h3_body(body: str) -> str:
+    """校验 H3 提示词编写模版的替换正文，返回示例渲染结果；违约抛 422。"""
+    if not body.strip() or len(body) > MAX_TEMPLATE_CHARS:
+        raise UnprocessableError("h3_authoring_template_size_invalid", max=MAX_TEMPLATE_CHARS)
+    try:
+        return preview_h3_ref2va_template(body)
+    except TemplateError as exc:
+        raise UnprocessableError("h3_authoring_template_invalid", detail=str(exc)) from exc
+
+
+# 以下三个 override 路由须注册在模版详情之前：模版详情的 ``{template_id:path}`` 会吞下任意子路径。
+@router.get("/overrides/h3-authoring")
+async def get_h3_authoring_override(
+    templates: Templates, svc: Annotated[ConfigService, Depends(get_config_service)]
+) -> H3AuthoringOverrideResponse:
+    builtin, _ = templates.read_source(H3_AUTHORING_TEMPLATE_ID)
+    return H3AuthoringOverrideResponse(
+        builtin=builtin, override=await svc.get_h3_authoring_template(), max_chars=MAX_TEMPLATE_CHARS
+    )
+
+
+@router.put("/overrides/h3-authoring")
+async def put_h3_authoring_override(
+    req: H3AuthoringBody, svc: Annotated[ConfigService, Depends(get_config_service)]
+) -> H3AuthoringPreviewResponse:
+    rendered = _checked_h3_body(req.body)
+    await svc.set_h3_authoring_template(req.body)
+    return H3AuthoringPreviewResponse(prompt=rendered)
+
+
+@router.delete("/overrides/h3-authoring")
+async def delete_h3_authoring_override(svc: Annotated[ConfigService, Depends(get_config_service)]) -> None:
+    await svc.set_h3_authoring_template("")
+
+
+@router.post("/overrides/h3-authoring/preview")
+async def preview_h3_authoring_override(req: H3AuthoringBody) -> H3AuthoringPreviewResponse:
+    """不落盘：校验正文并返回用示例数据渲染出的完整提示词。"""
+    return H3AuthoringPreviewResponse(prompt=_checked_h3_body(req.body))
+
+
 @router.get("/partials/{name:path}")
 async def get_prompt_partial(name: str, templates: Templates) -> PartialEntry:
     try:

@@ -170,6 +170,34 @@ class PromptTemplates:
 
     def render(self, template_id: str, **slots: Any) -> str:
         metadata, _, template = self._get(template_id)
+        return self._render(template_id, metadata, template, slots)
+
+    def check_body(self, template_id: str, body: str) -> Template:
+        """校验替换用的模版正文并编译；元数据（槽位、轴、锁定片段）沿用内置模版，违约抛 :class:`TemplateError`。
+
+        正文走与内置模版相同的加载期检查（语法白名单、片段名字面量、片段位置）；另要求：不引用内置模版
+        声明之外的槽位，且内置模版引用的锁定片段（``protected``）一个不少。
+        """
+        metadata, _, _ = self._get(template_id)
+        partials: dict[str, str] = {}
+        try:
+            referenced = self._collect(metadata, body, partials, set(), ())
+            template = self._env.from_string(body)
+        except (JinjaError, ValidationError) as exc:
+            raise TemplateError(f"{template_id}: 正文无效: {exc}") from exc
+        if undeclared := referenced - metadata.slots.keys():
+            raise TemplateError(f"{template_id}: 引用了未声明的槽位 {sorted(undeclared)}")
+        required = {name for name in self._sources[template_id] if self._partial_sources[name][1]}
+        if missing := required - partials.keys():
+            raise TemplateError(f"{template_id}: 缺少锁定片段 {sorted(missing)}，这些片段不可移除")
+        return template
+
+    def render_body(self, template_id: str, body: str, **slots: Any) -> str:
+        """用替换正文渲染；槽位校验与内置渲染一致，正文先经 :meth:`check_body`。"""
+        metadata, _, _ = self._get(template_id)
+        return self._render(template_id, metadata, self.check_body(template_id, body), slots)
+
+    def _render(self, template_id: str, metadata: TemplateMeta, template: Template, slots: dict[str, Any]) -> str:
         if missing := metadata.slots.keys() - slots.keys():
             raise TemplateError(f"{template_id}: 缺少槽位 {sorted(missing)}（缺值须显式传 None）")
         if extra := slots.keys() - metadata.slots.keys():

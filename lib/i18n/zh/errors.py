@@ -159,6 +159,8 @@ MESSAGES = {
     "narrator_gender_invalid": "画外音配音性别只能是 male 或 female",
     "h3_guide_preset_invalid": "H3 写作指南预设只能是内置预设之一",
     "h3_guide_custom_too_long": "自定义 H3 写作指南过长",
+    "h3_authoring_template_invalid": "H3 提示词编写模版无效：{detail}",
+    "h3_authoring_template_size_invalid": "H3 提示词编写模版必须是不超过 {max} 个字符的非空文本",
     "video_prompt_profile_invalid": "视频提示词档只能是「默认」或「H3 Ref2VA」，且 H3 Ref2VA 仅适用于参考生视频的剧情与解说项目",
     "video_poll_timeout_minimum": "视频轮询超时不能少于 60 秒",
     "speech_rate_out_of_range": "语速需在 {min} 到 {max} 之间（字或词/秒）",

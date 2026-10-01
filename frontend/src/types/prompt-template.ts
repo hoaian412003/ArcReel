@@ -54,3 +54,20 @@ export interface PromptTemplateDetail {
   partials: PromptTemplatePartial[];
   output_schema?: JsonSchemaNode;
 }
+
+/** H3 提示词编写模版的全局替换状态；与后端 `H3AuthoringOverrideResponse` 对应。 */
+export interface H3AuthoringOverride {
+  /** 内置模版正文：编辑起点与「恢复默认」的内容。 */
+  builtin: string;
+  /** 全局替换正文；没有时为 null。 */
+  override: string | null;
+  max_chars: number;
+}
+
+export interface H3AuthoringPreview {
+  /** 用示例数据渲染出的完整提示词。 */
+  prompt: string;
+}
+
+/** 内置模版 id；与后端 `lib.prompts.h3_authoring_template.TEMPLATE_ID` 同值。 */
+export const H3_AUTHORING_TEMPLATE_ID = "text/reference_video_prompt_authoring_h3_ref2va";

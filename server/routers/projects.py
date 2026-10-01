@@ -58,9 +58,12 @@ from lib.project.asset_fingerprints import compute_asset_fingerprints
 from lib.project.asset_types import asset_name_comparison_key
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import EmptySourceError, EpisodeScriptReboundError, SourceKind, get_project_manager
+from lib.prompts.h3_authoring_template import PROJECT_FIELD as H3_AUTHORING_TEMPLATE_FIELD
 from lib.prompts.h3_guide_preset import CUSTOM_PROJECT_FIELD as H3_GUIDE_CUSTOM_FIELD
 from lib.prompts.h3_guide_preset import MAX_CUSTOM_GUIDE_CHARS, VALID_H3_GUIDE_PRESETS
 from lib.prompts.h3_guide_preset import PROJECT_FIELD as H3_GUIDE_PRESET_FIELD
+from lib.prompts.prompt_builders_reference import validate_h3_authoring_template
+from lib.prompts.prompt_templates import TemplateError
 from lib.prompts.style_templates import is_known_template, resolve_template_prompt
 from lib.prompts.video_prompt_profile import (
     DEFAULT_VIDEO_PROMPT_PROFILE,
@@ -313,6 +316,8 @@ class UpdateProjectRequest(BaseModel):
     h3_guide_preset: str | None = None
     # H3 自定义写作指南正文：null / 空串 = 清除、继承全局设置
     h3_guide_custom: str | None = None
+    # H3 提示词编写模版的完整替换正文：null / 空串 = 清除、继承全局设置
+    h3_authoring_template: str | None = None
     # 旁白配音（TTS）项目级覆盖：音频后端 / 音色 / 语速；留空 = 跟随全局默认
     audio_backend: str | None = None
     narration_voice: str | None = None
@@ -1039,6 +1044,18 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                         project[H3_GUIDE_CUSTOM_FIELD] = custom
                     else:
                         raise HTTPException(status_code=422, detail=_t("h3_guide_custom_too_long"))
+                if "h3_authoring_template" in req.model_fields_set:
+                    body = req.h3_authoring_template or ""
+                    if not body.strip():
+                        project.pop(H3_AUTHORING_TEMPLATE_FIELD, None)
+                    else:
+                        try:
+                            validate_h3_authoring_template(body)
+                        except TemplateError as exc:
+                            raise HTTPException(
+                                status_code=422, detail=_t("h3_authoring_template_invalid", detail=str(exc))
+                            ) from exc
+                        project[H3_AUTHORING_TEMPLATE_FIELD] = body
                 # 旁白音色：照供应商文档填的字符串 id；空串 = 清除回落全局默认
                 if "narration_voice" in req.model_fields_set:
                     voice = (req.narration_voice or "").strip()

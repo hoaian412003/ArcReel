@@ -43,6 +43,8 @@ from lib.project.asset_types import (
 )
 from lib.project.project_manager import VALID_GENERATION_MODES as _VALID_GENERATION_MODES
 from lib.project.project_manager import VALID_SOURCE_KINDS as _VALID_SOURCE_KINDS
+from lib.prompts.h3_authoring_template import MAX_TEMPLATE_CHARS
+from lib.prompts.h3_authoring_template import PROJECT_FIELD as H3_AUTHORING_TEMPLATE_FIELD
 from lib.prompts.h3_guide_preset import CUSTOM_PROJECT_FIELD as H3_GUIDE_CUSTOM_FIELD
 from lib.prompts.h3_guide_preset import MAX_CUSTOM_GUIDE_CHARS, VALID_H3_GUIDE_PRESETS
 from lib.prompts.h3_guide_preset import PROJECT_FIELD as H3_GUIDE_PRESET_FIELD
@@ -449,6 +451,14 @@ class DataValidator:
             not isinstance(guide_custom, str) or not guide_custom.strip() or len(guide_custom) > MAX_CUSTOM_GUIDE_CHARS
         ):
             errors.append(_m("val_h3_guide_custom_invalid", max=MAX_CUSTOM_GUIDE_CHARS))
+
+        authoring_template = project.get(H3_AUTHORING_TEMPLATE_FIELD)
+        if authoring_template is not None and (
+            not isinstance(authoring_template, str)
+            or not authoring_template.strip()
+            or len(authoring_template) > MAX_TEMPLATE_CHARS
+        ):
+            errors.append(_m("val_h3_authoring_template_invalid", max=MAX_TEMPLATE_CHARS))
 
         # 配音设置：可选字段，缺省即不配音 / 画外音男声；出现即须是已知取值。
         for dub_field, allowed_values in (

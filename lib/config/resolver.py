@@ -46,6 +46,7 @@ from lib.db.repositories.credential_repository import CredentialRepository
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 from lib.episode.episode_target_duration import project_episode_target_duration
 from lib.project.project_manager import get_project_manager
+from lib.prompts.h3_authoring_template import resolve_h3_authoring_template
 from lib.prompts.h3_guide_preset import resolve_h3_guide_custom, resolve_h3_guide_preset
 from lib.speech.character_voice import CharacterVoiceBinding, character_voice_binding
 
@@ -857,6 +858,11 @@ class ConfigResolver:
         """解析 H3 自定义写作指南：project.json 顶层 ``h3_guide_custom`` > 全局 setting > None（用内置预设）。"""
         async with self._open_session() as (_session, svc):
             return resolve_h3_guide_custom(project, await svc.get_h3_guide_custom())
+
+    async def resolve_h3_authoring_template(self, project: dict | None) -> str | None:
+        """解析 H3 提示词编写模版替换正文：project.json 顶层 ``h3_authoring_template`` > 全局 setting > None（用内置模版）。"""
+        async with self._open_session() as (_session, svc):
+            return resolve_h3_authoring_template(project, await svc.get_h3_authoring_template())
 
     async def resolve_narration_speed(self, project: dict | None) -> float | None:
         """解析旁白语速：project.json 顶层 ``narration_speed`` > 全局 setting > None（不传给 backend）。

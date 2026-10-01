@@ -5,6 +5,8 @@ import { API } from "@/api";
 import { SectionShell } from "@/components/ui/SectionShell";
 import { CARD_STYLE, GHOST_BTN_CLS } from "@/components/ui/darkroom-tokens";
 import type { PromptTemplateDetail } from "@/types";
+import { H3_AUTHORING_TEMPLATE_ID } from "@/types";
+import { H3AuthoringGlobalEditor } from "./H3TemplateEditor";
 import { errMsg } from "@/utils/async";
 import { flattenOutputSchema } from "./promptTemplateSchema";
 import { categoryLabel, ErrorCard, LoadingCard, LockBadge, type Load } from "./promptTemplateShared";
@@ -146,6 +148,16 @@ function DetailBody({
           onOpenPartial={onOpenPartial}
         />
       </SectionShell>
+
+      {template.id === H3_AUTHORING_TEMPLATE_ID && (
+        <SectionShell
+          kicker="Override"
+          title={t("h3_template_override_title")}
+          description={t("h3_template_override_desc")}
+        >
+          <H3AuthoringGlobalEditor />
+        </SectionShell>
+      )}
 
       {outputSchema && (
         <details

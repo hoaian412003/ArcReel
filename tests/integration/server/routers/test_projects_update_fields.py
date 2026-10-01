@@ -161,6 +161,28 @@ class TestProjectsRouter:
             assert resp.status_code == 200
             assert "h3_guide_custom" not in fake_pm.project_data["ready"]
 
+    def test_update_project_persists_validates_and_clears_h3_authoring_template(self, tmp_path, monkeypatch):
+        from lib.prompts.h3_authoring_template import TEMPLATE_ID
+        from lib.prompts.prompt_templates.builtin import builtin_templates
+
+        builtin, _ = builtin_templates.read_source(TEMPLATE_ID)
+        fake_pm = _FakePM(tmp_path)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"h3_authoring_template": builtin})
+            assert resp.status_code == 200
+            assert fake_pm.project_data["ready"]["h3_authoring_template"] == builtin
+
+            resp = client.patch(
+                "/api/v1/projects/ready", json={"h3_authoring_template": builtin + "{{ unknown_slot }}"}
+            )
+            assert resp.status_code == 422
+            assert fake_pm.project_data["ready"]["h3_authoring_template"] == builtin
+
+            resp = client.patch("/api/v1/projects/ready", json={"h3_authoring_template": ""})
+            assert resp.status_code == 200
+            assert "h3_authoring_template" not in fake_pm.project_data["ready"]
+
     def test_update_project_rejects_unknown_h3_guide_preset(self, tmp_path, monkeypatch):
         fake_pm = _FakePM(tmp_path)
         client = build_projects_client(monkeypatch, fake_pm)

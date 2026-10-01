@@ -37,6 +37,7 @@ MESSAGES = {
     "val_generation_mode_invalid": "Invalid generation_mode: '{value}', must be one of {allowed}",
     "val_h3_guide_preset_invalid": "Invalid h3_guide_preset: '{value}', must be one of {allowed}",
     "val_h3_guide_custom_invalid": "Invalid h3_guide_custom: must be non-empty text of at most {max} characters",
+    "val_h3_authoring_template_invalid": "Invalid h3_authoring_template: must be non-empty text of at most {max} characters",
     "val_video_prompt_profile_invalid": "Invalid video_prompt_profile: '{value}', must be one of {allowed}",
     "val_deprecated_clues": (
         "project.json contains the deprecated field clues; wait for automatic migration or restart the service"

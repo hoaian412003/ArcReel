@@ -27,6 +27,8 @@ import type {
   ProjectDeletedPayload,
   GetSystemConfigResponse,
   GetSystemVersionResponse,
+  H3AuthoringOverride,
+  H3AuthoringPreview,
   PromptTemplateDetail,
   PromptTemplateListResponse,
   PromptTemplatePartial,
@@ -368,6 +370,30 @@ class API {
   ): Promise<PromptTemplatePartial> {
     const path = name.split("/").map(encodeURIComponent).join("/");
     return this.request(`/prompt-templates/partials/${path}`, { signal: options.signal });
+  }
+
+  static async getH3AuthoringOverride(options: { signal?: AbortSignal } = {}): Promise<H3AuthoringOverride> {
+    return this.request("/prompt-templates/overrides/h3-authoring", { signal: options.signal });
+  }
+
+  /** 保存全局替换正文；后端先校验并返回示例渲染，违约返回 422。 */
+  static async saveH3AuthoringOverride(body: string): Promise<H3AuthoringPreview> {
+    return this.request("/prompt-templates/overrides/h3-authoring", {
+      method: "PUT",
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  static async deleteH3AuthoringOverride(): Promise<void> {
+    await this.request("/prompt-templates/overrides/h3-authoring", { method: "DELETE" });
+  }
+
+  /** 不落盘：校验正文并返回示例渲染。 */
+  static async previewH3AuthoringOverride(body: string): Promise<H3AuthoringPreview> {
+    return this.request("/prompt-templates/overrides/h3-authoring/preview", {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
   }
 
   // ==================== 首次使用引导 ====================

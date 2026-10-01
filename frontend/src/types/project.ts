@@ -221,6 +221,8 @@ export interface ProjectData {
   h3_guide_preset?: H3GuidePreset | null;
   /** H3 自定义写作指南正文；缺省即继承全局设置。 */
   h3_guide_custom?: string | null;
+  /** H3 提示词编写模版的完整替换正文；缺省即继承全局替换，再缺省用内置模版。 */
+  h3_authoring_template?: string | null;
   /** 旁白配音（TTS）项目级覆盖：音频后端 / 音色 / 语速，留空即跟随全局默认 */
   audio_backend?: string | null;
   narration_voice?: string | null;

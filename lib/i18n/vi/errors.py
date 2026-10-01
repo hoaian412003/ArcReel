@@ -167,6 +167,8 @@ MESSAGES = {
     "narrator_gender_invalid": "Giới tính giọng dẫn chuyện chỉ có thể là male hoặc female",
     "h3_guide_preset_invalid": "Preset hướng dẫn viết H3 phải là một trong các preset có sẵn",
     "h3_guide_custom_too_long": "Hướng dẫn H3 tùy chỉnh quá dài",
+    "h3_authoring_template_invalid": "Mẫu biên soạn prompt H3 không hợp lệ: {detail}",
+    "h3_authoring_template_size_invalid": "Mẫu biên soạn prompt H3 phải là văn bản không rỗng, tối đa {max} ký tự",
     "video_prompt_profile_invalid": "Cấu hình prompt video chỉ có thể là mặc định hoặc H3 Ref2VA, và H3 Ref2VA chỉ dùng cho dự án kịch và thuyết minh theo tham chiếu video",
     "video_poll_timeout_minimum": "Thời gian chờ thăm dò video phải ít nhất 60 giây",
     "speech_rate_out_of_range": "Nhịp đọc phải nằm trong khoảng {min} đến {max} (ký tự hoặc từ mỗi giây)",
