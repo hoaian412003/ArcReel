@@ -10,6 +10,7 @@ invoked_by:
 applies_to:
   content_mode: [drama, narration]
   generation_mode: [reference_video]
+  h3_guide_preset: [standard, dialogue, action]
 output_schema: lib.script.script_models:ReferencePromptAuthoringH3FlatScript
 slots:
   target_language: 单元正文的输出语言
@@ -24,6 +25,7 @@ slots:
   audio_reference_names: 已挂参考音频、可用 <Audio @[名称]> 引用的角色名列表；为空时不使用音频标签
   units_content: 已确认视频单元的渲染文本（由代码投影：序号 + 时长 + 正文）
   episode: 当前集号
+  h3_guide_preset: H3 写作指南预设（standard / dialogue / action），决定 detailed_description 的细节取向与篇幅
   max_refs: 单个视频单元的参考图上限；不限时传 null
   instructions: 附加指令正文；缺值传 null
 protected: false
@@ -124,8 +126,7 @@ protected: false
   - `text` 里 `@[角色]{台词}` 的每一句都必须逐字放进某个 `<d>`，条数一致。`text` 里的画外音 `{…}`
     **不要**写进 `<d>`——旁白由后期配音承担，写进去视频模型会念出来。
   - 画面上真实可见的文字放进英文双引号，保留原文。
-  - 细节要具体：用可看见、可听见的细节，不用「电影感」「唯美」这类抽象词，也不要写成剧情梗概或素材关系清单。
-  - 篇幅随 unit 时长走：较长的 unit 一般写 350–500 个英文单词，台词密集时以放得下完整台词为先。
+{{ variant("shared/h3_guide", h3_guide_preset) }}
 - `overall_soundscape`：1–4 句英文，概括全片的环境音、动作物理声和非言语人声。台词与和某一镜同步的声音留在
   `detailed_description`，不在这里重复。
 - `non_diegetic_music`：只有观众听得到的背景配乐，1–3 句英文，写乐器、速度、节奏与力度变化，不写抽象情绪词。

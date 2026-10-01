@@ -132,6 +132,27 @@ class TestProjectsRouter:
             assert resp.status_code == 200
             assert "character_voice_binding" not in fake_pm.project_data["ready"]
 
+    def test_update_project_persists_and_clears_h3_guide_preset(self, tmp_path, monkeypatch):
+        """PATCH H3 写作指南预设：合法枚举写入，空值清除（继承全局设置）。"""
+        fake_pm = _FakePM(tmp_path)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"h3_guide_preset": "dialogue"})
+            assert resp.status_code == 200
+            assert fake_pm.project_data["ready"]["h3_guide_preset"] == "dialogue"
+
+            resp = client.patch("/api/v1/projects/ready", json={"h3_guide_preset": None})
+            assert resp.status_code == 200
+            assert "h3_guide_preset" not in fake_pm.project_data["ready"]
+
+    def test_update_project_rejects_unknown_h3_guide_preset(self, tmp_path, monkeypatch):
+        fake_pm = _FakePM(tmp_path)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"h3_guide_preset": "cinematic"})
+            assert resp.status_code == 422
+            assert "h3_guide_preset" not in fake_pm.project_data["ready"]
+
     def test_update_project_rejects_unknown_character_voice_binding(self, tmp_path, monkeypatch):
         """非法枚举 422，且不写回 project.json。"""
         fake_pm = _FakePM(tmp_path)

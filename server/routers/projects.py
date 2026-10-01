@@ -58,6 +58,8 @@ from lib.project.asset_fingerprints import compute_asset_fingerprints
 from lib.project.asset_types import asset_name_comparison_key
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import EmptySourceError, EpisodeScriptReboundError, SourceKind, get_project_manager
+from lib.prompts.h3_guide_preset import PROJECT_FIELD as H3_GUIDE_PRESET_FIELD
+from lib.prompts.h3_guide_preset import VALID_H3_GUIDE_PRESETS
 from lib.prompts.style_templates import is_known_template, resolve_template_prompt
 from lib.prompts.video_prompt_profile import (
     DEFAULT_VIDEO_PROMPT_PROFILE,
@@ -306,6 +308,8 @@ class UpdateProjectRequest(BaseModel):
     character_voice_binding: str | None = None
     # 参考生视频提示词档：default / h3_ref2va；null / 空串 = 清除、回落默认档
     video_prompt_profile: str | None = None
+    # H3 写作指南预设：null / 空串 = 清除、继承全局设置
+    h3_guide_preset: str | None = None
     # 旁白配音（TTS）项目级覆盖：音频后端 / 音色 / 语速；留空 = 跟随全局默认
     audio_backend: str | None = None
     narration_voice: str | None = None
@@ -1008,6 +1012,14 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                         project[VIDEO_PROMPT_PROFILE_FIELD] = profile
                     else:
                         raise HTTPException(status_code=422, detail=_t("video_prompt_profile_invalid"))
+                if "h3_guide_preset" in req.model_fields_set:
+                    preset = (req.h3_guide_preset or "").strip()
+                    if not preset:
+                        project.pop(H3_GUIDE_PRESET_FIELD, None)
+                    elif preset in VALID_H3_GUIDE_PRESETS:
+                        project[H3_GUIDE_PRESET_FIELD] = preset
+                    else:
+                        raise HTTPException(status_code=422, detail=_t("h3_guide_preset_invalid"))
                 # 旁白音色：照供应商文档填的字符串 id；空串 = 清除回落全局默认
                 if "narration_voice" in req.model_fields_set:
                     voice = (req.narration_voice or "").strip()

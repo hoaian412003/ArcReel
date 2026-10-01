@@ -347,7 +347,7 @@ export function ReferenceVideoCard({
         <pre
           ref={preRef}
           aria-hidden
-          className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-sm leading-6"
+          className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5"
         >
           {pickerOpen
             ? renderHighlightedTokens(tokens, atStart, setAnchorEl, voiceoverLabel)
@@ -373,7 +373,7 @@ export function ReferenceVideoCard({
           placeholder={t("reference_editor_placeholder")}
           aria-label={t("reference_editor_aria_name")}
           spellCheck={false}
-          className="absolute inset-0 h-full w-full resize-none bg-transparent p-3 font-mono text-sm leading-6 text-transparent caret-gray-200 placeholder:text-gray-600 focus:outline-none"
+          className="absolute inset-0 h-full w-full resize-none bg-transparent p-3 font-mono text-xs leading-5 text-transparent caret-gray-200 placeholder:text-gray-600 focus:outline-none"
         />
 
         {pickerOpen && anchorEl && (
@@ -395,7 +395,7 @@ export function ReferenceVideoCard({
         )}
       </div>
 
-      <SourceTextReadonly text={unit.source_text} className="mt-3 flex-shrink-0" />
+      <SourceTextReadonly text={unit.source_text} className="mt-3 flex-shrink-0" textClassName="max-h-[60px] overflow-y-auto" />
 
       {unknownMentions.length > 0 && (
         <div

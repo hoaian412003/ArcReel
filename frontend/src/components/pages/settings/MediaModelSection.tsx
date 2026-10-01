@@ -27,6 +27,7 @@ import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
 import { useDisplayNames } from "@/hooks/useDisplayNames";
 import { useModelCandidates } from "@/hooks/useModelCandidates";
 import { errMsg } from "@/utils/async";
+import { DEFAULT_H3_GUIDE_PRESET, H3_GUIDE_PRESETS, parseH3GuidePreset } from "@/types";
 import {
   catalogDurations,
   getCustomProviderModels,
@@ -262,6 +263,7 @@ export function MediaModelSection() {
   // 同口径。
   const renderVideoOptionMeta = videoOptionMetaRenderer({ t, providers, customProviders, endpointToMediaType });
   const currentAudioBackend = draft.default_audio_backend ?? settings.default_audio_backend ?? "";
+  const currentGuidePreset = parseH3GuidePreset(draft.h3_guide_preset ?? settings.h3_guide_preset) ?? DEFAULT_H3_GUIDE_PRESET;
   const currentNarrationVoice = draft.narration_voice ?? settings.narration_voice ?? "";
   const currentNarrationSpeed =
     "narration_speed" in draft ? draft.narration_speed : settings.narration_speed;
@@ -534,6 +536,25 @@ export function MediaModelSection() {
             <p className="mt-1 text-[11px] text-text-4">{t("narration_speed_hint")}</p>
           </div>
         </div>
+      </SectionCard>
+
+      <SectionCard kicker="Video Prompt" title={t("h3_guide_preset_global_title")} description={t("h3_guide_preset_global_desc")}>
+        <label htmlFor="h3-guide-preset-global" className="sr-only">
+          {t("h3_guide_preset_label")}
+        </label>
+        <select
+          id="h3-guide-preset-global"
+          value={currentGuidePreset}
+          onChange={(e) => setDraft((prev) => ({ ...prev, h3_guide_preset: e.target.value }))}
+          className="w-full rounded-[8px] border border-hairline bg-bg-grad-a/55 px-3 py-2 text-[12.5px] text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          {H3_GUIDE_PRESETS.map((preset) => (
+            <option key={preset} value={preset}>
+              {t(`h3_guide_preset_${preset}_label`)}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-[11px] leading-relaxed text-text-4">{t(`h3_guide_preset_${currentGuidePreset}_desc`)}</p>
       </SectionCard>
 
       <SectionCard

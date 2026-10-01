@@ -165,6 +165,7 @@ MESSAGES = {
     "character_voice_binding_invalid": "Cách ràng buộc giọng nhân vật chỉ có thể là theo mô tả hoặc âm thanh tham chiếu",
     "dub_target_language_invalid": "Ngôn ngữ lồng tiếng hiện chỉ hỗ trợ tiếng Việt (vi)",
     "narrator_gender_invalid": "Giới tính giọng dẫn chuyện chỉ có thể là male hoặc female",
+    "h3_guide_preset_invalid": "Preset hướng dẫn viết H3 phải là một trong các preset có sẵn",
     "video_prompt_profile_invalid": "Cấu hình prompt video chỉ có thể là mặc định hoặc H3 Ref2VA, và H3 Ref2VA chỉ dùng cho dự án kịch và thuyết minh theo tham chiếu video",
     "video_poll_timeout_minimum": "Thời gian chờ thăm dò video phải ít nhất 60 giây",
     "speech_rate_out_of_range": "Nhịp đọc phải nằm trong khoảng {min} đến {max} (ký tự hoặc từ mỗi giây)",

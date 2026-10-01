@@ -46,6 +46,7 @@ from lib.db.repositories.credential_repository import CredentialRepository
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 from lib.episode.episode_target_duration import project_episode_target_duration
 from lib.project.project_manager import get_project_manager
+from lib.prompts.h3_guide_preset import resolve_h3_guide_preset
 from lib.speech.character_voice import CharacterVoiceBinding, character_voice_binding
 
 logger = logging.getLogger(__name__)
@@ -846,6 +847,11 @@ class ConfigResolver:
                 if isinstance(override, str) and override.strip():
                     return override.strip()
             return await svc.get_narration_voice()
+
+    async def resolve_h3_guide_preset(self, project: dict | None) -> str:
+        """解析 H3 写作指南预设：project.json 顶层 ``h3_guide_preset`` > 全局 setting > 缺省预设。"""
+        async with self._open_session() as (_session, svc):
+            return resolve_h3_guide_preset(project, await svc.get_h3_guide_preset())
 
     async def resolve_narration_speed(self, project: dict | None) -> float | None:
         """解析旁白语速：project.json 顶层 ``narration_speed`` > 全局 setting > None（不传给 backend）。

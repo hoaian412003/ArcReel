@@ -12,8 +12,8 @@ import { executingImageModel, executingVideoModel } from "@/components/shared/La
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
 import { DEFAULT_TEMPLATE_ID, STYLE_TEMPLATES } from "@/data/style-templates";
-import type { CharacterVoiceBinding, CustomProviderInfo, ProviderInfo, VideoPromptProfile } from "@/types";
-import { DEFAULT_CHARACTER_VOICE_BINDING, DEFAULT_VIDEO_PROMPT_PROFILE } from "@/types";
+import type { CharacterVoiceBinding, CustomProviderInfo, H3GuidePreset, ProviderInfo, VideoPromptProfile } from "@/types";
+import { DEFAULT_CHARACTER_VOICE_BINDING, DEFAULT_VIDEO_PROMPT_PROFILE, H3_GUIDE_PRESETS, parseH3GuidePreset } from "@/types";
 import { useDisplayNames } from "@/hooks/useDisplayNames";
 import { useModelCandidates } from "@/hooks/useModelCandidates";
 import { ROUTE_META, RouteLockBadge } from "@/components/shared/GenerationRouteCards";
@@ -158,6 +158,8 @@ export function ProjectSettingsPage() {
   const [voiceBinding, setVoiceBinding] = useState<CharacterVoiceBinding>(DEFAULT_CHARACTER_VOICE_BINDING);
   // 参考生视频提示词档：仅剧情 / 解说的参考生视频项目可选；缺省即默认档
   const [promptProfile, setPromptProfile] = useState<VideoPromptProfile>(DEFAULT_VIDEO_PROMPT_PROFILE);
+  // 空串 = 继承全局设置
+  const [guidePreset, setGuidePreset] = useState<H3GuidePreset | "">("");
   const [textDefault, setTextDefault] = useState<string>("");
   const [textSimple, setTextSimple] = useState<string>("");
   const [textComplex, setTextComplex] = useState<string>("");
@@ -205,6 +207,7 @@ export function ProjectSettingsPage() {
     audioBackend: "", narrationVoice: "", narrationSpeed: null as number | null,
     voiceBinding: DEFAULT_CHARACTER_VOICE_BINDING,
     promptProfile: DEFAULT_VIDEO_PROMPT_PROFILE,
+    guidePreset: "",
     textDefault: "", textSimple: "", textComplex: "",
     aspectRatio: "", gridStoryboard: false,
     defaultDuration: null as number | null,
@@ -309,6 +312,8 @@ export function ProjectSettingsPage() {
       const pprofile: VideoPromptProfile =
         project.video_prompt_profile === "h3_ref2va" ? "h3_ref2va" : DEFAULT_VIDEO_PROMPT_PROFILE;
 
+      const gpreset: H3GuidePreset | "" = parseH3GuidePreset(project.h3_guide_preset) ?? "";
+
       setVideoBackend(vb);
       setVideoProviderI2V(vpi2v);
       setVideoProviderR2V(vpr2v);
@@ -371,6 +376,7 @@ export function ProjectSettingsPage() {
         audioBackend: ab, narrationVoice: nv, narrationSpeed: ns,
         voiceBinding: vbind,
         promptProfile: pprofile,
+        guidePreset: gpreset,
         textDefault: td, textSimple: tsi, textComplex: tcx,
         aspectRatio: ar, gridStoryboard: grid, defaultDuration: dd, speechRate: sr,
         episodeTargetDuration: etd,
@@ -425,6 +431,7 @@ export function ProjectSettingsPage() {
     narrationSpeed !== initialRef.current.narrationSpeed ||
     voiceBinding !== initialRef.current.voiceBinding ||
     promptProfile !== initialRef.current.promptProfile ||
+    guidePreset !== initialRef.current.guidePreset ||
     textDefault !== initialRef.current.textDefault ||
     textSimple !== initialRef.current.textSimple ||
     textComplex !== initialRef.current.textComplex ||
@@ -541,6 +548,8 @@ export function ProjectSettingsPage() {
         ...(generationRoute === "reference_video" ? { character_voice_binding: voiceBinding } : {}),
         // 提示词档仅剧情 / 解说的参考生视频项目持有；null 即清除、回落默认档
         ...(promptProfileVisible ? { video_prompt_profile: promptProfile === DEFAULT_VIDEO_PROMPT_PROFILE ? null : promptProfile } : {}),
+        // 写作指南预设只在 H3 档下有意义；空串 = 清除项目级覆盖、继承全局设置
+        ...(promptProfileVisible ? { h3_guide_preset: guidePreset || null } : {}),
         // null 即清除项目级覆盖、回退语言默认
         speech_rate_units_per_second: speechRate,
         default_text_backend: textDefault || null,
@@ -566,6 +575,7 @@ export function ProjectSettingsPage() {
         audioBackend, narrationVoice: trimmedVoice, narrationSpeed,
         voiceBinding,
         promptProfile,
+        guidePreset,
         textDefault, textSimple, textComplex,
         aspectRatio, gridStoryboard, defaultDuration, speechRate,
         episodeTargetDuration,
@@ -580,7 +590,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, promptProfile, promptProfileVisible, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolutions, imageResolution, projectName, t, globalDefaults]);
+  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, promptProfile, guidePreset, promptProfileVisible, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolutions, imageResolution, projectName, t, globalDefaults]);
 
   const handleResetAgentProfile = useCallback(async () => {
     if (profileResetProject !== projectName) {
@@ -995,6 +1005,32 @@ export function ProjectSettingsPage() {
                       : t("video_prompt_profile_h3_ref2va_desc")}
                   </p>
                 </fieldset>
+                {promptProfile === "h3_ref2va" && (
+                  <div className="mt-4">
+                    <label
+                      htmlFor="h3-guide-preset"
+                      className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4"
+                    >
+                      {t("h3_guide_preset_label")}
+                    </label>
+                    <select
+                      id="h3-guide-preset"
+                      value={guidePreset}
+                      onChange={(e) => setGuidePreset(parseH3GuidePreset(e.target.value) ?? "")}
+                      className="w-full rounded-[8px] border border-hairline bg-bg-grad-a/55 px-3 py-2 text-[12.5px] text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      <option value="">{t("h3_guide_preset_inherit")}</option>
+                      {H3_GUIDE_PRESETS.map((preset) => (
+                        <option key={preset} value={preset}>
+                          {t(`h3_guide_preset_${preset}_label`)}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] leading-relaxed text-text-4">
+                      {guidePreset ? t(`h3_guide_preset_${guidePreset}_desc`) : t("h3_guide_preset_inherit_desc")}
+                    </p>
+                  </div>
+                )}
               </SectionCard>
               )}
 

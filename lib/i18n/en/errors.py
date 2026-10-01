@@ -165,6 +165,7 @@ MESSAGES = {
     "character_voice_binding_invalid": "Character voice binding must be either prompt-based or reference audio",
     "dub_target_language_invalid": "Dub target language currently supports only Vietnamese (vi)",
     "narrator_gender_invalid": "Narrator dub gender must be male or female",
+    "h3_guide_preset_invalid": "H3 guide preset must be one of the built-in presets",
     "video_prompt_profile_invalid": "Video prompt profile must be either default or H3 Ref2VA, and H3 Ref2VA is only available for reference-video drama and narration projects",
     "video_poll_timeout_minimum": "Video polling timeout must be at least 60 seconds",
     "speech_rate_out_of_range": "Spoken pace must be between {min} and {max} (characters or words per second)",

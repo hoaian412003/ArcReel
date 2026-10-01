@@ -13,6 +13,8 @@ from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.repository import ProviderConfigRepository, SystemSettingRepository
 from lib.db.repositories.credential_repository import CredentialRepository
 from lib.infra.schema_guards import is_int
+from lib.prompts.h3_guide_preset import DEFAULT_H3_GUIDE_PRESET, parse_h3_guide_preset
+from lib.prompts.h3_guide_preset import SETTING_KEY as H3_GUIDE_PRESET_SETTING
 
 _DEFAULT_VIDEO_BACKEND = "gemini-aistudio/veo-3.1-lite-generate-preview"
 _DEFAULT_IMAGE_BACKEND = "gemini-aistudio/gemini-3.1-flash-image-preview"
@@ -245,6 +247,11 @@ class ConfigService:
     async def get_default_audio_backend(self) -> tuple[str, str]:
         raw = await self._setting_repo.get("default_audio_backend", _DEFAULT_AUDIO_BACKEND)
         return self._parse_backend(raw, _DEFAULT_AUDIO_BACKEND)
+
+    async def get_h3_guide_preset(self) -> str:
+        """H3 写作指南预设（全局 setting）。未设置/损坏值回落缺省预设。"""
+        raw = await self._setting_repo.get(H3_GUIDE_PRESET_SETTING, "")
+        return parse_h3_guide_preset(raw) or DEFAULT_H3_GUIDE_PRESET
 
     async def get_narration_voice(self) -> str:
         # 空白 setting 视为未配置，与项目级覆盖的 strip 语义一致，避免空音色进 TTS 请求

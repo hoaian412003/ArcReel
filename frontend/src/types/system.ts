@@ -8,6 +8,7 @@ export interface SystemConfigSettings {
   default_text_backend: string;
   default_audio_backend?: string;
   narration_voice?: string;
+  h3_guide_preset?: string;
   narration_speed?: number | null;
   text_backend_simple: string;
   text_backend_complex: string;
@@ -91,6 +92,7 @@ export interface SystemConfigPatch {
   default_text_backend?: string;
   default_audio_backend?: string;
   narration_voice?: string;
+  h3_guide_preset?: string;
   narration_speed?: number | null;
   text_backend_simple?: string;
   text_backend_complex?: string;

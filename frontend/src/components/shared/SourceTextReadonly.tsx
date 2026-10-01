@@ -5,13 +5,15 @@ interface SourceTextReadonlyProps {
   /** 条目的对应原文；手动新增的条目没有对应原文。 */
   text: string | undefined;
   className?: string;
+  /** 追加到正文段落的类名，用于限制高度等。 */
+  textClassName?: string;
 }
 
 /**
  * 分镜 / 视频单元的对应原文，只读展示供对照来源。
  * 时间线不提供编辑：重新锚定由 Agent 写入，服务端校验它是源文的逐字片段。
  */
-export function SourceTextReadonly({ text, className }: SourceTextReadonlyProps) {
+export function SourceTextReadonly({ text, className, textClassName = "" }: SourceTextReadonlyProps) {
   const { t } = useTranslation("dashboard");
   const labelId = useId();
   const content = text ?? "";
@@ -31,7 +33,7 @@ export function SourceTextReadonly({ text, className }: SourceTextReadonlyProps)
         </span>
       </div>
       <p
-        className="m-0 whitespace-pre-wrap border-l-2 pl-3 text-[12px]"
+        className={`m-0 whitespace-pre-wrap border-l-2 pl-3 text-[12px] ${textClassName}`}
         style={{
           borderColor: "var(--color-hairline)",
           color: hasContent ? "var(--color-text-3)" : "var(--color-text-4)",

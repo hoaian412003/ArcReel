@@ -43,6 +43,8 @@ from lib.project.asset_types import (
 )
 from lib.project.project_manager import VALID_GENERATION_MODES as _VALID_GENERATION_MODES
 from lib.project.project_manager import VALID_SOURCE_KINDS as _VALID_SOURCE_KINDS
+from lib.prompts.h3_guide_preset import PROJECT_FIELD as H3_GUIDE_PRESET_FIELD
+from lib.prompts.h3_guide_preset import VALID_H3_GUIDE_PRESETS
 from lib.prompts.video_prompt_profile import PROJECT_FIELD as VIDEO_PROMPT_PROFILE_FIELD
 from lib.prompts.video_prompt_profile import VALID_VIDEO_PROMPT_PROFILES
 from lib.references.reference_catalog import ReferenceCatalog, build_reference_catalog
@@ -425,6 +427,19 @@ class DataValidator:
                     "val_video_prompt_profile_invalid",
                     value=prompt_profile,
                     allowed=_allowed(VALID_VIDEO_PROMPT_PROFILES),
+                )
+            )
+
+        # H3 写作指南预设：可选字段，缺省即继承全局设置；出现即须是已知取值。
+        guide_preset = project.get(H3_GUIDE_PRESET_FIELD)
+        if guide_preset is not None and (
+            not isinstance(guide_preset, str) or guide_preset not in VALID_H3_GUIDE_PRESETS
+        ):
+            errors.append(
+                _m(
+                    "val_h3_guide_preset_invalid",
+                    value=guide_preset,
+                    allowed=_allowed(VALID_H3_GUIDE_PRESETS),
                 )
             )
 

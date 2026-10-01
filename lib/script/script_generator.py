@@ -56,6 +56,7 @@ from lib.infra.async_thread import run_sync_transaction
 from lib.infra.content_digest import sha256_file
 from lib.infra.text_utils import strip_json_code_fences
 from lib.project.project_manager import ProjectManager, ScriptWriteConflict
+from lib.prompts.h3_guide_preset import DEFAULT_H3_GUIDE_PRESET
 from lib.prompts.prompt_builders_ad import (
     build_ad_prompt,
     build_ad_reference_prompt,
@@ -862,7 +863,9 @@ class ScriptGenerator:
         if self.content_mode == "ad":
             return self._build_ad_reference_prompt_authoring_prompt(episode, targets, instructions)
         facts = await self._fetch_video_request_facts()
-        return self._build_reference_prompt_authoring_prompt(episode, targets, facts, instructions)
+        return self._build_reference_prompt_authoring_prompt(
+            episode, targets, facts, instructions, h3_guide_preset=await self._resolve_h3_guide_preset()
+        )
 
     @property
     def _storyboard_bucket(self) -> VideoGenerationType:
@@ -1321,8 +1324,21 @@ class ScriptGenerator:
                     raise enriched[0] from exc
                 raise DraftViolations(enriched) from exc
 
+    async def _resolve_h3_guide_preset(self) -> str:
+        """H3 提示词档下的写作指南预设；其它提示词档不读全局设置。"""
+        if not is_h3_ref2va(self.project_json):
+            return DEFAULT_H3_GUIDE_PRESET
+        resolver = self.config_resolver or ConfigResolver(async_session_factory)
+        return await resolver.resolve_h3_guide_preset(self.project_json)
+
     def _build_reference_prompt_authoring_prompt(
-        self, episode: int, targets: PromptAuthoringTargets, facts: PlanningVideoFacts, instructions: str | None
+        self,
+        episode: int,
+        targets: PromptAuthoringTargets,
+        facts: PlanningVideoFacts,
+        instructions: str | None,
+        *,
+        h3_guide_preset: str,
     ) -> str:
         if is_h3_ref2va(self.project_json):
             return build_reference_video_h3_ref2va_prompt(
@@ -1337,6 +1353,7 @@ class ScriptGenerator:
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
                 audio_reference_names=self._audio_reference_names(),
+                h3_guide_preset=h3_guide_preset,
                 target_language=self.project_json.get("source_language") or "中文",
                 instructions=instructions,
             )
@@ -1397,7 +1414,9 @@ class ScriptGenerator:
             instructions = "\n\n".join(part for part in (instructions, KEEP_TEXT_INSTRUCTION) if part)
         result = await self._generate_text(
             TextGenerationRequest(
-                prompt=self._build_reference_prompt_authoring_prompt(episode, targets, facts, instructions),
+                prompt=self._build_reference_prompt_authoring_prompt(
+                    episode, targets, facts, instructions, h3_guide_preset=await self._resolve_h3_guide_preset()
+                ),
                 response_schema=(
                     ReferencePromptAuthoringH3FlatScript
                     if is_h3_ref2va(self.project_json)

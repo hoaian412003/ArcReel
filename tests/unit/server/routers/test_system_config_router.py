@@ -157,6 +157,7 @@ class TestGetSystemConfig:
             "text_backend_complex",
             "default_audio_backend",
             "narration_voice",
+            "h3_guide_preset",
             "narration_speed",
             "market_github_proxy_prefix",
         }
@@ -466,6 +467,32 @@ class TestPatchSystemConfig:
         assert settings["default_audio_backend"] == "dashscope/qwen3-tts-flash"
         assert settings["narration_voice"] == "Cherry"
         assert settings["narration_speed"] == 1.5
+
+    def test_h3_guide_preset_defaults_to_standard_and_survives_garbage(self):
+        for stored, expected in (
+            ({}, "standard"),
+            ({"h3_guide_preset": "bogus"}, "standard"),
+            ({"h3_guide_preset": "action"}, "action"),
+        ):
+            with TestClient(_make_app_with_mock(_make_mock_svc(settings=stored))) as client:
+                res = client.get("/api/v1/system/config")
+            assert res.json()["settings"]["h3_guide_preset"] == expected
+
+    def test_patch_sets_and_clears_h3_guide_preset(self):
+        mock_svc = _make_mock_svc()
+        with TestClient(self._make_patch_app(mock_svc)) as client:
+            res = client.patch("/api/v1/system/config", json={"h3_guide_preset": " dialogue "})
+            assert res.status_code == 200
+            assert res.json()["settings"]["h3_guide_preset"] == "dialogue"
+            res = client.patch("/api/v1/system/config", json={"h3_guide_preset": ""})
+            assert res.json()["settings"]["h3_guide_preset"] == "standard"
+
+    def test_patch_rejects_unknown_h3_guide_preset(self):
+        mock_svc = _make_mock_svc()
+        with TestClient(self._make_patch_app(mock_svc)) as client:
+            res = client.patch("/api/v1/system/config", json={"h3_guide_preset": "bogus"})
+        assert res.status_code == 422
+        mock_svc.set_setting.assert_not_called()
 
     def test_patch_sets_and_clears_market_github_proxy_prefix(self):
         mock_svc = _make_mock_svc()

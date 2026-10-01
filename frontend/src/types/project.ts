@@ -157,6 +157,18 @@ export type VideoPromptProfile = "default" | "h3_ref2va";
 
 export const DEFAULT_VIDEO_PROMPT_PROFILE: VideoPromptProfile = "default";
 
+/** H3 写作指南预设；与后端 `lib.prompts.h3_guide_preset.H3GuidePreset` 一一对应，取值增减须两侧同步。 */
+export type H3GuidePreset = "standard" | "dialogue" | "action";
+
+export const H3_GUIDE_PRESETS: readonly H3GuidePreset[] = ["standard", "dialogue", "action"];
+
+/** 全局设置未声明时的预设。 */
+export const DEFAULT_H3_GUIDE_PRESET: H3GuidePreset = "standard";
+
+export function parseH3GuidePreset(raw: unknown): H3GuidePreset | null {
+  return typeof raw === "string" && (H3_GUIDE_PRESETS as readonly string[]).includes(raw) ? (raw as H3GuidePreset) : null;
+}
+
 export interface ModelSettingEntry {
   resolution?: string | null;
 }
@@ -205,6 +217,8 @@ export interface ProjectData {
   character_voice_binding?: CharacterVoiceBinding;
   /** 参考生视频提示词档：default（通用三段论）/ h3_ref2va（MiniMax H3 全参考六段）。仅参考生视频的剧情 / 解说项目有效。 */
   video_prompt_profile?: VideoPromptProfile | null;
+  /** H3 写作指南预设；缺省即继承全局设置。 */
+  h3_guide_preset?: H3GuidePreset | null;
   /** 旁白配音（TTS）项目级覆盖：音频后端 / 音色 / 语速，留空即跟随全局默认 */
   audio_backend?: string | null;
   narration_voice?: string | null;

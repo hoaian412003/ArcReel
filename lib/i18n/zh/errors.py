@@ -157,6 +157,7 @@ MESSAGES = {
     "character_voice_binding_invalid": "角色声音绑定方式只能是「提示词约束」或「参考音频」",
     "dub_target_language_invalid": "配音目标语言目前只支持越南语（vi）",
     "narrator_gender_invalid": "画外音配音性别只能是 male 或 female",
+    "h3_guide_preset_invalid": "H3 写作指南预设只能是内置预设之一",
     "video_prompt_profile_invalid": "视频提示词档只能是「默认」或「H3 Ref2VA」，且 H3 Ref2VA 仅适用于参考生视频的剧情与解说项目",
     "video_poll_timeout_minimum": "视频轮询超时不能少于 60 秒",
     "speech_rate_out_of_range": "语速需在 {min} 到 {max} 之间（字或词/秒）",
