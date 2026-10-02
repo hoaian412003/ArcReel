@@ -53,6 +53,7 @@ from lib.generation.restart_recovery import InterruptedCallSettler, RestartRecov
 from lib.generation.task_failure import encode_failure
 from lib.generation.task_failure_encoding import encode_task_failure_message
 from lib.generation.video_resume import ResumeExecutor, VideoResumeRunner
+from lib.infra.shutdown_abandon import abandoning, is_abandoning
 from lib.project.project_manager import get_project_manager
 
 if TYPE_CHECKING:
@@ -78,6 +79,8 @@ logger = logging.getLogger(__name__)
 # （另一个 worker 进程曾持过 lease 且写入了新 orphan），需要重扫；短 flap（续约抖动）
 # 不触发。lease_ttl 默认 10s → 阈值 30s。常量化便于单测注入与调参。
 _ORPHAN_RESCAN_LEASE_LOST_MULT = 3
+# 关停时等在跑任务自然结束的上限；超时后放弃仍在跑的任务（保持崩溃语义，由下次启动接续），避免长视频轮询拖死进程退出。
+_SHUTDOWN_GRACE_SECONDS = 30.0
 
 # Default provider used when a task payload does not specify one.
 DEFAULT_PROVIDER = "gemini-aistudio"
@@ -440,6 +443,7 @@ class GenerationWorker:
         executor: TaskExecutor,
         resume_executor: ResumeExecutor,
         settle_interrupted_calls: InterruptedCallSettler | None = None,
+        shutdown_grace_seconds: float = _SHUTDOWN_GRACE_SECONDS,
     ):
         self.queue = queue or get_generation_queue()
         # 认领期与执行期共用的 provider 投影：限流按它的结果路由到对应容量桶。
@@ -457,6 +461,7 @@ class GenerationWorker:
         self.lease_ttl = max(1.0, float(TASK_WORKER_LEASE_TTL_SEC))
         self.heartbeat_interval = max(0.5, float(TASK_WORKER_HEARTBEAT_SEC))
         self.poll_interval = max(0.1, float(TASK_POLL_INTERVAL_SEC))
+        self._shutdown_grace_seconds = max(0.0, shutdown_grace_seconds)
 
         self._main_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
@@ -763,6 +768,8 @@ class GenerationWorker:
             # 同步判定取消/异常：drain_finished() 只返回 done() 的 task，无需 await。
             # 不 await 就没有挂起点，自然不会误吞针对 _run_loop 自身的取消信号。
             if finished_task.cancelled():
+                if is_abandoning():
+                    continue
                 # 子任务被进程级原因打断。正常路径 _process_task 已落终态并 re-raise；
                 # 但打断可能落在 _process_task 进入 try 之前（协程尚未开始执行，或仍停在
                 # 入口的 provider 投影 await），那一刻子任务来不及落终态。drain 端兜底——
@@ -785,7 +792,17 @@ class GenerationWorker:
         active_tasks = self._slots.all_active_tasks()
         if not active_tasks:
             return
-        await asyncio.gather(*active_tasks, return_exceptions=True)
+        _, pending = await asyncio.wait(active_tasks, timeout=self._shutdown_grace_seconds)
+        if pending:
+            logger.warning(
+                "关停等待 %.0fs 后仍有 %d 个任务在跑，放弃它们交由下次启动接续",
+                self._shutdown_grace_seconds,
+                len(pending),
+            )
+            with abandoning():
+                for fut in pending:
+                    fut.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
         self._slots.clear()
 
     async def _process_task(self, task: dict[str, Any], *, claimed_provider_id: str | None = None) -> None:
@@ -807,8 +824,9 @@ class GenerationWorker:
                 task["video_poll_timeout_seconds"] = await read_video_poll_timeout_seconds()
             result = await self._executor(task, claimed_provider_id=provider_id)
         except asyncio.CancelledError:
-            # 进程级打断：用户取消不会打到执行中的任务。
-            await asyncio.shield(self.queue.mark_task_interrupted(task_id))
+            # 进程级打断：用户取消不会打到执行中的任务。关停放弃时保持 running，留给下次启动接续。
+            if not is_abandoning():
+                await asyncio.shield(self.queue.mark_task_interrupted(task_id))
             raise
         except DispatchProviderChanged as exc:
             # 视频任务在执行入口重新读取当前状态；若 provider 已从认领时的槽漂移，

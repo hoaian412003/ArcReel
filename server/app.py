@@ -486,7 +486,7 @@ async def lifespan(app: FastAPI):
     worker = getattr(app.state, "generation_worker", None)
     if worker:
         logger.info("正在停止 GenerationWorker...")
-        # 关停不取消在跑任务：worker.stop() 等在跑任务跑完再退出主循环。
+        # worker.stop() 先等在跑任务自然结束，超过宽限期后放弃剩余任务（留给下次启动接续）再退出主循环。
         await worker.stop()
         logger.info("GenerationWorker 已停止")
     # 测试连接的 run 不可续跑：随事件循环消亡会把账本 pending 行永远留下，关停前按取消路径结算。

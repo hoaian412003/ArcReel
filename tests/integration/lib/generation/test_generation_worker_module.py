@@ -763,6 +763,41 @@ class TestGenerationWorker:
         assert worker._main_task is None
 
     @pytest.mark.asyncio
+    async def test_stop_abandons_running_task_after_grace_period(self, concurrent_session_factory, monkeypatch):
+        """关停宽限期内任务未结束：stop 放弃它而不无限挂起，任务行保持 running 留给下次启动接续。"""
+        bind_safe_session_factory(monkeypatch, concurrent_session_factory)
+        worker_db = concurrent_session_factory
+        await seed_running_task(worker_db, "stuck-run", task_type="storyboard", media_type="image")
+        started = asyncio.Event()
+
+        async def _execute(_task, *, claimed_provider_id):
+            started.set()
+            await asyncio.sleep(60)
+
+        worker = GenerationWorker(
+            queue=db_queue(worker_db),
+            provider_projection=_fixed_projection,
+            executor=_execute,
+            resume_executor=stub_executors.execute_resume,
+            shutdown_grace_seconds=0.05,
+        )
+        worker.heartbeat_interval = 0.01
+        worker.poll_interval = 0.01
+        running = asyncio.create_task(
+            worker._process_task({"task_id": "stuck-run", "media_type": "image"}),
+            name="generation-image-stuck-run",
+        )
+        worker._slots.register("test", "image", "stuck-run", running)
+
+        await worker.start()
+        await started.wait()
+        await asyncio.wait_for(worker.stop(), timeout=2.0)
+
+        assert running.cancelled()
+        assert await task_status(worker_db, "stuck-run") == "running"
+        assert worker._main_task is None
+
+    @pytest.mark.asyncio
     async def test_drain_finished_tasks_absorbs_cancelled_error(self):
         """被打断的执行体被 drain：不抛、从台账移除，并由 drain 端兜底落终态。"""
         queue = FakeWorkerQueue()

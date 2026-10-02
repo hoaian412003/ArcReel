@@ -15,6 +15,7 @@ from lib.backends.providers import PROVIDER_GROK, PROVIDER_VIDU
 from lib.config.service import read_video_poll_timeout_seconds
 from lib.generation.task_failure import encode_failure
 from lib.generation.video_resume import VideoResumeRunner, cleanup_video_staging
+from lib.infra.shutdown_abandon import is_abandoning
 from lib.script.reference_video.execution_checkpoint import VideoResumeState, classify_video_resume_state
 
 if TYPE_CHECKING:
@@ -364,9 +365,10 @@ class RestartRecovery:
                 # 2) acquired=True 后但续跑内 try 块外 → 内部落终态路径不会触发，必须由此落终态
                 # 3) 续跑内部 → 内部已落终态，此处再调命中终态行返回 0 rows，无副作用
                 try:
-                    await asyncio.shield(self._queue.mark_task_interrupted(task_id))
-                    await asyncio.shield(self._resume.settle_unresumable_call(t, cancelled=True))
-                    await asyncio.shield(cleanup_video_staging(t))
+                    if not is_abandoning():
+                        await asyncio.shield(self._queue.mark_task_interrupted(task_id))
+                        await asyncio.shield(self._resume.settle_unresumable_call(t, cancelled=True))
+                        await asyncio.shield(cleanup_video_staging(t))
                 except Exception:
                     logger.exception("resume dispatch 打断后落终态失败 task_id=%s", task_id)
                 raise

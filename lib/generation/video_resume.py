@@ -15,6 +15,7 @@ from lib.billing.ledger import Ledger
 from lib.generation.media_generator import cleanup_staged_video_output
 from lib.generation.task_failure import encode_failure
 from lib.generation.task_failure_encoding import encode_task_failure_message
+from lib.infra.shutdown_abandon import is_abandoning
 from lib.project.project_manager import get_project_manager
 from lib.script.reference_video.execution_checkpoint import (
     VideoResumeState,
@@ -158,8 +159,9 @@ class VideoResumeRunner:
             result = await _execute_with_video_cleanup()
         except asyncio.CancelledError:
             # 进程级打断：落终态并把 pending 调用行结算为 cancelled。
-            await asyncio.shield(self._queue.mark_task_interrupted(task_id))
-            await asyncio.shield(self.settle_unresumable_call(task, cancelled=True))
+            if not is_abandoning():
+                await asyncio.shield(self._queue.mark_task_interrupted(task_id))
+                await asyncio.shield(self.settle_unresumable_call(task, cancelled=True))
             raise
         except NotImplementedError as exc:
             logger.warning("resume 不支持 task %s: %s", task_id, exc)

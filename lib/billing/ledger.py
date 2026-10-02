@@ -42,6 +42,7 @@ from lib.billing.call_failure import CallFailure, classify_call_failure
 from lib.db import safe_session_factory
 from lib.db.base import DEFAULT_USER_ID
 from lib.db.repositories.usage_repo import SettlementInput, UsageRepository
+from lib.infra.shutdown_abandon import is_abandoning
 from lib.project.project_change_hints import emit_project_change_batch
 
 logger = logging.getLogger(__name__)
@@ -199,7 +200,8 @@ class Ledger:
             # 用户取消：零费用结算为 cancelled 后原样重抛，不留 pending 也不计入失败率。
             # （CancelledError 在 3.11+ 继承 BaseException 天然不进 except Exception，此处显式
             #  声明为契约，而非依赖隐式继承副作用。）
-            if await self._finish_cancelled(call_id):
+            # 关停放弃时调用行保持 pending：供应商 job 仍在跑，下次启动续跑后补账。
+            if not is_abandoning() and await self._finish_cancelled(call_id):
                 self._emit_recorded(project_name, call_id, CallStatus.CANCELLED)
             raise
         except Exception as exc:
