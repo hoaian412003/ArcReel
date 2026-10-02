@@ -31,7 +31,7 @@ uv run alembic upgrade head
 # Start the backend (terminal 1)
 # Note: --reload-dir is required to limit the watched directories; otherwise watchfiles
 # scans node_modules / .venv / .git / .worktrees and hundreds of thousands of files, costing 50%+ of one core
-uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241
+uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241 --timeout-graceful-shutdown 10
 
 # Start the frontend (terminal 2)
 cd frontend && pnpm dev

@@ -80,7 +80,7 @@ logger = logging.getLogger(__name__)
 # 不触发。lease_ttl 默认 10s → 阈值 30s。常量化便于单测注入与调参。
 _ORPHAN_RESCAN_LEASE_LOST_MULT = 3
 # 关停时等在跑任务自然结束的上限；超时后放弃仍在跑的任务（保持崩溃语义，由下次启动接续），避免长视频轮询拖死进程退出。
-_SHUTDOWN_GRACE_SECONDS = 30.0
+_SHUTDOWN_GRACE_SECONDS = 10.0
 
 # Default provider used when a task payload does not specify one.
 DEFAULT_PROVIDER = "gemini-aistudio"

@@ -25,11 +25,11 @@ uv run alembic upgrade head
 # 启动后端 (终端 1)
 # 注意：必须用 --reload-dir 限定监视目录，否则 watchfiles 会扫描
 # node_modules / .venv / .git / .worktrees 等数十万个文件，单核 CPU 占用超过 50%
-uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241
+uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241 --timeout-graceful-shutdown 10
 
 # 后端重启会终止所有运行中的 Agent 会话及其后台子智能体。需要让 Agent 长时间
 # 运行（如批量写提示词）时，改用不带 --reload 的命令，改完代码手动重启：
-# uv run uvicorn server.app:app --port 1241
+# uv run uvicorn server.app:app --port 1241 --timeout-graceful-shutdown 10
 
 # 启动前端 (终端 2)
 cd frontend && pnpm dev

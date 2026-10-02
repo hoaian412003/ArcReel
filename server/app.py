@@ -3,7 +3,7 @@
 
 启动方式:
     cd ArcReel
-    uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241
+    uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241 --timeout-graceful-shutdown 10
 
 注意：必须用 --reload-dir 限定监视目录，否则 watchfiles 会扫描
 node_modules / .venv / .git / .worktrees 等十几万个文件，单核 CPU 50%+。
@@ -801,4 +801,4 @@ if __name__ == "__main__":
     import uvicorn
 
     _host, _port = _resolve_listen_addr()
-    uvicorn.run(app, host=_host, port=_port, reload=True)
+    uvicorn.run(app, host=_host, port=_port, reload=True, timeout_graceful_shutdown=10)
