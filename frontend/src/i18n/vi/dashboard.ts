@@ -1988,6 +1988,8 @@ export default {
   'episode_workspace_no_episode': 'Tập này chưa được bắt đầu. Hãy bắt đầu từ kịch bản, hoặc để Agent phác thảo cho bạn.',
   'episode_workspace_prefill_script': 'Tạo kịch bản cho tập {{episode}}',
   'episode_workspace_script_pending': 'Chưa tạo kịch bản',
+  'episode_workspace_view_source': 'Nguyên văn',
+  'episode_workspace_view_screenplay': 'Kịch bản',
   'episode_workspace_source_loading': 'Đang tải lát cắt nguồn…',
   'episode_workspace_source_missing': 'Không tìm thấy lát cắt nguồn của tập này (source/episode_{{episode}}.txt)',
   'episode_workspace_start_cta': 'Bắt đầu E{{episode}}',

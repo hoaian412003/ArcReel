@@ -1915,6 +1915,8 @@ export default {
   'episode_workspace_guide_expand': '展开',
   'episode_workspace_guide_collapse': '收起',
   'episode_workspace_chars_approx': '约 {{count}} 字',
+  'episode_workspace_view_source': '原文',
+  'episode_workspace_view_screenplay': '剧本',
   'episode_workspace_source_loading': '正在加载源文切片…',
   'episode_workspace_source_missing': '未找到本集源文切片（source/episode_{{episode}}.txt）',
   'episode_workspace_prefill_script': '为第 {{episode}} 集生成脚本',

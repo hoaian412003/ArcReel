@@ -1916,6 +1916,8 @@ export default {
   'episode_workspace_guide_expand': 'Expand',
   'episode_workspace_guide_collapse': 'Collapse',
   'episode_workspace_chars_approx': '~{{count}} chars',
+  'episode_workspace_view_source': 'Source text',
+  'episode_workspace_view_screenplay': 'Screenplay',
   'episode_workspace_source_loading': 'Loading source slice…',
   'episode_workspace_source_missing': 'Source slice not found (source/episode_{{episode}}.txt)',
   'episode_workspace_prefill_script': 'Generate the script for episode {{episode}}',

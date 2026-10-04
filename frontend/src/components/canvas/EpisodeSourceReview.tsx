@@ -5,10 +5,12 @@ import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import type { EpisodeMeta } from "@/types";
+import { ScreenplayReviewPanel } from "./flow/ScreenplayReviewPanel";
 
 /**
  * 已选集但剧本未生成时的画布视图：呈现分集拆分结果供审阅——
- * 源文切片全文 + 拆分元信息（边界、节拍、尾钩子），CTA 唤起 Agent 起草剧本。
+ * 源文切片全文 + 拆分元信息（边界、节拍、尾钩子），CTA 唤起 Agent 起草剧本；
+ * 正文区可切到编剧剧本（按场次查看与修改，通过审阅在 Flow 看板完成）。
  * 适用 narration/drama 全部生成路径；ad 恒单集无源文切片，由 StudioCanvasRouter 排除。
  */
 
@@ -196,6 +198,7 @@ export function EpisodeSourceReview({
   episodes: EpisodeMeta[];
 }) {
   const { t } = useTranslation("dashboard");
+  const [view, setView] = useState<{ key: string; mode: "source" | "screenplay" }>({ key: "", mode: "source" });
   // 取到的切片带上归属 key，loading 由 key 是否匹配派生（避免 effect 内同步 setState）
   const [fetched, setFetched] = useState<{ key: string; text: string | null } | null>(null);
 
@@ -216,6 +219,7 @@ export function EpisodeSourceReview({
   }, [projectName, episode]);
 
   const loading = fetched?.key !== fetchKey;
+  const mode = view.key === fetchKey ? view.mode : "source";
   const text = loading ? null : fetched.text;
 
   const handleStart = useCallback(() => {
@@ -232,31 +236,59 @@ export function EpisodeSourceReview({
         <GuideSection key={episode} meta={meta} />
 
         <div className="mt-4 flex min-h-0 flex-1 flex-col">
-          <div
-            className="min-h-0 flex-1 overflow-y-auto rounded-2xl px-12 py-9"
-            style={{
-              background: "linear-gradient(180deg, oklch(0.215 0.011 265 / 0.75), oklch(0.195 0.010 265 / 0.75))",
-              border: "1px solid var(--color-hairline)",
-              boxShadow: "inset 0 1px 0 oklch(1 0 0 / 0.04)",
-            }}
-          >
-            {loading ? (
-              <p className="text-center text-[13px]" style={{ color: "var(--color-text-4)" }}>
-                {t("episode_workspace_source_loading")}
-              </p>
-            ) : text ? (
-              <p
-                className="mx-auto max-w-[66ch] whitespace-pre-wrap pb-10 text-[14px] leading-[2]"
-                style={{ color: "var(--color-text-2)", textAlign: "justify" }}
+          <div className="mb-2 flex gap-1">
+            {(
+              [
+                ["source", t("episode_workspace_view_source")],
+                ["screenplay", t("episode_workspace_view_screenplay")],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={mode === key}
+                onClick={() => setView({ key: fetchKey, mode: key })}
+                className="focus-ring rounded px-2 py-0.5 text-[12px] transition-colors"
+                style={{
+                  color: mode === key ? "var(--color-text-2)" : "var(--color-text-4)",
+                  background: mode === key ? "var(--color-bg-grad-a)" : "transparent",
+                }}
               >
-                {text}
-              </p>
-            ) : (
-              <p className="text-center text-[13px]" style={{ color: "var(--color-text-4)" }}>
-                {t("episode_workspace_source_missing", { episode })}
-              </p>
-            )}
+                {label}
+              </button>
+            ))}
           </div>
+          {mode === "screenplay" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <ScreenplayReviewPanel projectName={projectName} episode={episode} version={0} />
+            </div>
+          ) : (
+            <div
+              className="min-h-0 flex-1 overflow-y-auto rounded-2xl px-12 py-9"
+              style={{
+                background: "linear-gradient(180deg, oklch(0.215 0.011 265 / 0.75), oklch(0.195 0.010 265 / 0.75))",
+                border: "1px solid var(--color-hairline)",
+                boxShadow: "inset 0 1px 0 oklch(1 0 0 / 0.04)",
+              }}
+            >
+              {loading ? (
+                <p className="text-center text-[13px]" style={{ color: "var(--color-text-4)" }}>
+                  {t("episode_workspace_source_loading")}
+                </p>
+              ) : text ? (
+                <p
+                  className="mx-auto max-w-[66ch] whitespace-pre-wrap pb-10 text-[14px] leading-[2]"
+                  style={{ color: "var(--color-text-2)", textAlign: "justify" }}
+                >
+                  {text}
+                </p>
+              ) : (
+                <p className="text-center text-[13px]" style={{ color: "var(--color-text-4)" }}>
+                  {t("episode_workspace_source_missing", { episode })}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -110,6 +110,30 @@ describe("EpisodeSourceReview", () => {
     expect(screen.getByText("新的一集")).toBeInTheDocument();
   });
 
+  it("switches the body between the source slice and the screenplay", async () => {
+    vi.spyOn(API, "getSourceContent").mockResolvedValue("这是本集源文……");
+    const getScreenplay = vi.spyOn(API, "getScreenplay").mockResolvedValue({
+      episode: 1,
+      status: "pending_review",
+      fingerprint: "fp",
+      title: "初遇",
+      total_seconds: 12,
+      scenes: [{ heading: "内景 · 茶馆 · 夜", summary: "主角登场", estimated_seconds: 12, text: "他推门而入。" }],
+    });
+
+    render(<EpisodeSourceReview projectName="demo" episode={1} episodes={[makeEpisode()]} />);
+    await waitFor(() => expect(screen.getByText("这是本集源文……")).toBeInTheDocument());
+    expect(getScreenplay).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "剧本" }));
+    await waitFor(() => expect(screen.getByDisplayValue("内景 · 茶馆 · 夜")).toBeInTheDocument());
+    expect(getScreenplay).toHaveBeenCalledWith("demo", 1, expect.anything());
+    expect(screen.queryByText("这是本集源文……")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "原文" }));
+    expect(screen.getByText("这是本集源文……")).toBeInTheDocument();
+  });
+
   it("prefills the assistant input and opens the panel on CTA click", async () => {
     vi.spyOn(API, "getSourceContent").mockResolvedValue("text");
     useAppStore.setState({ assistantPanelOpen: false });
