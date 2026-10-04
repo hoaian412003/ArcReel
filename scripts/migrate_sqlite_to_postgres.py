@@ -21,7 +21,6 @@ from pathlib import Path
 from sqlalchemy import Integer, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from lib.agent.agent_session_store.models import register_models as register_agent_session_models
 from lib.db.base import Base
 from lib.db.models import register_models as register_db_models
 
@@ -40,7 +39,6 @@ async def _count(engine: AsyncEngine, table: str) -> int:
 
 
 async def _migrate(source_path: Path, target_url: str, replace: bool) -> None:
-    register_agent_session_models()
     register_db_models()
     tables = [t for t in Base.metadata.sorted_tables if t.name not in SKIP_TABLES]
 

@@ -3,7 +3,7 @@ import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, Loader2 } from "lucide-react";
-import { API, type AgentProfileStatus } from "@/api";
+import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { useCapabilitiesStore } from "@/stores/capabilities-store";
 import { getProviderModels, getCustomProviderModels } from "@/utils/provider-models";
@@ -26,7 +26,6 @@ import {
 } from "@/components/shared/EpisodeTargetDurationField";
 import { SpeechRateField, isValidSpeechRate } from "@/components/shared/SpeechRateField";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, GHOST_BTN_LG_CLS, radioCardClass } from "@/components/ui/darkroom-tokens";
-import { AgentMemoryCabinet } from "@/components/agent/AgentMemoryCabinet";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useWarnUnsaved } from "@/hooks/useWarnUnsaved";
 import { normalizeRoute, type GenerationRoute } from "@/utils/generation-mode";
@@ -53,10 +52,6 @@ function deriveStyleValue(project: Record<string, unknown>, projectName: string)
     uploadedFile: null,
     uploadedPreview: null,
   };
-}
-
-function sameProfileFiles(left: string[], right: string[]) {
-  return left.length === right.length && left.every((file, index) => file === right[index]);
 }
 
 // ─── Section card primitive ─────────────────────────────────────────────────
@@ -197,13 +192,6 @@ export function ProjectSettingsPage() {
   const [projectTitle, setProjectTitle] = useState<string>("");
   const [contentMode, setContentMode] = useState<string>("narration");
   const [saving, setSaving] = useState(false);
-  const [loadedAgentProfile, setLoadedAgentProfile] = useState<{
-    projectName: string;
-    status: AgentProfileStatus;
-  } | null>(null);
-  const agentProfile = loadedAgentProfile?.projectName === projectName ? loadedAgentProfile.status : null;
-  const [profileResetProject, setProfileResetProject] = useState<string | null>(null);
-  const [profileResetting, setProfileResetting] = useState(false);
 
   // ── Style picker state (independent save flow) ─────────────────────────────
   const [styleValue, setStyleValue] = useState<StylePickerValue | null>(null);
@@ -234,22 +222,6 @@ export function ProjectSettingsPage() {
   useEffect(() => {
     void reloadCandidates();
   }, [reloadCandidates]);
-
-  useEffect(() => {
-    let disposed = false;
-    voidCall(
-      API.getAgentProfileStatus(projectName)
-        .then((status) => {
-          if (!disposed) setLoadedAgentProfile({ projectName, status });
-        })
-        .catch(() => {
-          if (!disposed) setLoadedAgentProfile(null);
-        }),
-    );
-    return () => {
-      disposed = true;
-    };
-  }, [projectName]);
 
   useEffect(() => {
     let disposed = false;
@@ -612,45 +584,6 @@ export function ProjectSettingsPage() {
     }
   }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, promptProfile, guidePreset, guideCustom, authoringTemplate, promptProfileVisible, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolutions, imageResolution, projectName, t, globalDefaults]);
 
-  const handleResetAgentProfile = useCallback(async () => {
-    if (profileResetProject !== projectName) {
-      setProfileResetProject(null);
-      return;
-    }
-    const resetProject = profileResetProject;
-    setProfileResetting(true);
-    try {
-      const currentStatus = await API.getAgentProfileStatus(resetProject);
-      const displayedStatus = loadedAgentProfile?.projectName === resetProject ? loadedAgentProfile.status : null;
-      if (!displayedStatus || !sameProfileFiles(displayedStatus.customized_files, currentStatus.customized_files)) {
-        setLoadedAgentProfile({ projectName: resetProject, status: currentStatus });
-        if (!currentStatus.customized) setProfileResetProject(null);
-        return;
-      }
-      const status = await API.resetAgentProfile(resetProject);
-      setLoadedAgentProfile((current) => (
-        current?.projectName === resetProject ? { projectName: resetProject, status } : current
-      ));
-      setProfileResetProject(null);
-      useAppStore.getState().pushToast(t("agent_profile_reset_success"), "success");
-    } catch (error: unknown) {
-      useAppStore.getState().pushToast(t("agent_profile_reset_failed", { message: errMsg(error) }), "error");
-    } finally {
-      setProfileResetting(false);
-    }
-  }, [loadedAgentProfile, profileResetProject, projectName, t]);
-
-  const handleOpenAgentProfileReset = useCallback(async () => {
-    const resetProject = projectName;
-    try {
-      const status = await API.getAgentProfileStatus(resetProject);
-      setLoadedAgentProfile({ projectName: resetProject, status });
-      setProfileResetProject(status.customized ? resetProject : null);
-    } catch (error: unknown) {
-      useAppStore.getState().pushToast(t("agent_profile_reset_failed", { message: errMsg(error) }), "error");
-    }
-  }, [projectName, t]);
-
   return (
     <div
       className="fixed inset-0 z-50 flex flex-col text-text"
@@ -719,44 +652,6 @@ export function ProjectSettingsPage() {
               {t("model_config_project_desc")}
             </p>
           </div>
-
-          {agentProfile && (
-            <SectionCard
-              kicker={t("agent_profile_title")}
-              title={t("agent_profile_title")}
-              description={t("agent_profile_description")}
-              footer={agentProfile.customized ? (
-                <button
-                  type="button"
-                  onClick={() => voidCall(handleOpenAgentProfileReset())}
-                  className={GHOST_BTN_LG_CLS}
-                >
-                  {t("agent_profile_reset")}
-                </button>
-              ) : undefined}
-            >
-              {agentProfile.customized ? (
-                <div className="space-y-2">
-                  <p className="text-[12px] text-warm">{t("agent_profile_customized")}</p>
-                  <ul className="space-y-1" aria-label={t("agent_profile_affected_files")}>
-                    {agentProfile.customized_files.map((file) => (
-                      <li key={file} className="font-mono text-[11px] text-text-3">{file}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : (
-                <p className="text-[12px] text-text-3">{t("agent_profile_builtin")}</p>
-              )}
-            </SectionCard>
-          )}
-
-          <SectionCard
-            kicker="Agent Memory"
-            title={t("agent_memory_project_title")}
-            description={t("agent_memory_project_desc")}
-          >
-            <AgentMemoryCabinet scope={{ level: "project", projectName }} frame="card" />
-          </SectionCard>
 
           {/* Style picker (independent save flow, mutually exclusive template / custom) */}
           {styleValue && (
@@ -1210,26 +1105,6 @@ export function ProjectSettingsPage() {
           </div>
         </div>
       </footer>
-
-      <ConfirmDialog
-        open={profileResetProject === projectName && agentProfile !== null}
-        tone="danger"
-        title={t("agent_profile_reset_confirm_title")}
-        description={(
-          <div className="space-y-2">
-            <p>{t("agent_profile_reset_confirm_description")}</p>
-            <ul className="space-y-1 font-mono text-[11px]">
-              {agentProfile?.customized_files.map((file) => <li key={file}>{file}</li>)}
-            </ul>
-          </div>
-        )}
-        confirmLabel={t("agent_profile_reset_confirm")}
-        loadingLabel={t("agent_profile_resetting")}
-        loading={profileResetting}
-        cancelLabel={t("common:cancel")}
-        onCancel={() => setProfileResetProject(null)}
-        onConfirm={handleResetAgentProfile}
-      />
 
       <ConfirmDialog
         open={pendingNavigation !== null}

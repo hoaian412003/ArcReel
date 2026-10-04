@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, ExternalLink, Info, Loader2, Play, RefreshCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
-import { StreamMarkdown } from "@/components/copilot/StreamMarkdown";
+import { StreamMarkdown } from "@/components/shared/StreamMarkdown";
 import { CARD_STYLE, GHOST_BTN_LG_CLS } from "@/components/ui/darkroom-tokens";
 import { useOnboardingStore } from "@/stores/onboarding-store";
 import { formatDate } from "@/utils/date-format";

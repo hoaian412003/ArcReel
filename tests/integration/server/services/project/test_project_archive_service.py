@@ -1592,77 +1592,7 @@ class TestProjectArchiveService:
         assert pm.load_project("demo")["style"] == "Fresh"
         assert (pm.get_project_path("demo") / "source" / "chapter.txt").read_text(encoding="utf-8") == "source"
 
-    def test_import_overwrite_keeps_project_memory_from_the_old_directory(self, tmp_path):
-        """记忆随项目目录而非随归档内容：覆盖导入后旧 .arcreel/memory/ 全部搬回新目录。"""
-        pm = ProjectManager(tmp_path / "projects")
-        _create_project(pm, style="Fresh")
-        service = ProjectArchiveService(pm)
-        archive_path, _ = service.export_project("demo")
-
-        project_dir = pm.get_project_path("demo")
-        memory_dir = project_dir / ".arcreel" / "memory"
-        _write_text(memory_dir / "MEMORY.md", "index")
-        _write_text(memory_dir / "topics" / "style.md", "topic")
-
-        result = service.import_project_archive(
-            archive_path,
-            uploaded_filename="demo.zip",
-            conflict_policy="overwrite",
-        )
-
-        assert result.conflict_resolution == "overwritten"
-        restored = pm.get_project_path("demo") / ".arcreel" / "memory"
-        assert restored.joinpath("MEMORY.md").read_text(encoding="utf-8") == "index"
-        assert restored.joinpath("topics", "style.md").read_text(encoding="utf-8") == "topic"
-        assert not list(pm.projects_dir.glob(".import-backup-*"))
-
-    def test_import_overwrite_keeps_a_symlink_inside_project_memory_as_a_symlink(self, tmp_path):
-        """记忆目录里的软链原样搬回：悬空软链也不该让整次覆盖导入失败。"""
-        pm = ProjectManager(tmp_path / "projects")
-        _create_project(pm, style="Fresh")
-        service = ProjectArchiveService(pm)
-        archive_path, _ = service.export_project("demo")
-
-        memory_dir = pm.get_project_path("demo") / ".arcreel" / "memory"
-        _write_text(memory_dir / "MEMORY.md", "index")
-        (memory_dir / "dangling.md").symlink_to("missing.md")
-
-        result = service.import_project_archive(
-            archive_path,
-            uploaded_filename="demo.zip",
-            conflict_policy="overwrite",
-        )
-
-        assert result.conflict_resolution == "overwritten"
-        restored = pm.get_project_path("demo") / ".arcreel" / "memory"
-        assert restored.joinpath("MEMORY.md").read_text(encoding="utf-8") == "index"
-        assert restored.joinpath("dangling.md").is_symlink()
-
-    def test_import_overwrite_skips_a_symlinked_project_memory_root(self, tmp_path):
-        """记忆根本身是软链时不恢复：``copytree`` 会解引用 src 自身，把链接目标整棵
-        拷进新项目的记忆目录，而这次拷贝跑在不受 sandbox 约束的服务端进程里。"""
-        pm = ProjectManager(tmp_path / "projects")
-        _create_project(pm, style="Fresh")
-        service = ProjectArchiveService(pm)
-        archive_path, _ = service.export_project("demo")
-
-        outside_dir = tmp_path / "outside"
-        _write_text(outside_dir / "host-secret.md", "secret")
-        arcreel_dir = pm.get_project_path("demo") / ".arcreel"
-        arcreel_dir.mkdir(parents=True, exist_ok=True)
-        (arcreel_dir / "memory").symlink_to(outside_dir, target_is_directory=True)
-
-        result = service.import_project_archive(
-            archive_path,
-            uploaded_filename="demo.zip",
-            conflict_policy="overwrite",
-        )
-
-        assert result.conflict_resolution == "overwritten"
-        assert not (pm.get_project_path("demo") / ".arcreel" / "memory").exists()
-        assert outside_dir.joinpath("host-secret.md").read_text(encoding="utf-8") == "secret"
-
-    def test_import_overwrite_without_project_memory_leaves_no_memory_dir(self, tmp_path):
+    def test_import_overwrite_without_private_dir_leaves_no_private_dir(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
         _create_project(pm, style="Fresh")
         service = ProjectArchiveService(pm)
@@ -1679,7 +1609,7 @@ class TestProjectArchiveService:
         assert not (pm.get_project_path("demo") / ".arcreel").exists()
         assert not list(pm.projects_dir.glob(".import-backup-*"))
 
-    def test_export_omits_project_memory(self, tmp_path):
+    def test_export_omits_dot_arcreel_dir(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
         project_dir = _create_project(pm)
         _write_text(project_dir / ".arcreel" / "memory" / "MEMORY.md", "index")
@@ -1691,7 +1621,7 @@ class TestProjectArchiveService:
             assert not [name for name in archive.namelist() if ".arcreel/" in name]
         assert (project_dir / ".arcreel" / "memory" / "MEMORY.md").read_text(encoding="utf-8") == "index"
 
-    def test_rename_import_drops_project_memory_carried_by_the_archive(self, tmp_path):
+    def test_rename_import_drops_dot_arcreel_dir_carried_by_the_archive(self, tmp_path):
         """导入侧的点目录过滤：归档里夹带的 .arcreel/memory/ 不落进新项目。"""
         pm = ProjectManager(tmp_path / "projects")
         _create_project(pm)

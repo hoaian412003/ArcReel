@@ -185,85 +185,6 @@ describe("OverviewCanvas", () => {
     expect(screen.queryByText("同名文件已存在")).not.toBeInTheDocument();
   });
 
-  it("does not trigger the agent handoff prompt when switching to a read-only project", () => {
-    useAppStore.setState({ assistantPanelOpen: false });
-
-    // 真实项目停在欢迎页（wasWelcomeRef 记为 true）
-    const { rerender } = render(
-      <OverviewCanvas
-        projectName="demo"
-        projectData={makeProjectData({ overview: undefined, episodes: [] })}
-      />,
-    );
-
-    // 切到只读态（如工作台切到演示项目复用同一路由实例）——演示数据自带 overview/episodes，
-    // 之前会被误判成「欢迎页 → 完成」触发交接提示，强行打开演示态并不挂载的 Agent 面板。
-    rerender(
-      <OverviewCanvas
-        projectName="demo"
-        projectData={makeProjectData()}
-        readOnly
-      />,
-    );
-
-    expect(useAppStore.getState().assistantPanelOpen).toBe(false);
-  });
-
-  it("does not replay a stale handoff trigger after switching to a read-only demo project", () => {
-    useAppStore.setState({ assistantPanelOpen: false });
-
-    // 真实项目内先完成一次「欢迎页 → 完成」，使 handoffTrigger 变为非零并已消费过一次
-    const { rerender } = render(
-      <OverviewCanvas
-        projectName="real-project"
-        projectData={makeProjectData({ overview: undefined, episodes: [] })}
-      />,
-    );
-    rerender(
-      <OverviewCanvas projectName="real-project" projectData={makeProjectData()} />,
-    );
-    expect(useAppStore.getState().assistantPanelOpen).toBe(true);
-
-    // 复位后再切到只读的演示项目——storageScope 变化不应让残留的非零 trigger
-    // 被 AgentHandoffHint 当成新事件重新触发一次
-    useAppStore.setState({ assistantPanelOpen: false });
-    rerender(
-      <OverviewCanvas
-        projectName="onboarding_demo"
-        projectData={makeProjectData()}
-        readOnly
-      />,
-    );
-
-    expect(useAppStore.getState().assistantPanelOpen).toBe(false);
-  });
-
-  it("does not replay a stale handoff trigger after passing through the demo project into another real project", () => {
-    useAppStore.setState({ assistantPanelOpen: false });
-
-    // 项目 A 内完成一次「欢迎页 → 完成」，handoffTrigger 变为非零
-    const { rerender } = render(
-      <OverviewCanvas
-        projectName="project-a"
-        projectData={makeProjectData({ overview: undefined, episodes: [] })}
-      />,
-    );
-    rerender(<OverviewCanvas projectName="project-a" projectData={makeProjectData()} />);
-    expect(useAppStore.getState().assistantPanelOpen).toBe(true);
-
-    // 途经只读演示项目——AgentHandoffHint 在只读态不渲染
-    useAppStore.setState({ assistantPanelOpen: false });
-    rerender(
-      <OverviewCanvas projectName="onboarding_demo" projectData={makeProjectData()} readOnly />,
-    );
-
-    // 再进入另一个真实项目 B：B 未发生「欢迎页 → 完成」转换，重新挂载的
-    // AgentHandoffHint 不该把 A 留下的非零 trigger 当成 B 的新事件消费掉
-    rerender(<OverviewCanvas projectName="project-b" projectData={makeProjectData()} />);
-
-    expect(useAppStore.getState().assistantPanelOpen).toBe(false);
-  });
-
   it("does not reopen the conflict prompt if a stale upload resolves after switching to read-only", async () => {
     let rejectUpload: ((err: unknown) => void) | undefined;
     vi.spyOn(API, "uploadFile").mockImplementation(
@@ -384,34 +305,6 @@ describe("OverviewCanvas", () => {
 
     // 冲突弹窗等待用户决策期间组件被卸载——不该让 handleUpload 里的 Promise 永久悬空
     expect(() => unmount()).not.toThrow();
-  });
-
-  it("unmounts an already-visible handoff hint when switching to read-only", () => {
-    useAppStore.setState({ assistantPanelOpen: false });
-
-    // 真实项目内先完成一次「欢迎页 → 完成」，触发交接提示并保持可见（未到 6.5s 自动消失）
-    const { rerender } = render(
-      <OverviewCanvas
-        projectName="real-project-visible"
-        projectData={makeProjectData({ overview: undefined, episodes: [] })}
-      />,
-    );
-    rerender(
-      <OverviewCanvas projectName="real-project-visible" projectData={makeProjectData()} />,
-    );
-    expect(screen.getByRole("status")).toBeInTheDocument();
-
-    // 提示仍可见时切到只读的演示项目——不该继续挂在只读页面上（此前只把 triggerKey
-    // 归零，子组件的 visible 状态不会因此复位，提示会永久卡在只读页面）
-    rerender(
-      <OverviewCanvas
-        projectName="onboarding_demo"
-        projectData={makeProjectData()}
-        readOnly
-      />,
-    );
-
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("does not fetch or display cost data on a read-only project", () => {

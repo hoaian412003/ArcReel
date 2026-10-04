@@ -2,7 +2,6 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API, ApiRequestError } from "@/api";
 import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import type { DirectionReview, FlowBoard as FlowBoardData } from "@/types/flow";
 import type { Screenplay } from "@/types/screenplay";
@@ -81,7 +80,6 @@ function drag(cardEl: HTMLElement, columnId: string) {
 
 beforeEach(() => {
   useProjectsStore.setState({ currentProjectData: { content_mode: "drama" } as never });
-  useAssistantStore.getState().setInput("");
   vi.spyOn(API, "getFlowBoard").mockResolvedValue(makeBoard());
   vi.spyOn(API, "getDirectionReview").mockResolvedValue(REVIEW);
   vi.spyOn(API, "getScreenplay").mockResolvedValue(SCREENPLAY);
@@ -165,7 +163,7 @@ describe("FlowBoard", () => {
     expect(screen.getByTestId("flow-column-direction_review")).toContainElement(screen.getByTestId("flow-card-2"));
   });
 
-  it("拖回上一列：弹出备注框，记录 redo，预填助手输入并打开助手", async () => {
+  it("拖回上一列：弹出备注框，记录 redo", async () => {
     const decide = vi.spyOn(API, "decideDirectionReview").mockResolvedValue({ ...REVIEW, status: "changes_requested" });
     await renderBoard();
     drag(screen.getByTestId("flow-card-2"), "direction");
@@ -173,17 +171,16 @@ describe("FlowBoard", () => {
     fireEvent.change(note, { target: { value: "开场太静" } });
     fireEvent.click(screen.getByRole("button", { name: "发起重做" }));
     await waitFor(() => expect(decide).toHaveBeenCalledWith("demo", 2, { decision: "redo", note: "开场太静" }));
-    await waitFor(() => expect(useAssistantStore.getState().input).toContain("开场太静"));
-    expect(useAssistantStore.getState().input).toContain("2");
-    expect(useAppStore.getState().assistantPanelOpen).toBe(true);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("剧本规划的重做不调用决定接口，只预填对话", async () => {
+  it("剧本规划没有重做通道：拖回上一列只提示，不调用决定接口", async () => {
     const decide = vi.spyOn(API, "decideDirectionReview");
+    const toast = vi.spyOn(useAppStore.getState(), "pushToast");
     await renderBoard();
     drag(screen.getByTestId("flow-card-1"), "script_plan");
-    fireEvent.click(await screen.findByRole("button", { name: "发起重做" }));
-    await waitFor(() => expect(useAssistantStore.getState().input).toContain("剧本规划"));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.any(String), "warning"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(decide).not.toHaveBeenCalled();
   });
 
@@ -192,6 +189,7 @@ describe("FlowBoard", () => {
     await renderBoard();
     fireEvent.click(within1("flow-card-1"));
     expect(await screen.findByTestId("script-review-gate")).toHaveTextContent("gate-1");
+    expect(screen.queryByRole("button", { name: "请 Agent 重做" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "通过" }));
     await waitFor(() => expect(confirm).toHaveBeenCalledWith("demo", 1, { overwriteRevision: undefined }));
   });
@@ -246,12 +244,11 @@ describe("FlowBoard · 剧本审阅", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it("重写剧本不调用决定接口，只预填对话", async () => {
+  it("剧本审阅没有重做通道：拖回上一列不调用审批接口", async () => {
     const approve = vi.spyOn(API, "approveScreenplay");
     await renderBoard();
     drag(screen.getByTestId("flow-card-4"), "script_plan");
-    fireEvent.click(await screen.findByRole("button", { name: "发起重做" }));
-    await waitFor(() => expect(useAssistantStore.getState().input).toContain("重写第 4 集的剧本"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(approve).not.toHaveBeenCalled();
   });
 });

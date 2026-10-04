@@ -18,7 +18,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from lib.agent.agent_memory_paths import MEMORY_DIRNAME, is_valid_memory_user_id
 from lib.infra.app_data_dir import app_data_dir
 
 PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
@@ -67,18 +66,8 @@ class DataRootLayout:
 
     @property
     def users_dir(self) -> Path:
-        """各用户数据的根：``<users_dir>/<user_id>/`` 下放该用户的记忆等。"""
+        """各用户数据的根：``<users_dir>/<user_id>/`` 下放该用户的数据。"""
         return self.root / "users"
-
-    def user_memory_dir(self, user_id: str) -> Path:
-        """用户记忆目录。
-
-        ``user_id`` 直接构成目录名，须是单个路径段（见 ``is_valid_memory_user_id``），
-        否则派生出的目录会逃出数据根，抛 ``ValueError``。
-        """
-        if not is_valid_memory_user_id(user_id):
-            raise ValueError(f"user_id 必须是单个路径段，不能为空或含路径分隔符 / 驱动器冒号 / NUL：{user_id!r}")
-        return self.users_dir / user_id / MEMORY_DIRNAME
 
     @property
     def sqlite_db_path(self) -> Path:
@@ -118,8 +107,7 @@ class DataRootLayout:
     def system_dirs(self) -> tuple[Path, ...]:
         """数据根下由布局登记的、项目目录以外的顶层目录。
 
-        新增的系统目录须登记于此：Agent 的 Bash 沙箱在会话启动时预建这些目录并拒读，未登记且在
-        会话启动之后才出现的目录不在 ``denyRead`` 中（内置读工具仍按数据根默认拒绝）。
+        新增的系统目录须登记于此：项目遍历据此区分系统目录与项目目录。
         """
         return (
             self.global_assets_dir,
@@ -139,11 +127,6 @@ class DataRootLayout:
     def generation_admission_locks_dir(self) -> Path:
         """生成准入锁目录。"""
         return self.runtime_dir / "generation-admission-locks"
-
-    @property
-    def session_import_marker_path(self) -> Path:
-        """本地 SDK 会话导入完成标记。"""
-        return self.runtime_dir / "session-store-import.done"
 
     @property
     def layout_migration_marker_path(self) -> Path:

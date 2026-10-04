@@ -8,14 +8,12 @@ import type { SseStreamError } from "@/utils/sse-stream";
 import { isDemoProject } from "@/onboarding/demo-project";
 import i18n from "@/i18n";
 import {
-  AgentFailureError,
   ApiRequestError,
   NarratedVideoDurationError,
   ReadOnlyModeError,
   ReferenceProjectionError,
   ScriptEditCommandError,
   SpeechAdmissionError,
-  isAgentFailureDetail,
   isNarratedVideoDurationAdmission,
   isReferenceProjectionAdmission,
   isScriptEditResult,
@@ -186,9 +184,6 @@ export async function requestJson<T = unknown>(
     const error = payload as ErrorResponse;
     if (isScriptEditResult(error.detail)) {
       throw new ScriptEditCommandError(error.detail);
-    }
-    if (isAgentFailureDetail(error.detail)) {
-      throw new AgentFailureError(error.detail.message, error.detail.failure);
     }
     if (isReferenceProjectionAdmission(error.detail)) {
       throw new ReferenceProjectionError(error.detail);

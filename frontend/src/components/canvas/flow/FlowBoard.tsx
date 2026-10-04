@@ -6,7 +6,6 @@ import type { FlowBoard as FlowBoardData, FlowCard, FlowColumn } from "@/types/f
 import type { ScriptOverwrite } from "@/types";
 import type { Screenplay } from "@/types/screenplay";
 import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useTasksStore } from "@/stores/tasks-store";
 import { errMsg } from "@/utils/async";
@@ -175,26 +174,10 @@ export function FlowBoard({ projectName }: { projectName: string }) {
       if (!card) return;
       setBusyEpisode(card.episode);
       try {
-        if (card.column === "direction_review") {
-          await API.decideDirectionReview(projectName, card.episode, {
-            decision: "redo",
-            ...(note ? { note } : {}),
-          });
-        }
-        const key =
-          card.column === "direction_review"
-            ? "flow_redo_prefill_direction"
-            : card.next_action === "review_screenplay"
-              ? "flow_redo_prefill_screenplay"
-              : "flow_redo_prefill_script_plan";
-        useAssistantStore.getState().setInput(
-          t(key, {
-            episode: card.episode,
-            note: note ? t("flow_redo_prefill_note", { note }) : "",
-            interpolation: { escapeValue: false },
-          }),
-        );
-        useAppStore.getState().setAssistantPanelOpen(true);
+        await API.decideDirectionReview(projectName, card.episode, {
+          decision: "redo",
+          ...(note ? { note } : {}),
+        });
         pushToast(t("flow_redo_done_toast", { episode: card.episode }), "success");
         setRedoTarget(null);
         refresh();

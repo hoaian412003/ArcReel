@@ -51,14 +51,6 @@ The default workflow uses remote model APIs and normally does not require a loca
 
 ### 1.2 Prepare Model Credentials {#prepare-credentials}
 
-ArcReel uses two types of credentials for different purposes.
-
-#### AI Assistant Credentials {#assistant-credentials}
-
-These credentials power project conversations, content understanding, character extraction, episode planning, and workflow orchestration.
-
-You can use Anthropic's official service or a compatible service supported by ArcReel, and configure the Base URL and model name as needed.
-
 #### Media and Text Generation Credentials {#media-and-text-credentials}
 
 These credentials are used to call text, image, video, and TTS models.
@@ -173,22 +165,11 @@ For complete production deployment, upgrade, backup, and reverse proxy instructi
 
 ## 3. Complete the Initial Setup {#first-time-setup}
 
-After signing in, first complete the onboarding tour and open the read-only demo project. It introduces the project lobby, workbench, AI assistant, and settings without consuming model credits.
+After signing in, first complete the onboarding tour and open the read-only demo project. It introduces the project lobby, workbench, and settings without consuming model credits.
 
 Then open **Settings**.
 
-### 3.1 Configure the AI Assistant {#configure-assistant}
-
-Enter:
-
-- An API key or credential;
-- A Base URL;
-- The primary model;
-- Models for different tasks as needed.
-
-After saving, send a simple message to verify the connection before starting any large batch of tasks.
-
-### 3.2 Configure Media Providers {#configure-media-providers}
+### 3.1 Configure Media Providers {#configure-media-providers}
 
 Configure at least one image provider and one video provider.
 
@@ -199,7 +180,7 @@ For your first project, consider this approach:
 - Start with a fast or low-cost video tier to validate the visuals;
 - After confirming the characters, composition, and direction of motion, switch to a higher-quality model.
 
-### 3.3 Configure Concurrency and Cost {#configure-concurrency-and-cost}
+### 3.2 Configure Concurrency and Cost {#configure-concurrency-and-cost}
 
 Adjust these settings based on your provider quotas:
 
@@ -250,15 +231,15 @@ Prepare:
 
 For a detailed comparison, see [Workflows and Modes](./workflows.md).
 
-## 5. Run the Workflow with the AI Assistant {#run-workflow-with-assistant}
+## 5. Run the Workflow {#run-workflow}
 
-Open the AI assistant panel on the right side of the project workbench.
+Work through the stages in the project workbench. You can also let an external Agent drive it through "Connect an external agent" in the project lobby.
 
-Work through the process in stages instead of asking it to "generate the entire final video" at once.
+Work through the process in stages instead of trying to "generate the entire final video" at once.
 
 ### 5.1 Content Analysis {#content-analysis}
 
-Ask the AI assistant to analyze:
+The content analysis should cover:
 
 - Main characters;
 - Important scenes;

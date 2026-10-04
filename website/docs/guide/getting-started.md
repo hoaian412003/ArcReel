@@ -52,14 +52,6 @@ update_docs: full
 
 ### 1.2 准备模型凭据 {#prepare-credentials}
 
-ArcReel 中有两类凭据，职责不同。
-
-#### Agent 凭据 {#assistant-credentials}
-
-Agent（智能体）用于驱动项目对话、内容理解、角色提取、分集规划和工作流编排。
-
-可使用 Anthropic 官方服务或 ArcReel 支持的兼容服务，并按需配置 Base URL 和模型名称。
-
 #### 媒体与文本生成凭据 {#media-and-text-credentials}
 
 用于实际调用文本、图像、视频和 TTS 模型。
@@ -174,22 +166,11 @@ curl http://localhost:1241/health
 
 ## 3. 完成首次配置 {#first-time-setup}
 
-登录后，建议先完成首次使用引导并打开只读演示项目。它可以帮助你认识项目大厅、工作台、Agent 和设置入口，而不需要先消耗模型额度。
+登录后，建议先完成首次使用引导并打开只读演示项目。它可以帮助你认识项目大厅、工作台和设置入口，而不需要先消耗模型额度。
 
 随后进入 **设置** 页面。
 
-### 3.1 配置 Agent {#configure-assistant}
-
-填写：
-
-- API Key 或凭证；
-- Base URL；
-- 主模型；
-- 按需要配置不同任务所使用的模型。
-
-保存后先发送一条简单消息验证连接，不要直接开始大批量任务。
-
-### 3.2 配置媒体供应商 {#configure-media-providers}
+### 3.1 配置媒体供应商 {#configure-media-providers}
 
 至少配置一个图像和一个视频供应商。
 
@@ -200,7 +181,7 @@ curl http://localhost:1241/health
 - 视频先选快速或低成本档位验证画面；
 - 确认角色、构图和运动方向后，再切换高质量模型。
 
-### 3.3 配置并发和费用 {#configure-concurrency-and-cost}
+### 3.2 配置并发和费用 {#configure-concurrency-and-cost}
 
 根据供应商配额调整：
 
@@ -251,15 +232,15 @@ ArcReel 会按照作者提供的内容建立角色和分镜，不应把成品剧
 
 详细比较见 [创作流程与模式](./workflows.md)。
 
-## 5. 使用 Agent 推进工作流 {#run-workflow-with-assistant}
+## 5. 推进工作流 {#run-workflow}
 
-打开项目工作台右侧的 Agent 面板。
+在项目工作台中按阶段推进；也可以在项目大厅通过「外部智能体接入」让外部 Agent 驱动。
 
 推荐按阶段推进，而不是一次要求“直接生成全部成片”。
 
 ### 5.1 内容分析 {#content-analysis}
 
-让 Agent 分析：
+内容分析需要覆盖：
 
 - 主要角色；
 - 重要场景；

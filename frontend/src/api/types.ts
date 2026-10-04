@@ -87,15 +87,6 @@ export interface ProjectEventStreamOptions {
   onError?: (error: SseStreamError) => void;
 }
 
-export interface AssistantEntriesStreamOptions {
-  projectName: string;
-  sessionId: string;
-  /** 冷订阅游标（seq）；断线重建的续传由 `Last-Event-ID` 承担。 */
-  after?: number;
-  onEvent: (event: string, payload: Record<string, unknown>) => void;
-  onError?: (error: SseStreamError) => void;
-}
-
 /** Filters for {@link API.listTasks} and {@link API.listProjectTasks}. */
 export interface TaskListFilters {
   projectName?: string;
@@ -140,11 +131,6 @@ export interface UsageSummaryQuery {
 export interface SuccessResponse {
   success: boolean;
   message?: string;
-}
-
-export interface AgentProfileStatus {
-  customized: boolean;
-  customized_files: string[];
 }
 
 /** Payload for {@link API.createProject}. */

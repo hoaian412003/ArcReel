@@ -176,9 +176,6 @@ export function useProjectEventsSSE(projectName?: string | null): void {
   const pushNotification = useAppStore((s) => s.pushNotification);
   const pushWorkspaceNotification = useAppStore((s) => s.pushWorkspaceNotification);
   const clearWorkspaceNotifications = useAppStore((s) => s.clearWorkspaceNotifications);
-  const setAssistantToolActivitySuppressed = useAppStore(
-    (s) => s.setAssistantToolActivitySuppressed
-  );
 
   const sourceRef = useRef<SseStreamHandle | null>(null);
   const lastFingerprintRef = useRef<string | null>(null);
@@ -275,7 +272,6 @@ export function useProjectEventsSSE(projectName?: string | null): void {
       onChanges(payload: ProjectChangeBatchPayload) {
         if (disposed) return;
         lastFingerprintRef.current = payload.fingerprint;
-        setAssistantToolActivitySuppressed(true);
 
         // 任务终态是刷新信号而非实体变更，先与实体变更分开：下方的实体失效、分组通知与
         // 聚焦跳转都只针对实体变更。混入任务变更会有两处实际损害——每个终态任务都会在
@@ -405,8 +401,8 @@ export function useProjectEventsSSE(projectName?: string | null): void {
         // 一直显示切分前的分配；grid_split_done 不进 COMPLETION_ACTIONS（那是完成通知
         // 类别，切分不是一次生成），故在这里单列。
         const hasGridSplit = entityChanges.some((c) => c.action === "grid_split_done");
-        // 一次供应商调用结算落库（成功/失败/取消）就是一笔费用变动；无任务的文本调用与
-        // 助手会话只有这一个信号，没有对应的任务终态或完成通知可依赖。
+        // 一次供应商调用结算落库（成功/失败/取消）就是一笔费用变动；无任务的文本调用只有
+        // 这一个信号，没有对应的任务终态或完成通知可依赖。
         const hasUsageRecord = payload.changes.some(isUsageRecordChange);
         // 顶栏用量只认这两个信号：记账结算改金额与已结束列表，任务终态改进行中列表。
         if (hasUsageRecord || taskChanges.length > 0) {
@@ -449,7 +445,6 @@ export function useProjectEventsSSE(projectName?: string | null): void {
     pushNotification,
     pushWorkspaceNotification,
     refreshProject,
-    setAssistantToolActivitySuppressed,
     setLocation,
   ]);
 }

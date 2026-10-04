@@ -41,11 +41,7 @@ EXEMPT_OPERATIONS = PUBLIC_OPERATIONS | SELF_AUTH_OPERATIONS
 
 # SSE 端点走普通受保护 router，由前端以 fetch 带 Authorization header 消费；
 # 会话凭证不接受 query param 形态，见 docs/adr/0071。
-SSE_PATHS = (
-    "/api/v1/projects/demo/assistant/sessions/s1/entries/stream",
-    "/api/v1/projects/demo/assistant/sessions/s1/stream",
-    "/api/v1/projects/demo/events/stream",
-)
+SSE_PATHS = ("/api/v1/projects/demo/events/stream",)
 
 # 验证「放行」的探针端点：受保护，且处理函数只读进程内常量。换端点时要保持这个性质——
 # 依赖数据库等 lifespan 建立的状态，会让这两个用例在干净环境里以 500 失败，掩盖认证结论。

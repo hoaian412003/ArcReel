@@ -16,7 +16,7 @@ update_docs: fact-check
 - **官方市场源**：[`ArcReel/arcreel-market`](https://github.com/ArcReel/arcreel-market) 随版预置，可以禁用、改名和排序，但不能删除。除它之外，你自行添加的都是第三方市场源。
 - **市场条目**：索引中的一项可安装内容，载荷是一份调用端点定义。条目在所属市场源内以 slug 唯一标识；不同市场源里的同名 slug 不代表同一份定义，会各自并列显示。
 
-市场是用户功能：内嵌 Agent 不会替你浏览或安装市场条目。
+市场是用户功能：Agent 不会替你浏览或安装市场条目。
 
 ## 2. 管理市场源 {#manage-sources}
 

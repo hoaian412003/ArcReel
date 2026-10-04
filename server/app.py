@@ -12,9 +12,6 @@ node_modules / .venv / .git / .worktrees 等十几万个文件，单核 CPU 50%+
 import asyncio
 import logging
 import os
-import platform
-import shutil
-import subprocess
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -28,14 +25,11 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import Message, Receive, Scope, Send
 
 from lib import PROJECT_ROOT
-from lib.agent.agent_session_store import session_store_enabled
-from lib.agent.agent_session_store.import_local import migrate_local_transcripts_to_store
-from lib.agent.agent_session_store.store import DbSessionStore
 from lib.config.env_keys import PROVIDER_SECRET_KEYS
 from lib.db import async_session_factory, close_db, init_db
 from lib.generation.generation_worker import GenerationWorker
 from lib.infra.data_root_layout import DataRootLayout, list_project_dirs
-from lib.infra.data_root_layout_migration import default_sdk_config_dir, migrate_data_root_layout
+from lib.infra.data_root_layout_migration import migrate_data_root_layout
 from lib.infra.httpx_shared import shutdown_http_client, startup_http_client
 from lib.infra.logging_config import (
     attach_file_handler,
@@ -47,18 +41,17 @@ from lib.infra.path_safety import try_safe_join
 from lib.project.project_migrations import cleanup_stale_backups, run_project_migrations
 from lib.script.source_loader.migration import migrate_project_source_encoding
 from server.auth import ensure_auth_password, get_current_user, warn_if_auth_disabled
+from server.claude_runtime import ClaudeAuthManager, ClaudeSessionService
 from server.cors_config import resolve_cors_policy
 from server.dependencies import require_project_migration_ok, require_valid_project_name
 from server.error_handlers import register_error_handlers
 from server.remote_mcp import remote_mcp_host
 from server.routers import (
     admin_queue,
-    agent_config,
-    agent_memory,
     api_keys,
     assets,
-    assistant,
     characters,
+    claude_sessions,
     cost_estimation,
     custom_endpoints,
     custom_providers,
@@ -100,8 +93,7 @@ from server.services.tasks.resume_executor import execute_resume_video_task
 def assert_no_provider_secrets_in_environ() -> None:
     """父进程禁止持有任何 provider 密钥；违反即 fail-fast。
 
-    Bash 沙箱子进程通过 fork 继承父 env，父进程必须把 provider secrets
-    全部下线到 DB，由 SDK options.env 显式注入子进程。
+    provider secrets 一律存 DB，不经进程环境传递。
     """
     leaked = sorted(k for k in PROVIDER_SECRET_KEYS if os.environ.get(k))
     if leaked:
@@ -109,175 +101,6 @@ def assert_no_provider_secrets_in_environ() -> None:
             f"SECURITY: 父进程 os.environ 含 provider 密钥: {leaked}. "
             "请到 WebUI 系统配置页填写，并从 env / .env 中移除对应条目。"
         )
-
-
-_APPARMOR_USERNS_SYSCTL = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-_UNPRIV_USERNS_SYSCTL = Path("/proc/sys/kernel/unprivileged_userns_clone")
-_MAX_USER_NS_SYSCTL = Path("/proc/sys/user/max_user_namespaces")
-
-
-def _read_sysctl(path: Path) -> str | None:
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-
-
-def _diagnose_bwrap_failure() -> str:
-    """根据 host sysctl 状态给出 bwrap 失败的精确修复路径。
-
-    procfs 是宿主机共享的，容器内同样能读到 host sysctl 值，所以这套
-    诊断在 docker 内外都能跑。优先级：Ubuntu 24.04 AppArmor 限制 >
-    传统 unprivileged_userns_clone > max_user_namespaces > 兜底容器配置。
-    """
-    parts: list[str] = []
-
-    apparmor_userns = _read_sysctl(_APPARMOR_USERNS_SYSCTL)
-    if apparmor_userns == "1":
-        parts.append(
-            "Detected Ubuntu 24.04+ AppArmor restriction (root cause):\n"
-            "  /proc/sys/kernel/apparmor_restrict_unprivileged_userns = 1\n"
-            "  Blocks ALL unprivileged user namespaces. `apparmor:unconfined`\n"
-            "  in docker compose does NOT bypass this — it is a global LSM\n"
-            "  switch, not a per-process profile.\n"
-            "  Fix on HOST (not inside the container):\n"
-            "    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n"
-            '    echo "kernel.apparmor_restrict_unprivileged_userns=0" '
-            "| sudo tee /etc/sysctl.d/60-arcreel-bwrap.conf"
-        )
-
-    userns_clone = _read_sysctl(_UNPRIV_USERNS_SYSCTL)
-    if userns_clone == "0":
-        parts.append(
-            "Unprivileged user namespaces disabled on host:\n"
-            "  /proc/sys/kernel/unprivileged_userns_clone = 0\n"
-            "  Fix on HOST: sudo sysctl -w kernel.unprivileged_userns_clone=1"
-        )
-
-    max_userns = _read_sysctl(_MAX_USER_NS_SYSCTL)
-    if max_userns == "0":
-        parts.append(
-            "User namespace count limit set to 0 on host:\n"
-            "  /proc/sys/user/max_user_namespaces = 0\n"
-            "  Fix on HOST: sudo sysctl -w user.max_user_namespaces=15000"
-        )
-
-    if not parts:
-        parts.append(
-            "Container likely missing security relaxation. docker compose:\n"
-            "  security_opt:\n"
-            "    - seccomp:unconfined\n"
-            "    - apparmor:unconfined\n"
-            "  cap_add:\n"
-            "    - NET_ADMIN"
-        )
-
-    return "\n".join(parts)
-
-
-def check_sandbox_available(
-    *,
-    platform_system: Callable[[], str] | None = None,
-    executable_which: Callable[[str], str | None] | None = None,
-    subprocess_run: Callable[..., subprocess.CompletedProcess[bytes]] | None = None,
-) -> bool:
-    """启动期检测 sandbox 工具可用性。
-
-    返回 ``True`` 表示沙箱可用且必须启用；返回 ``False`` 表示 SDK 不支持
-    当前平台（仅 Windows，官方平台约束见
-    https://code.claude.com/docs/en/sandboxing#platform-and-tool-compatibility），server
-    仍可启动但 sandbox 关闭，Bash 工具回退到
-    ``AgentAccessPolicy.WINDOWS_BASH_PREFIX_WHITELIST`` 代码白名单。
-    macOS / Linux 工具缺失仍硬失败（受支持平台禁止降级）。
-    """
-    system = (platform_system or platform.system)()
-    which = executable_which or shutil.which
-    run = subprocess_run or subprocess.run
-    if system == "Darwin":
-        if which("sandbox-exec") is None:
-            raise RuntimeError(
-                "SANDBOX_UNAVAILABLE on macOS\n"
-                "  sandbox-exec: not found in PATH (should be system-installed)\n"
-                "Required for ArcReel agent runtime."
-            )
-        return True
-    if system == "Linux":
-        # Linux 依赖见 https://code.claude.com/docs/en/sandboxing#set-up-linux-and-wsl2：需同时安装
-        # （bwrap 做进程/文件隔离，socat 做网络代理转发）。
-        missing = [name for name in ("bwrap", "socat") if which(name) is None]
-        if missing:
-            raise RuntimeError(
-                "SANDBOX_UNAVAILABLE on linux\n"
-                f"  missing in PATH: {', '.join(missing)}\n"
-                "Required for ArcReel agent runtime. Install:\n"
-                "  Ubuntu/Debian: sudo apt install bubblewrap socat\n"
-                "  Fedora:        sudo dnf install bubblewrap socat\n"
-                "  Arch:          sudo pacman -S bubblewrap socat"
-            )
-        # bwrap 装了不代表跑得起来。两类常见失败：
-        # 1) 创建 user namespace 被拒：seccomp / apparmor / sysctl 屏蔽
-        #    → "No permissions to create new namespace"
-        # 2) 新 net namespace 内 loopback 配置被拒：容器缺 CAP_NET_ADMIN
-        #    → "loopback: Failed RTM_NEWADDR: Operation not permitted"
-        # 用与 SDK 实际调用接近的 unshare 参数试跑，启动期就拦下来，
-        # 避免 Agent 第一次调 Bash 才神秘失败。
-        probe_cmd = [
-            "bwrap",
-            "--unshare-user",
-            "--unshare-net",
-            "--unshare-pid",
-            "--ro-bind",
-            "/",
-            "/",
-            "/bin/true",
-        ]
-        try:
-            probe = run(probe_cmd, capture_output=True, timeout=5, check=False)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError(
-                "SANDBOX_BWRAP_BROKEN on Linux\n"
-                f"  bwrap probe failed to execute: {exc}\n"
-                "Required for ArcReel agent runtime."
-            ) from exc
-        if probe.returncode != 0:
-            stderr = probe.stderr.decode("utf-8", errors="replace").strip() or "(no stderr)"
-            raise RuntimeError(
-                "SANDBOX_BWRAP_BROKEN on Linux\n"
-                f"  bwrap installed but cannot run: {stderr}\n"
-                f"{_diagnose_bwrap_failure()}"
-            )
-        return True
-    logger.warning(
-        "SANDBOX_UNSUPPORTED on %s — server 启动 sandbox=disabled，Bash 工具回退到代码白名单"
-        "（python .claude/skills/.../scripts/*.py / ffmpeg / ffprobe）。"
-        "生产部署推荐 macOS / Linux / Docker；Windows 用户建议使用 WSL2。",
-        system,
-    )
-    return False
-
-
-_DOCKERENV_PATH = Path("/.dockerenv")
-_CGROUP_PATH = Path("/proc/1/cgroup")
-
-
-def detect_docker_environment(
-    *,
-    dockerenv_path: Path | None = None,
-    cgroup_path: Path | None = None,
-) -> bool:
-    """启动期一次性检测当前是否在 Docker / Podman 容器内。
-
-    用于决定是否启用 ``SandboxSettings.enableWeakerNestedSandbox``。
-    """
-    docker_marker = dockerenv_path or _DOCKERENV_PATH
-    cgroup = cgroup_path or _CGROUP_PATH
-    if docker_marker.exists():
-        return True
-    try:
-        content = cgroup.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return False
-    return "docker" in content or "podman" in content
 
 
 # 初始化日志：模块导入期只挂 stream handler。
@@ -357,16 +180,8 @@ async def _migrate_source_encoding_on_startup(
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # Startup
-    # 安全红线检测：先父进程 env 净化，再 sandbox 工具可用性，再 docker 检测
+    # 安全红线检测：父进程 env 不得持有 provider 密钥
     assert_no_provider_secrets_in_environ()
-    sandbox_enabled = check_sandbox_available()
-    # detect_docker_environment 仅在 sandbox 可用平台有意义（Linux 路径探测）；
-    # Windows 回退时跳过，避免无意义的文件系统调用。
-    is_docker = detect_docker_environment() if sandbox_enabled else False
-    logger.info("Sandbox runtime: enabled=%s docker=%s", sandbox_enabled, is_docker)
-
-    app.state.in_docker = is_docker
-    app.state.sandbox_enabled = sandbox_enabled
 
     # 日志文件持久化：先把代码目录下的旧日志迁入数据根，再挂 file handler。
     # 顺序很重要——handler 会在新位置创建 arcreel.log，提前挂会让旧的同名文件因冲突留在原处。
@@ -386,7 +201,6 @@ async def lifespan(app: FastAPI):
     await migrate_data_root_layout(
         layout.root,
         session_factory=async_session_factory,
-        sdk_config_dir=default_sdk_config_dir(),
     )
 
     # 源文件编码迁移（幂等；失败不阻塞启动）。先于 schema 迁移跑：源文一律先归到 UTF-8，
@@ -414,15 +228,6 @@ async def lifespan(app: FastAPI):
             migration_summary.failed,
         )
     await asyncio.to_thread(cleanup_stale_backups, layout.projects_dir, 7)
-
-    # Migrate any pre-existing local SDK jsonl transcripts into the DbSessionStore.
-    # Runs once (marker-gated); failures are non-fatal and logged.
-    if session_store_enabled():
-        try:
-            store = DbSessionStore(async_session_factory)
-            await migrate_local_transcripts_to_store(store, data_root=layout.root)
-        except Exception:
-            logger.exception("session-store transcript migration failed (non-fatal)")
 
     # Migrate legacy .system_config.json → DB (no-op if file doesn't exist or already migrated)
     try:
@@ -462,9 +267,11 @@ async def lifespan(app: FastAPI):
     # 启动共享 httpx 客户端（用于版本检查等外部 API 调用）
     await startup_http_client()
 
-    # Initialize async services
-    await assistant.assistant_service.startup(in_docker=is_docker, sandbox_enabled=sandbox_enabled)
-    assistant.assistant_service.session_manager.start_patrol()
+    claude_auth_manager = ClaudeAuthManager()
+    app.state.claude_auth_manager = claude_auth_manager
+    claude_session_service = ClaudeSessionService(data_root=layout.root, auth_manager=claude_auth_manager)
+    app.state.claude_session_service = claude_session_service
+    await claude_session_service.startup()
 
     queue_bus_listener = None
     if os.environ.get("QUEUE_WORKER_MODE", "embedded").strip().lower() == "external":
@@ -492,6 +299,12 @@ async def lifespan(app: FastAPI):
         yield
 
     # Shutdown
+    claude_session_service = getattr(app.state, "claude_session_service", None)
+    if claude_session_service is not None:
+        await claude_session_service.shutdown()
+    claude_auth_manager = getattr(app.state, "claude_auth_manager", None)
+    if claude_auth_manager is not None:
+        await claude_auth_manager.shutdown()
     project_event_service = getattr(app.state, "project_event_service", None)
     if project_event_service:
         logger.info("正在停止 ProjectEventService...")
@@ -613,6 +426,12 @@ async def request_logging_middleware(request: Request, call_next):
 # 不挂依赖的两组另有说明，见下方分组注释。
 app.include_router(projects.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["项目管理"])
 app.include_router(characters.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["角色管理"])
+app.include_router(
+    claude_sessions.router,
+    prefix="/api/v1",
+    dependencies=[Depends(get_current_user)],
+    tags=["Claude Agent"],
+)
 app.include_router(scenes.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["场景管理"])
 app.include_router(props.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["道具管理"])
 app.include_router(products.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["商品管理"])
@@ -654,12 +473,6 @@ app.include_router(versions.router, prefix="/api/v1", dependencies=[Depends(get_
 app.include_router(usage.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["费用统计"])
 app.include_router(auth_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["认证"])
 app.include_router(
-    assistant.router,
-    prefix="/api/v1/projects/{project_name}/assistant",
-    dependencies=[Depends(get_current_user)],
-    tags=["Agent 会话"],
-)
-app.include_router(
     project_events.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["项目变更流"]
 )
 app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["任务队列"])
@@ -670,7 +483,6 @@ app.include_router(vieneu.router, prefix="/api/v1", dependencies=[Depends(get_cu
 app.include_router(system_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统配置"])
 app.include_router(system.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统"])
 app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["API Key 管理"])
-app.include_router(agent_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 配置"])
 app.include_router(
     custom_providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["自定义供应商"]
 )
@@ -694,15 +506,6 @@ app.include_router(
     tags=["参考生视频"],
 )
 app.include_router(assets.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["全局资产库"])
-app.include_router(
-    agent_memory.user_router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 记忆"]
-)
-app.include_router(
-    agent_memory.project_router,
-    prefix="/api/v1",
-    dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
-    tags=["Agent 记忆"],
-)
 app.include_router(onboarding.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["首次使用引导"])
 app.include_router(
     prompt_templates.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["提示词模版"]

@@ -18,10 +18,10 @@ from lib.project.data_validator import DataValidator
 from lib.project.project_manager import ProjectManager
 from lib.script.reference_video.request_projection import unit_reference_declarations
 from lib.script.script_batch_edit import script_revision
-from server.agent_runtime.arcreel_mcp import build_arcreel_mcp_server
+from server.agent_toolset.remote import remote_tool
 from server.agent_toolset.repair_channel import PATCH_EPISODE_META, PATCH_PROJECT, RENAME_ASSET
 from server.agent_toolset.script_editing import PATCH_EPISODE_SCRIPT
-from server.tool_runtime import ScriptPatchResult, ToolMessage, ToolOutcome
+from server.tool_runtime import CallerContext, ScriptPatchResult, ToolMessage, ToolOutcome
 from tests.integration.server.agent_tool_support import ToolHarness, run_declared_tool
 
 
@@ -228,26 +228,28 @@ def _problem_code(outcome: ToolOutcome[ScriptPatchResult]) -> str:
 
 class TestPatchEpisodeScript:
     async def test_four_operation_union_commits_as_one_batch(self, ctx: ToolHarness) -> None:
-        """内嵌信封：摘要在前，其后的 JSON 就是结构化结果，重新生成提示与 mention 警告同时出现在两处。"""
+        """远程信封：摘要在前，其后的 JSON 就是结构化结果，重新生成提示与 mention 警告同时出现在两处。"""
         revision = script_revision(_load(ctx))
-        session_server = build_arcreel_mcp_server(project_name="demo", data_root=ctx.data_root)["instance"]
-        request = types.CallToolRequest(
-            params=types.CallToolRequestParams(
-                name="patch_episode_script",
-                arguments={
-                    "script": "episode_1.json",
-                    "base_revision": revision,
-                    "operations": [
-                        {"op": "update", "id": "E1S01", "fields": {"image_prompt.scene": "@[无名路人]回头"}},
-                        {"op": "insert", "after_id": "E1S01", "item": _segment("ignored")},
-                        {"op": "split", "id": "E1S02", "parts": [_segment("a"), _segment("b")]},
-                        {"op": "remove", "id": "E1S01_1"},
-                    ],
-                },
-            )
+        tool = remote_tool(
+            PATCH_EPISODE_SCRIPT,
+            projects=ctx.pm,
+            services=ctx.services,
+            caller=lambda: CallerContext(user_id="default", source="mcp"),
         )
 
-        result = (await session_server.request_handlers[types.CallToolRequest](request)).root
+        result = await tool.run(
+            {
+                "project": "demo",
+                "script": "episode_1.json",
+                "base_revision": revision,
+                "operations": [
+                    {"op": "update", "id": "E1S01", "fields": {"image_prompt.scene": "@[无名路人]回头"}},
+                    {"op": "insert", "after_id": "E1S01", "item": _segment("ignored")},
+                    {"op": "split", "id": "E1S02", "parts": [_segment("a"), _segment("b")]},
+                    {"op": "remove", "id": "E1S01_1"},
+                ],
+            }
+        )
 
         assert isinstance(result, types.CallToolResult)
         assert result.isError is False

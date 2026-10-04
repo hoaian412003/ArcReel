@@ -101,12 +101,6 @@ def _log_level() -> str:
     return os.environ.get("LOG_LEVEL", "INFO")
 
 
-def _sandbox_status() -> str:
-    from server.app import check_sandbox_available
-
-    return "enabled" if check_sandbox_available() else "disabled"
-
-
 def _providers() -> str:
     from lib.config.registry import PROVIDER_REGISTRY
 
@@ -123,7 +117,6 @@ def collect_diagnostics(*, app_version: Callable[[], object] | None = None) -> s
         *_DATA_ROOT_FIELDS,
         ("Database URL", _db_url),
         ("Log level", _log_level),
-        ("Sandbox", _sandbox_status),
         ("Registered providers", _providers),
         ("Report generated", lambda: datetime.now(UTC).isoformat()),
     ]

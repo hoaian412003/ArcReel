@@ -6,26 +6,9 @@ sidebar_position: 3
 
 # Provider and Model Configuration {#providers}
 
-ArcReel treats the AI assistant, text generation, image generation, video generation, and TTS as separate capabilities. You can choose different providers for different projects and media types instead of tying the entire production pipeline to one platform.
+ArcReel treats text generation, image generation, video generation, and TTS as separate capabilities. You can choose different providers for different projects and media types instead of tying the entire production pipeline to one platform.
 
-## 1. Start by Distinguishing Two Provider Categories {#two-provider-categories}
-
-### 1.1 AI Assistant Providers {#assistant-providers}
-
-The AI assistant is responsible for:
-
-- Understanding user intent;
-- Analyzing novels and screenplays;
-- Extracting characters, scenes, and props;
-- Planning episodes;
-- Normalizing screenplays;
-- Orchestrating subsequent generation tasks.
-
-ArcReel's Agent Runtime is based on the Claude Agent SDK and supports Anthropic's official service as well as compatible configurations supported by the project.
-
-The AI assistant provider does not necessarily handle the actual image and video generation.
-
-### 1.2 Media and Text Providers {#media-and-text-providers}
+## 1. Media and Text Providers {#two-provider-categories}
 
 These providers are responsible for:
 
@@ -36,7 +19,6 @@ These providers are responsible for:
 
 A complete project can use a combination of providers, for example:
 
-- AI assistant: a high-quality reasoning model;
 - Text structuring: a faster text model;
 - Character design: a high-quality image model;
 - Batch storyboards: a low-cost image model;

@@ -24,7 +24,7 @@ interface FlowCardDrawerProps {
   onScreenplayLoaded?: (screenplay: Screenplay) => void;
 }
 
-/** 卡片详情抽屉：人工列展示待审内容与「通过 / 请 Agent 重做」按钮（拖拽之外的等价入口），其余列只给状态行。 */
+/** 卡片详情抽屉：人工列展示待审内容与「通过」按钮（分镜导演审阅另有「请 Agent 重做」）（拖拽之外的等价入口），其余列只给状态行。 */
 export function FlowCardDrawer({
   projectName,
   card,
@@ -113,9 +113,11 @@ export function FlowCardDrawer({
 
       {human && (
         <footer className="flex flex-wrap justify-end gap-2 border-t border-hairline px-4 py-3">
-          <SecondaryButton onClick={onRedo} disabled={busy} leadingIcon={<RotateCcw className="h-3.5 w-3.5" />}>
-            {t("flow_redo")}
-          </SecondaryButton>
+          {card.column === "direction_review" && (
+            <SecondaryButton onClick={onRedo} disabled={busy} leadingIcon={<RotateCcw className="h-3.5 w-3.5" />}>
+              {t("flow_redo")}
+            </SecondaryButton>
+          )}
           <PrimaryButton onClick={onApprove} disabled={busy} leadingIcon={<Check className="h-3.5 w-3.5" />}>
             {busy ? t("flow_approving") : t("flow_approve")}
           </PrimaryButton>

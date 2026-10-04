@@ -1,32 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Anchor, ChevronDown, Sparkles } from "lucide-react";
+import { Anchor, ChevronDown } from "lucide-react";
 import { API } from "@/api";
-import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import type { EpisodeMeta } from "@/types";
 import { ScreenplayReviewPanel } from "./flow/ScreenplayReviewPanel";
 
 /**
  * 已选集但剧本未生成时的画布视图：呈现分集拆分结果供审阅——
- * 源文切片全文 + 拆分元信息（边界、节拍、尾钩子），CTA 唤起 Agent 起草剧本；
+ * 源文切片全文 + 拆分元信息（边界、节拍、尾钩子）；
  * 正文区可切到编剧剧本（按场次查看与修改，通过审阅在 Flow 看板完成）。
  * 适用 narration/drama 全部生成路径；ad 恒单集无源文切片，由 StudioCanvasRouter 排除。
  */
 
 // ---------------------------------------------------------------------------
-// 标题区：E 徽标 + 标题 + 状态 chip + 源文元信息 + CTA
+// 标题区：E 徽标 + 标题 + 状态 chip + 源文元信息
 // ---------------------------------------------------------------------------
 
-function EpisodeHeader({
-  episode,
-  meta,
-  onStart,
-}: {
-  episode: number;
-  meta: EpisodeMeta | undefined;
-  onStart: () => void;
-}) {
+function EpisodeHeader({ episode, meta }: { episode: number; meta: EpisodeMeta | undefined }) {
   const { t } = useTranslation("dashboard");
   const r = meta?.source_range;
   const chars = r?.start != null && r?.end != null ? r.end - r.start : null;
@@ -80,14 +70,6 @@ function EpisodeHeader({
           ) : null}
         </div>
       </div>
-      <button
-        type="button"
-        onClick={onStart}
-        className="arc-btn-primary focus-ring mt-0.5 inline-flex shrink-0 items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold"
-      >
-        <Sparkles className="h-3.5 w-3.5" aria-hidden />
-        {t("episode_workspace_start_cta", { episode })}
-      </button>
     </header>
   );
 }
@@ -222,17 +204,10 @@ export function EpisodeSourceReview({
   const mode = view.key === fetchKey ? view.mode : "source";
   const text = loading ? null : fetched.text;
 
-  const handleStart = useCallback(() => {
-    // 经 store.input 投递一次性预填文本，AgentCopilot 消费后写入输入框；
-    // 只填不发送，已有会话时不切换、不新建
-    useAssistantStore.getState().setInput(t("episode_workspace_prefill_script", { episode }));
-    useAppStore.getState().setAssistantPanelOpen(true);
-  }, [episode, t]);
-
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
-        <EpisodeHeader episode={episode} meta={meta} onStart={handleStart} />
+        <EpisodeHeader episode={episode} meta={meta} />
         <GuideSection key={episode} meta={meta} />
 
         <div className="mt-4 flex min-h-0 flex-1 flex-col">

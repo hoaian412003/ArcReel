@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { SseStreamHandle } from "@/utils/sse-stream";
 
 /**
- * `API.openProjectEventStream` / `API.openAssistantEntriesStream` spy 返回的流句柄替身：
+ * `API.openProjectEventStream` spy 返回的流句柄替身：
  * hook 测试直接驱动订阅时注册的回调，不经真实 fetch 流（真实流式客户端见
  * `src/test/fakeSseFetch.ts`）。
  *

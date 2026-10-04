@@ -7,7 +7,7 @@
  *    后，两种情形都由 `isAuthenticated` 统一表达）。登录页不掺和。
  * 2. 未看过则自动开一次。
  * 3. 开启但当前所在路由（pathname 或该步声明的查询参数）不是当前步骤所需的（如设置页
- *    点「重看引导」回到第 1 步、跨页步骤切到下一段、设置页两步间换 section）时先导航
+ *    点「重看引导」回到第 1 步、跨页步骤切到下一段、换设置页 section）时先导航
  *    过去，锚点与内容区才能就位。
  * 4. store 里 active 为真、且当前路由是引导覆盖的路由之一时驱动 driver.js —— 自动
  *    首弹与设置页「重看引导」共用这条路径，组件本身不区分二者。
@@ -75,8 +75,8 @@ export function OnboardingTour() {
   const requiredRoute = steps[stepIndex]?.route ?? null;
   const requiredQuery = steps[stepIndex]?.query;
   // 该步声明的查询参数是否已满足。同一 pathname 下按查询参数切分区的页面（设置页的
-  // `section`），pathname 相同不代表内容区落对了地方——设置页两步之间就靠这个判定
-  // 触发导航，把内容区从供应商切到 Agent（以及退回时切回来）。
+  // `section`），pathname 相同不代表内容区落对了地方——设置页的步骤靠这个判定
+  // 触发导航，把内容区切到该步声明的分区。
   const querySatisfied =
     !requiredQuery ||
     Object.entries(requiredQuery).every(([key, value]) => new URLSearchParams(search).get(key) === value);

@@ -120,9 +120,9 @@ describe("SystemConfigPage", () => {
     expect(screen.getByText("系统配置与 API 访问管理")).toBeInTheDocument();
   });
 
-  it("renders all 6 sidebar sections", () => {
+  it("renders all sidebar sections", () => {
     renderPage();
-    expect(screen.getByRole("button", { name: /Agent/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Agent/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /供应商/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /模型选择/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /使用记录/ })).toBeInTheDocument();
@@ -162,22 +162,6 @@ describe("SystemConfigPage", () => {
     await waitFor(() => {
       expect(usageButton).toHaveAttribute("aria-current", "page");
     });
-  });
-
-  it("does not show warnings when only the embedded-agent credential is missing", async () => {
-    vi.spyOn(API, "getSystemConfig").mockResolvedValue(
-      makeConfigResponse({ anthropic_api_key: { is_set: false, masked: null } }),
-    );
-    vi.spyOn(API, "getProviders").mockResolvedValue(makeProviders({ status: "ready" }));
-
-    // Banner renders inside non-providers content panes (providers section has its own UI),
-    // so land on agent to assert it.
-    renderPage("/app/settings?section=agent");
-
-    await screen.findByText("内嵌智能体");
-
-    expect(screen.queryByText("当前配置存在以下问题，可能会影响部分功能：")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("配置未完成")).not.toBeInTheDocument();
   });
 
   it("does not show warning banner when config is complete", async () => {

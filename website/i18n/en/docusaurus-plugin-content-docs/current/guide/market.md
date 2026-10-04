@@ -16,7 +16,7 @@ The market lets you browse call endpoints that others have already adapted, from
 - **Official market source**: [`ArcReel/arcreel-market`](https://github.com/ArcReel/arcreel-market) ships preconfigured. It can be disabled, renamed, and reordered, but not deleted. Every other source you add yourself is a third-party market source.
 - **Market entry**: an installable item in an index, whose payload is a call endpoint definition. An entry is uniquely identified by its slug within its market source. The same slug in different market sources does not mean the same definition; such entries are displayed side by side.
 
-The market is a user feature: the embedded Agent does not browse or install market entries for you.
+The market is a user feature: an Agent does not browse or install market entries for you.
 
 ## 2. Manage Market Sources {#manage-sources}
 

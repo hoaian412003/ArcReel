@@ -4,11 +4,11 @@ export type DropOutcome =
   | { kind: "approve" }
   | { kind: "redo" }
   | { kind: "noop" }
-  | { kind: "rejected"; reason: "not_draggable" | "skip" | "backward" };
+  | { kind: "rejected"; reason: "not_draggable" | "skip" | "backward" | "redo_unavailable" };
 
 /**
- * 拖拽规则：只有人工列的卡片可拖；落到相邻的下一列 = 通过，落到相邻的上一列（agent 列）= 让 Agent 重做，
- * 其余落点一律拒绝。
+ * 拖拽规则：只有人工列的卡片可拖；落到相邻的下一列 = 通过，落到相邻的上一列（agent 列）= 让 Agent 重做（仅分镜导演审阅
+ * 列有重做通道），其余落点一律拒绝。
  */
 export function resolveDrop(columns: readonly FlowColumn[], card: FlowCard, targetId: string): DropOutcome {
   const from = columns.findIndex((c) => c.id === card.column);
@@ -17,7 +17,9 @@ export function resolveDrop(columns: readonly FlowColumn[], card: FlowCard, targ
   if (columns[from].kind !== "human") return { kind: "rejected", reason: "not_draggable" };
   if (from === to) return { kind: "noop" };
   if (to === from + 1) return { kind: "approve" };
-  if (to === from - 1) return { kind: "redo" };
+  if (to === from - 1) {
+    return card.column === "direction_review" ? { kind: "redo" } : { kind: "rejected", reason: "redo_unavailable" };
+  }
   return { kind: "rejected", reason: to < from ? "backward" : "skip" };
 }
 

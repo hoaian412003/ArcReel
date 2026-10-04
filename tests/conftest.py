@@ -80,8 +80,6 @@ atexit.register(_remove_owned_test_home_dir)
 import lib.generation.generation_queue as generation_queue_module
 from lib.db.base import Base
 from lib.generation.video_request_facts import VideoRequestFacts, VideoRequestFactsFailure
-from server.agent_runtime.session_manager import SessionManager
-from server.agent_runtime.session_store import SessionMetaStore
 
 
 @pytest.fixture
@@ -187,22 +185,6 @@ def isolated_data_root(tmp_path_factory: pytest.TempPathFactory, monkeypatch: py
     yield
     reset_for_tests()
     reset_project_manager_for_tests()
-
-
-@pytest.fixture(autouse=True)
-def stub_sandbox_check(isolated_data_root, monkeypatch, request):
-    """Mock ``check_sandbox_available`` 返回 True，避免测试机不满足真实 bwrap probe。
-
-    GitHub Actions Ubuntu 24.04 runner 上 ``apparmor_restrict_unprivileged_userns=1``
-    会让 ``server.app.check_sandbox_available`` 的 bwrap probe 启动失败，连带
-    把任何走 FastAPI lifespan 的测试（TestClient / lifespan / startup hook 集成测试）
-    全部拖崩。测试本不该依赖 host 能跑非特权 user namespace；该函数本身的契约
-    由 ``tests/unit/server/test_startup_assertions.py`` 独立覆盖（用更精细的 subprocess.run
-    stub）— 那个文件需要走真实函数，故按文件名跳过此 autouse stub。
-    """
-    if request.path.name == "test_startup_assertions.py":
-        return
-    monkeypatch.setattr("server.app.check_sandbox_available", lambda: True)
 
 
 #: 测试内主机名统一解析到的地址（TEST-NET-3，公网段、不可路由）。
@@ -329,10 +311,8 @@ def _register_models() -> None:
     不这么做时建表范围取决于被测模块的 import 链，同一 fixture 在不同文件下建出的
     schema 不同。
     """
-    from lib.agent.agent_session_store.models import register_models as register_agent_session_models
     from lib.db.models import register_models as register_db_models
 
-    register_agent_session_models()
     register_db_models()
 
 
@@ -487,26 +467,6 @@ async def file_session_factory(tmp_path: Path) -> AsyncIterator[async_sessionmak
     """
     async with make_test_engine(dialect_aware=False, file_path=tmp_path / "concurrency.db") as engine:
         yield async_sessionmaker(engine, expire_on_commit=False)
-
-
-# ---------------------------------------------------------------------------
-# SessionManager family (used by 3+ test files)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def meta_store(db_factory: async_sessionmaker[AsyncSession]) -> SessionMetaStore:
-    """Create an async SessionMetaStore backed by in-memory SQLite."""
-    return SessionMetaStore(session_factory=db_factory)
-
-
-@pytest.fixture
-async def session_manager(tmp_path: Path, meta_store: SessionMetaStore) -> SessionManager:
-    """Create a SessionManager wired to *tmp_path* and *meta_store*."""
-    return SessionManager(
-        project_root=tmp_path,
-        meta_store=meta_store,
-    )
 
 
 # ---------------------------------------------------------------------------

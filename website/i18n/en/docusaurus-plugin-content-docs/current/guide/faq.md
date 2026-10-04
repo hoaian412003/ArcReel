@@ -89,35 +89,17 @@ A production PostgreSQL deployment also requires a PostgreSQL database backup. A
 
 A project ZIP from the Web UI is suitable for migrating an individual project, but it does not include global provider configuration, account configuration, task records, cost records, or Agent sessions. It is not a substitute for a full-instance backup.
 
-## Initial configuration and the AI assistant {#setup-and-assistant}
+## Initial configuration {#setup-and-assistant}
 
 ### Which credentials must I configure before production? {#required-credentials}
 
-ArcReel uses two independent sets of configuration for the AI assistant and content generation:
+Content generation providers are configured per media type:
 
-- The **Agent provider** handles conversations, source-text analysis, and production orchestration. It requires a working, active Agent credential.
 - **Generation providers** handle text, image, video, and speech generation. You must configure providers and models for the modalities your project actually uses.
 
-Configuring only an Agent credential does not automatically provide image- or video-generation capabilities. Configuring only generation providers does not let the in-project AI assistant start. Project-level generation model settings override global defaults, so troubleshooting should confirm which provider and model the project actually selected.
+Project-level generation model settings override global defaults, so troubleshooting should confirm which provider and model the project actually selected.
 
-Preset generation providers and Agent providers can each store multiple credentials, but ArcReel uses only the one currently marked active at runtime and does not rotate them automatically. Testing a credential does not activate it. Each custom provider currently stores one API Key.
-
-### How do I make the AI assistant start or resume production? {#start-or-resume-assistant}
-
-Open the AI assistant on the right side of the project and simply ask it to “start production” or “continue production.” The assistant checks the project's current state, resumes from the first incomplete stage, and waits for confirmation when the screenplay, assets, or storyboards need review.
-
-If the assistant reports that you are not logged in, cannot start, or have no available model, first open Settings and confirm that an Agent credential is saved, its message-call probe succeeds, and it is active. A model-discovery warning does not necessarily block message calls, but you should verify the actual model ID. You do not need to sign in to a Claude web account separately in the assistant panel.
-
-### What should I do about `Failed to start Claude Code`, a startup timeout, or `Control request timeout`? {#assistant-startup-failure}
-
-These messages mean that the Agent process did not start normally or could not initialize in time. They do not indicate an error in the screenplay content. Check the following in order:
-
-1. Confirm that the Agent credential is active and that the model ID exactly matches an ID actually exposed by the service.
-2. Confirm that the Docker container or server can reach the Agent API and that its proxy, DNS, and TLS configuration works.
-3. Confirm that the Agent sandbox passes its startup checks in Docker, WSL, or the local environment.
-4. Download diagnostic logs from the About section of Settings and inspect the specific upstream status code near the time of the error.
-
-A successful connectivity check proves only that a minimal request succeeded. Long sessions may still be affected by quotas, context limits, rate limits, or proxy timeouts.
+Preset generation providers can store multiple credentials, but ArcReel uses only the one currently marked active at runtime and does not rotate them automatically. Testing a credential does not activate it. Each custom provider currently stores one API Key.
 
 ## Providers, models, and APIs {#providers-models-api}
 
@@ -205,7 +187,7 @@ ArcReel currently supports `.txt`, `.md`, `.docx`, `.epub`, and `.pdf`. Uploaded
 
 A scanned PDF with no extractable text cannot be used directly and must go through OCR first. Convert legacy `.doc` files to `.docx` before uploading. If a TXT or Markdown file displays garbled characters, convert it to a common text encoding and upload it again.
 
-### Why is the next stage unavailable, or why did the assistant stop? {#stage-blocked}
+### Why is the next stage unavailable, or why did the external Agent stop? {#stage-blocked}
 
 Usually a prerequisite review or asset is incomplete:
 

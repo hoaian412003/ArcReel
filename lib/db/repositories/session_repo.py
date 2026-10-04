@@ -23,6 +23,7 @@ def _row_to_dict(row: AgentSession) -> dict[str, Any]:
         "superseded_by": row.superseded_by,
         "fork_parent_session_id": row.fork_parent_session_id,
         "fork_anchor_uuid": row.fork_anchor_uuid,
+        "user_id": row.user_id,
         "created_at": dt_to_iso(row.created_at),
         "updated_at": dt_to_iso(row.updated_at),
     }
@@ -64,16 +65,37 @@ class SessionRepository(BaseRepository):
         row = result.scalar_one_or_none()
         return _row_to_dict(row) if row else None
 
+    async def get_by_id(self, session_id: str, *, user_id: str = DEFAULT_USER_ID) -> dict[str, Any] | None:
+        """Load by ArcReel-owned id; SDK ids never cross the HTTP boundary."""
+        result = await self.session.execute(
+            select(AgentSession).where(AgentSession.id == session_id, AgentSession.user_id == user_id)
+        )
+        row = result.scalar_one_or_none()
+        return _row_to_dict(row) if row else None
+
+    async def update_status_by_id(self, session_id: str, status: str, *, user_id: str = DEFAULT_USER_ID) -> bool:
+        result = await self.session.execute(
+            update(AgentSession)
+            .where(AgentSession.id == session_id, AgentSession.user_id == user_id)
+            .values(status=status, updated_at=utc_now())
+        )
+        await self.session.commit()
+        return rowcount(result) > 0
+
     async def list(
         self,
         *,
         project_name: str | None = None,
         status: str | None = None,
+        user_id: str = DEFAULT_USER_ID,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         # 被分叉取代的会话不进列表；数据整行保留，按 sdk_session_id 仍可 get 到。
-        stmt = select(AgentSession).where(AgentSession.superseded_by.is_(None))
+        stmt = select(AgentSession).where(
+            AgentSession.superseded_by.is_(None),
+            AgentSession.user_id == user_id,
+        )
         if project_name:
             stmt = stmt.where(AgentSession.project_name == project_name)
         if status:

@@ -60,7 +60,6 @@ The frontend uses React 19 and TypeScript. Its primary responsibilities include:
 - project listing and creation;
 - the project workbench;
 - asset previews;
-- conversations with the AI assistant;
 - task status;
 - usage and spend statistics;
 - settings and provider management;
@@ -77,12 +76,11 @@ FastAPI provides:
 - authentication;
 - project and asset operations;
 - task creation and queries;
-- Agent conversations;
-- SSE for Agent and project events;
+- SSE for project events;
 - generation task queries;
 - external API Key access.
 
-Agent responses stream through assistant SSE. Terminal project state changes trigger UI refreshes through project event SSE, while task queries provide intermediate generation status and a fallback after disconnection. When deploying behind a reverse proxy, disable proxy buffering for SSE and configure a sufficiently long read timeout.
+Terminal project state changes trigger UI refreshes through project event SSE, while task queries provide intermediate generation status and a fallback after disconnection. When deploying behind a reverse proxy, disable proxy buffering for SSE and configure a sufficiently long read timeout.
 
 ## 5. Agent Runtime {#agent-runtime}
 

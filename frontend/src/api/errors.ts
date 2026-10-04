@@ -4,7 +4,6 @@
  */
 
 import type {
-  FailureObservation,
   NarratedVideoDurationAdmission,
   ReferenceProjectionAdmission,
 } from "@/types";
@@ -17,7 +16,6 @@ export interface ErrorResponse {
   detail:
     | string
     | { msg?: string }[]
-    | AgentFailureDetail
     | SpeechAdmission
     | ScriptEditResult
     | ReferenceProjectionAdmission
@@ -120,26 +118,6 @@ export class NarratedVideoDurationError extends Error {
   }
 }
 
-/** Structured detail returned when the local Agent process cannot start. */
-export interface AgentFailureDetail {
-  code: "agent_startup_failed";
-  message: string;
-  failure: FailureObservation;
-}
-
-/** Keeps the redacted failure observation attached while remaining a normal Error. */
-export class AgentFailureError extends Error {
-  readonly code = "agent_startup_failed" as const;
-
-  constructor(
-    message: string,
-    public readonly failure: FailureObservation,
-  ) {
-    super(message);
-    this.name = "AgentFailureError";
-  }
-}
-
 /**
  * Error thrown when uploading a source file conflicts with an existing file
  * (HTTP 409). Carries the existing filename and a server-suggested alternative
@@ -186,18 +164,6 @@ export function messageFromDetail(detail: unknown, fallback: string): string {
     if (typeof message === "string" && message) return message;
   }
   return fallback;
-}
-
-export function isAgentFailureDetail(value: unknown): value is AgentFailureDetail {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const detail = value as Record<string, unknown>;
-  return (
-    detail.code === "agent_startup_failed"
-    && typeof detail.message === "string"
-    && Boolean(detail.failure)
-    && typeof detail.failure === "object"
-    && !Array.isArray(detail.failure)
-  );
 }
 
 export function isSpeechAdmission(value: unknown): value is SpeechAdmission {

@@ -623,14 +623,6 @@ If the container has just started, check whether database migrations are still r
 - If the password was left empty on first startup, check whether it was written back to the file;
 - Log in again after changing `AUTH_TOKEN_SECRET`.
 
-### Agent Requests Fail {#agent-request-fails}
-
-- Verify the AI assistant credentials;
-- Check the Base URL and model name;
-- Check the network and proxy;
-- Check whether the provider is rate-limiting requests;
-- Use a small amount of content for verification. Do not run a complete novel through the whole pipeline on the first attempt.
-
 ### Tasks Remain Queued {#tasks-stuck-in-queue}
 
 - Review the image, video, and audio concurrency settings;

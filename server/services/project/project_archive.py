@@ -16,7 +16,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from lib.agent.agent_memory_paths import project_memory_dir
 from lib.artifacts.artifact_activation import (
     ensure_imported_artifact_target_state,
     snapshot_preserved_artifact_manifest,
@@ -2093,9 +2092,6 @@ class ProjectArchiveService:
             # rollback：删 target_dir + 恢复 backup_dir。否则失败时旧项目已经被删，
             # 用户会丢数据（overwrite 分支）或留半安装状态（new 分支）
             self.project_manager.sync_agent_profile(target_dir)
-            if backup_dir is not None:
-                # 拷贝而非移动：备份目录保持完整，异常时下面的 rollback 才能把记忆一并还原
-                self._restore_project_memory(backup_dir, target_dir)
         except Exception:
             if target_dir.exists():
                 shutil.rmtree(target_dir, ignore_errors=True)
@@ -2105,27 +2101,3 @@ class ProjectArchiveService:
 
         if backup_dir and backup_dir.exists():
             shutil.rmtree(backup_dir)
-
-    @staticmethod
-    def _restore_project_memory(backup_dir: Path, target_dir: Path) -> None:
-        """项目记忆随项目目录、不随归档内容：归档不携带 ``.arcreel/``（点目录过滤天然排除），
-        覆盖导入把旧目录的这份内容搬进新目录。目录位置取 ``lib.agent.agent_memory_paths`` 的派生
-        真相源，与围栏放行的目录同一处知识。
-        """
-        source_dir = project_memory_dir(backup_dir)
-        # 先判软链再判目录：``is_dir()`` 跟随软链，而 ``copytree`` 的 ``symlinks=True``
-        # 只对 src 之下的条目保留软链、对 src 自身照样解引用——记忆根本身是软链时会把
-        # 链接目标整棵拷进新项目。sandbox 内的 Bash 能在项目目录里建这条链，服务端这次
-        # 拷贝不受 sandbox 约束，等于把 Agent 读不到的宿主文件搬进它读得到的记忆目录。
-        if source_dir.is_symlink():
-            logger.warning("项目记忆根是软链，跳过恢复: %s", source_dir)
-            return
-        if not source_dir.is_dir():
-            return
-        # symlinks=True：软链原样复制，悬空软链不会让整次覆盖导入失败
-        shutil.copytree(
-            source_dir,
-            project_memory_dir(target_dir),
-            symlinks=True,
-            dirs_exist_ok=True,
-        )

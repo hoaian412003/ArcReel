@@ -1,6 +1,6 @@
 # ArcReel
 
-AI 视频创作平台，将小说、剧本或创作构想转化为短视频。三层结构：`frontend/`（React SPA）→ `server/`（FastAPI，`agent_runtime/` 封装 Claude Agent SDK）→ `lib/`（核心库）。内嵌创作 Agent 的配置源在 `agent_runtime_profile/`，与开发态 `.claude/` 分离。
+AI 视频创作平台，将小说、剧本或创作构想转化为短视频。三层结构：`frontend/`（React SPA）→ `server/`（FastAPI，`remote_mcp.py` 向外部 Agent 暴露创作工具）→ `lib/`（核心库）。外部 Agent 使用的 skills 与项目指令文件的配置源在 `agent_runtime_profile/`，与开发态 `.claude/` 分离。
 
 ## 工具链与校验
 

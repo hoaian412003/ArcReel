@@ -1,26 +1,14 @@
-"""数据根布局迁移入口：迁移后旧布局的项目、会话与存量数据（调用记录、用户记忆、运行时标记）按当前布局可用，各步骤重跑不改变结果。"""
+"""数据根布局迁移入口：迁移后旧布局的项目与存量数据（调用记录、用户数据、运行时状态）按当前布局可用，各步骤重跑不改变结果。"""
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from claude_agent_sdk import (
-    delete_session_via_store,
-    fork_session_via_store,
-    get_session_messages_from_store,
-    list_sessions_from_store,
-    project_key_for_directory,
-)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from lib.agent.agent_memory_store import AgentMemoryStore
-from lib.agent.agent_session_store import make_project_key
-from lib.agent.agent_session_store.import_local import migrate_local_transcripts_to_store
-from lib.agent.agent_session_store.store import DbSessionStore
 from lib.db.models.api_call import ApiCall
 from lib.db.repositories.usage_repo import SettlementInput, UsageRepository
 from lib.infra.data_root_layout import DataRootLayout
@@ -65,9 +53,7 @@ async def _recorded_updated_at(session_factory: async_sessionmaker[AsyncSession]
 
 
 async def _migrate(projects: ProjectManager, session_factory: async_sessionmaker[AsyncSession], tmp_path: Path) -> None:
-    await migrate_data_root_layout(
-        projects.data_root, session_factory=session_factory, sdk_config_dir=tmp_path / "claude-config"
-    )
+    await migrate_data_root_layout(projects.data_root, session_factory=session_factory)
 
 
 async def test_historical_call_records_resolve_artifacts_within_project_after_migration(
@@ -139,85 +125,51 @@ def data_root(tmp_path: Path) -> Path:
     return root
 
 
-@pytest.fixture
-def sdk_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    sdk_home = tmp_path / "claude-config"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(sdk_home))
-    return sdk_home
+async def _migrate_data_root(data_root: Path, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    await migrate_data_root_layout(data_root, session_factory=session_factory)
 
 
-async def _migrate_data_root(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
-) -> None:
-    await migrate_data_root_layout(data_root, session_factory=session_factory, sdk_config_dir=sdk_config_dir)
-
-
-def _write_legacy_user_memory(data_root: Path, user_id: str, files: dict[str, str]) -> None:
-    memory_dir = data_root / ".arcreel" / "users" / user_id / "memory"
-    memory_dir.mkdir(parents=True)
+def _write_legacy_user_files(data_root: Path, user_id: str, files: dict[str, str]) -> None:
+    user_dir = data_root / ".arcreel" / "users" / user_id
+    user_dir.mkdir(parents=True)
     for name, body in files.items():
-        (memory_dir / name).write_text(body, encoding="utf-8")
+        (user_dir / name).write_text(body, encoding="utf-8")
 
 
-def _memory(data_root: Path, user_id: str) -> AgentMemoryStore:
-    return AgentMemoryStore(DataRootLayout(data_root).user_memory_dir(user_id))
+def _user_file(data_root: Path, user_id: str, name: str) -> str:
+    return (DataRootLayout(data_root).users_dir / user_id / name).read_text(encoding="utf-8")
 
 
-async def test_user_memory_stays_readable_after_migration_and_rerun(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+async def test_user_data_stays_readable_after_migration_and_rerun(
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
-    _write_legacy_user_memory(data_root, "default", {"MEMORY.md": "- [偏好](style.md)\n", "style.md": "冷色调"})
-    _write_legacy_user_memory(data_root, "u2", {"MEMORY.md": "- 另一位用户\n"})
+    _write_legacy_user_files(data_root, "default", {"a.md": "冷色调", "b.md": "暖色调"})
+    _write_legacy_user_files(data_root, "u2", {"a.md": "另一位用户"})
 
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
     # 后续步骤失败、完成标记未写时，下次启动各步骤从头重跑。
     DataRootLayout(data_root).layout_migration_marker_path.unlink()
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
 
-    assert _memory(data_root, "default").read("style.md").decode("utf-8") == "冷色调"
-    assert _memory(data_root, "default").read("MEMORY.md").decode("utf-8") == "- [偏好](style.md)\n"
-    assert _memory(data_root, "u2").read("MEMORY.md").decode("utf-8") == "- 另一位用户\n"
+    assert _user_file(data_root, "default", "a.md") == "冷色调"
+    assert _user_file(data_root, "default", "b.md") == "暖色调"
+    assert _user_file(data_root, "u2", "a.md") == "另一位用户"
     assert ProjectManager(data_root).list_projects() == []
 
 
-async def test_user_memory_move_resumes_after_interruption(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+async def test_user_data_move_resumes_after_interruption(
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
-    _write_legacy_user_memory(data_root, "default", {"MEMORY.md": "- 索引\n", "b.md": "后搬"})
-    # 上次迁移中断在同一用户的记忆搬了一半时。
-    moved = DataRootLayout(data_root).user_memory_dir("default")
+    _write_legacy_user_files(data_root, "default", {"a.md": "先搬", "b.md": "后搬"})
+    # 上次迁移中断在同一用户的数据搬了一半时。
+    moved = DataRootLayout(data_root).users_dir / "default"
     moved.mkdir(parents=True)
-    (data_root / ".arcreel" / "users" / "default" / "memory" / "MEMORY.md").replace(moved / "MEMORY.md")
+    (data_root / ".arcreel" / "users" / "default" / "a.md").replace(moved / "a.md")
 
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
 
-    assert _memory(data_root, "default").read("MEMORY.md").decode("utf-8") == "- 索引\n"
-    assert _memory(data_root, "default").read("b.md").decode("utf-8") == "后搬"
-
-
-async def test_completed_session_import_is_not_rerun_after_migration(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
-) -> None:
-    project_dir = ProjectManager(data_root).create_project("demo", content_mode="narration")
-    transcript_dir = sdk_config_dir / "projects" / project_key_for_directory(str(project_dir))
-    transcript_dir.mkdir(parents=True)
-    (transcript_dir / "00000000-0000-0000-0000-0000000000aa.jsonl").write_text(
-        json.dumps({"type": "user", "uuid": "u1", "timestamp": "2026-05-01T00:00:00Z", "message": {"content": "hi"}})
-        + "\n",
-        encoding="utf-8",
-    )
-    (data_root / ".session_store_migration_done").write_text("{}", encoding="utf-8")
-
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
-    stats = await migrate_local_transcripts_to_store(
-        DbSessionStore(session_factory, user_id="default"), data_root=data_root
-    )
-
-    assert stats["imported"] == 0
-    assert stats.get("skipped_via_marker") is True
-
-
-_SESSION_ID = "00000000-0000-0000-0000-0000000000bb"
+    assert _user_file(data_root, "default", "a.md") == "先搬"
+    assert _user_file(data_root, "default", "b.md") == "后搬"
 
 
 def _write_legacy_project(data_root: Path, name: str, novel: str = "从前有座山") -> None:
@@ -230,165 +182,111 @@ def _write_legacy_project(data_root: Path, name: str, novel: str = "从前有座
     project_dir.rename(data_root / name)
 
 
-async def _record_session(store: DbSessionStore, project_dir: Path, session_id: str = _SESSION_ID) -> None:
-    """按项目目录派生的会话存储键写入一段对话，与 SDK 在该目录下运行时写入的键一致。"""
-    user_uuid = f"{session_id[:-4]}0001"
-    await store.append(
-        {"project_key": make_project_key(project_dir), "session_id": session_id},
-        [
-            {
-                "type": "user",
-                "uuid": user_uuid,
-                "parentUuid": None,
-                "sessionId": session_id,
-                "timestamp": "2026-05-01T00:00:00Z",
-                "message": {"role": "user", "content": "画一只猫"},
-            },
-            {
-                "type": "assistant",
-                "uuid": f"{session_id[:-4]}0002",
-                "parentUuid": user_uuid,
-                "sessionId": session_id,
-                "timestamp": "2026-05-01T00:00:01Z",
-                "message": {"role": "assistant", "content": [{"type": "text", "text": "好的"}]},
-            },
-        ],
-    )
-
-
-async def _assert_session_usable(store: DbSessionStore, project_dir: Path) -> None:
-    """会话可恢复、标题可见、可分支、可删除——都按项目当前目录定位。"""
-    directory = str(project_dir)
-    listed = {info.session_id: info for info in await list_sessions_from_store(store, directory=directory)}
-    assert listed[_SESSION_ID].summary == "画一只猫"
-    assert len(await get_session_messages_from_store(store, _SESSION_ID, directory=directory)) == 2
-
-    forked = await fork_session_via_store(store, _SESSION_ID, directory=directory)
-    assert len(await get_session_messages_from_store(store, forked.session_id, directory=directory)) == 2
-
-    await delete_session_via_store(store, _SESSION_ID, directory=directory)
-    remaining = {info.session_id for info in await list_sessions_from_store(store, directory=directory)}
-    assert remaining == {forked.session_id}
-
-
 def _novel(manager: ProjectManager, name: str) -> str:
     return (manager.get_project_path(name) / "source" / "novel.txt").read_text(encoding="utf-8")
 
 
-async def test_legacy_projects_and_their_sessions_are_usable_after_migration(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+async def test_legacy_projects_are_usable_after_migration(
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     _write_legacy_project(data_root, "demo")
     _write_legacy_project(data_root, "second", novel="第二个故事")
-    store = DbSessionStore(session_factory, user_id="default")
-    await _record_session(store, data_root / "demo")
 
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
 
     manager = ProjectManager(data_root)
     assert manager.list_projects() == ["demo", "second"]
     assert manager.load_project("demo")
     assert _novel(manager, "second") == "第二个故事"
-    await _assert_session_usable(store, manager.get_project_path("demo"))
 
 
 async def test_second_migration_run_does_nothing(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     _write_legacy_project(data_root, "demo")
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
     # 迁移完成之后数据根下再出现的旧布局形态目录不再被搬动。
     _write_legacy_project(data_root, "late")
 
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
 
     assert ProjectManager(data_root).list_projects() == ["demo"]
     assert (data_root / "late" / "project.json").is_file()
 
 
-async def test_migration_resumes_when_projects_moved_but_session_keys_not_rewritten(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+async def test_migration_resumes_when_projects_were_already_moved(
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     _write_legacy_project(data_root, "demo")
-    store = DbSessionStore(session_factory, user_id="default")
-    await _record_session(store, data_root / "demo")
-    # 上次迁移中断在项目目录已搬完、会话存储键尚未改写时。
+    # 上次迁移中断在项目目录已搬完、后续步骤尚未完成时。
     projects_dir = DataRootLayout(data_root).projects_dir
     projects_dir.mkdir()
     (data_root / "demo").rename(projects_dir / "demo")
 
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
 
-    manager = ProjectManager(data_root)
-    assert manager.list_projects() == ["demo"]
-    await _assert_session_usable(store, manager.get_project_path("demo"))
+    assert ProjectManager(data_root).list_projects() == ["demo"]
 
 
-async def test_project_named_projects_keeps_its_name_and_sessions(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+async def test_project_named_projects_keeps_its_name(
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     _write_legacy_project(data_root, "projects", novel="与容器同名")
     _write_legacy_project(data_root, "demo")
-    store = DbSessionStore(session_factory, user_id="default")
-    await _record_session(store, data_root / "projects")
 
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
 
     manager = ProjectManager(data_root)
     assert manager.list_projects() == ["demo", "projects"]
     assert _novel(manager, "projects") == "与容器同名"
-    await _assert_session_usable(store, manager.get_project_path("projects"))
 
 
 async def test_system_named_entries_are_split_between_projects_and_system_data(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
-    # 名为 users 的旧项目与旧位置的用户记忆同时存在：项目搬走后，同一次迁移里记忆就位。
+    # 名为 users 的旧项目与旧位置的用户数据同时存在：项目搬走后，同一次迁移里用户数据就位。
     _write_legacy_project(data_root, "users", novel="与用户目录同名")
-    _write_legacy_user_memory(data_root, "default", {"MEMORY.md": "- 偏好\n"})
+    _write_legacy_user_files(data_root, "default", {"a.md": "偏好"})
     (data_root / "logs").mkdir()
     (data_root / "logs" / "arcreel.log").write_text("line\n", encoding="utf-8")
     (data_root / "notes").mkdir()
     (data_root / "notes" / "todo.txt").write_text("杂项", encoding="utf-8")
 
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
 
     manager = ProjectManager(data_root)
     assert manager.list_projects() == ["users"]
     assert _novel(manager, "users") == "与用户目录同名"
-    assert _memory(data_root, "default").read("MEMORY.md").decode("utf-8") == "- 偏好\n"
+    assert _user_file(data_root, "default", "a.md") == "偏好"
     assert (DataRootLayout(data_root).log_dir / "arcreel.log").read_text(encoding="utf-8") == "line\n"
     assert (manager.projects_dir / "notes" / "todo.txt").read_text(encoding="utf-8") == "杂项"
 
 
 async def test_failed_migration_is_retried_on_next_run(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     _write_legacy_project(data_root, "demo")
     blocking = DataRootLayout(data_root).projects_dir / "demo"
     blocking.mkdir(parents=True)
 
     with pytest.raises(FileExistsError):
-        await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+        await _migrate_data_root(data_root, session_factory)
     blocking.rmdir()
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
 
     assert ProjectManager(data_root).list_projects() == ["demo"]
 
 
 async def test_project_left_mid_schema_swap_is_reclaimed_after_migration(
-    data_root: Path, session_factory: async_sessionmaker[AsyncSession], sdk_config_dir: Path
+    data_root: Path, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:
     _write_legacy_project(data_root, "demo", novel="交换窗口里的项目")
-    store = DbSessionStore(session_factory, user_id="default")
-    await _record_session(store, data_root / "demo")
     # 旧版本的项目 schema 迁移停在目录交换的两次改名之间：项目目录只剩 rollback 目录。
     (data_root / "demo").rename(data_root / f".demo.v6-rollback-{'a' * 32}")
 
-    await _migrate_data_root(data_root, session_factory, sdk_config_dir)
+    await _migrate_data_root(data_root, session_factory)
     run_project_migrations(DataRootLayout(data_root).projects_dir)
 
     manager = ProjectManager(data_root)
     assert manager.list_projects() == ["demo"]
     assert _novel(manager, "demo") == "交换窗口里的项目"
-    await _assert_session_usable(store, manager.get_project_path("demo"))

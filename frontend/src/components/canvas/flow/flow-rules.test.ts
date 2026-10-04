@@ -18,8 +18,15 @@ describe("resolveDrop", () => {
     expect(resolveDrop(COLUMNS, card("direction_review"), "prompts")).toEqual({ kind: "approve" });
   });
 
-  it("人工列落到上一列为重做", () => {
+  it("分镜导演审阅列落到上一列为重做", () => {
     expect(resolveDrop(COLUMNS, card("direction_review"), "direction")).toEqual({ kind: "redo" });
+  });
+
+  it("其余审阅列没有重做通道，落到上一列被拒绝", () => {
+    expect(resolveDrop(COLUMNS, card("script_plan_review"), "script_plan")).toEqual({
+      kind: "rejected",
+      reason: "redo_unavailable",
+    });
   });
 
   it("落回原列无动作", () => {

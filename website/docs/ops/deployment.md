@@ -624,14 +624,6 @@ docker compose logs --tail=300 arcreel
 - 如果首次启动时密码留空，查看是否已被回写；
 - 修改 `AUTH_TOKEN_SECRET` 后需要重新登录。
 
-### Agent 请求失败 {#agent-request-fails}
-
-- 验证 Agent 凭据；
-- 检查 Base URL 和模型名称；
-- 检查网络和代理；
-- 查看供应商是否限流；
-- 使用少量内容验证，不要一上来就用完整小说跑通全流程。
-
 ### 任务一直排队 {#tasks-stuck-in-queue}
 
 - 查看图像、视频和音频并发设置；

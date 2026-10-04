@@ -5,7 +5,6 @@ import pytest
 
 import lib.db
 import server.app as app_module
-from server.routers import assistant as assistant_router
 from server.services.tasks.generation_tasks import execute_generation_task
 from server.services.tasks.resume_executor import execute_resume_video_task
 
@@ -47,8 +46,6 @@ class TestAppModule:
         monkeypatch.setattr(app_module, "ensure_auth_password", lambda: "test")
         monkeypatch.setattr(app_module, "init_db", _noop_async)
         monkeypatch.setattr(lib.db, "init_db", _noop_async)
-        monkeypatch.setattr(assistant_router.assistant_service, "startup", _noop_async)
-        monkeypatch.setattr(assistant_router.assistant_service, "shutdown", _noop_async)
 
         app = app_module.app
         app.state = SimpleNamespace()
@@ -67,8 +64,6 @@ class TestAppModule:
         monkeypatch.setattr(app_module, "ensure_auth_password", lambda: "test")
         monkeypatch.setattr(app_module, "init_db", _noop_async)
         monkeypatch.setattr(lib.db, "init_db", _noop_async)
-        monkeypatch.setattr(assistant_router.assistant_service, "startup", _noop_async)
-        monkeypatch.setattr(assistant_router.assistant_service, "shutdown", _noop_async)
 
         app = app_module.app
         app.state = SimpleNamespace()

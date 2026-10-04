@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Router, Route } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
@@ -47,21 +47,6 @@ const FAKE_CANDIDATES = {
   provider_names: {},
 };
 
-function mockEmptyAgentMemory() {
-  vi.spyOn(API, "getAgentMemory").mockResolvedValue({
-    path: "/projects/demo/.arcreel/memory",
-    index: { exists: false, line_count: 0, byte_size: 0, over_limit: false },
-    files: [],
-  });
-}
-
-function mockBuiltinAgentProfile() {
-  vi.spyOn(API, "getAgentProfileStatus").mockResolvedValue({
-    customized: false,
-    customized_files: [],
-  });
-}
-
 function renderAt(path: string) {
   const location = memoryLocation({ path, record: true });
   return {
@@ -84,86 +69,6 @@ describe("ProjectSettingsPage – style picker", () => {
     );
     vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([]);
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
-    mockBuiltinAgentProfile();
-    mockEmptyAgentMemory();
-  });
-
-  it("shows customized Agent Profile files and resets only after destructive confirmation", async () => {
-    vi.spyOn(API, "getProject").mockResolvedValue({
-      project: { title: "Demo", episodes: [], characters: {}, clues: {} },
-      scripts: {},
-    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
-    vi.spyOn(API, "getAgentProfileStatus").mockResolvedValue({
-      customized: true,
-      customized_files: ["CLAUDE.md", ".claude/agents/legacy.md"],
-    });
-    const resetSpy = vi.spyOn(API, "resetAgentProfile").mockResolvedValue({
-      customized: false,
-      customized_files: [],
-    });
-
-    renderAt("/app/projects/demo/settings");
-
-    expect(await screen.findByText("CLAUDE.md")).toBeInTheDocument();
-    expect(screen.getByText(".claude/agents/legacy.md")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /重置为内置配置|Reset to built-in/ }));
-    expect(resetSpy).not.toHaveBeenCalled();
-    expect(await screen.findByText(/将丢弃|discard/)).toBeInTheDocument();
-    expect(screen.getByText(/重新连接|reconnect/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /确认重置|Confirm reset/ }));
-    await waitFor(() => expect(resetSpy).toHaveBeenCalledWith("demo"));
-    expect(await screen.findByText(/使用内置配置|Using built-in/)).toBeInTheDocument();
-  });
-
-  it("does not carry Agent Profile state or reset confirmation across projects", async () => {
-    vi.spyOn(API, "getProject").mockResolvedValue({
-      project: { title: "Demo", episodes: [], characters: {}, clues: {} },
-      scripts: {},
-    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
-    vi.spyOn(API, "getAgentProfileStatus").mockImplementation((name) => (
-      name === "project-a"
-        ? Promise.resolve({ customized: true, customized_files: ["CLAUDE.md"] })
-        : new Promise(() => {})
-    ));
-    const resetSpy = vi.spyOn(API, "resetAgentProfile");
-    const { location } = renderAt("/app/projects/project-a/settings");
-
-    expect(await screen.findByText("CLAUDE.md")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /重置为内置配置|Reset to built-in/ }));
-    expect(await screen.findByText(/将丢弃|discard/)).toBeInTheDocument();
-
-    act(() => location.navigate("/app/projects/project-b/settings"));
-
-    await waitFor(() => expect(screen.queryByText("CLAUDE.md")).not.toBeInTheDocument());
-    expect(screen.queryByText(/将丢弃|discard/)).not.toBeInTheDocument();
-    expect(resetSpy).not.toHaveBeenCalled();
-  });
-
-  it("requires another confirmation when customized files change before reset", async () => {
-    const initialStatus = { customized: true, customized_files: ["CLAUDE.md"] };
-    const changedStatus = {
-      customized: true,
-      customized_files: [".claude/agents/new.md", "CLAUDE.md"],
-    };
-    vi.spyOn(API, "getProject").mockResolvedValue({
-      project: { title: "Demo", episodes: [], characters: {}, clues: {} },
-      scripts: {},
-    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
-    vi.spyOn(API, "getAgentProfileStatus")
-      .mockResolvedValueOnce(initialStatus)
-      .mockResolvedValueOnce(initialStatus)
-      .mockResolvedValue(changedStatus);
-    const resetSpy = vi.spyOn(API, "resetAgentProfile");
-    renderAt("/app/projects/demo/settings");
-
-    expect(await screen.findByText("CLAUDE.md")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /重置为内置配置|Reset to built-in/ }));
-    expect(await screen.findByText(/将丢弃|discard/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /确认重置|Confirm reset/ }));
-
-    expect(await screen.findAllByText(".claude/agents/new.md")).toHaveLength(2);
-    expect(resetSpy).not.toHaveBeenCalled();
   });
 
   it("loads a project with style_template_id and selects the matching template card by default", async () => {
@@ -622,8 +527,6 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     );
     vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([]);
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
-    mockBuiltinAgentProfile();
-    mockEmptyAgentMemory();
   });
 
   it.each([false, true])("keeps bucket resolution edits consistent through save (shared model: %s)", async (sharedModel) => {
@@ -851,8 +754,6 @@ describe("ProjectSettingsPage – 按用途指定模型", () => {
     );
     vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([]);
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
-    mockBuiltinAgentProfile();
-    mockEmptyAgentMemory();
   });
 
   it("loads project sub-field overrides and writes each back to its own key", async () => {
@@ -941,36 +842,5 @@ describe("ProjectSettingsPage – 按用途指定模型", () => {
     fireEvent.change(input, { target: { value: "25" } });
 
     expect(screen.getByRole("button", { name: /^(保存|Save)$/i })).toBeDisabled();
-  });
-});
-
-describe("ProjectSettingsPage — 项目记忆", () => {
-  beforeEach(() => {
-    useAppStore.setState(useAppStore.getInitialState(), true);
-    vi.restoreAllMocks();
-    vi.spyOn(API, "getSystemConfig").mockResolvedValue(FAKE_CONFIG as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
-    vi.spyOn(API, "getModelCandidates").mockResolvedValue(
-      FAKE_CANDIDATES as unknown as Awaited<ReturnType<typeof API.getModelCandidates>>,
-    );
-    vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([]);
-    vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
-    mockBuiltinAgentProfile();
-    mockEmptyAgentMemory();
-  });
-
-  it("挂出项目记忆文件柜，并按当前项目的路径拉取", async () => {
-    vi.spyOn(API, "getProject").mockResolvedValue({
-      project: { title: "Demo", episodes: [], characters: {}, clues: {} },
-      scripts: {},
-    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
-
-    renderAt("/app/projects/demo/settings");
-
-    expect(await screen.findByText(/项目记忆|Project memory/)).toBeInTheDocument();
-    expect(await screen.findByText("/projects/demo/.arcreel/memory")).toBeInTheDocument();
-    expect(API.getAgentMemory).toHaveBeenCalledWith(
-      { level: "project", projectName: "demo" },
-      expect.anything(),
-    );
   });
 });

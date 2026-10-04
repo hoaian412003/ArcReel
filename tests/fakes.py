@@ -10,7 +10,7 @@ import asyncio
 import itertools
 import json
 import threading
-from collections.abc import AsyncIterator, Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,22 +23,10 @@ if TYPE_CHECKING:
     from lib.generation.media_generator import MediaGenerator
 
 
-_NO_SDK_MESSAGES: tuple[dict[str, Any], ...] = ()
-
 #: 带真实文件头的产物替身字节。取件路径按文件头判容器（见
 #: ``lib.custom_provider.comfyui.artifacts.container_matches``），裸占位字节会被判容器不符。
 MP4_BYTES = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00mp4-bytes"
 PNG_BYTES = b"\x89PNG\r\n\x1a\npng-bytes"
-
-
-async def empty_sdk_response_stream() -> AsyncIterator[dict[str, Any]]:
-    """不产出任何消息即结束的 SDK 响应流。
-
-    fake client 需要「空响应流」时返回本函数的结果；直接写 ``if False: yield`` 会留下
-    静态不可达的分支。
-    """
-    for message in _NO_SDK_MESSAGES:
-        yield message
 
 
 class FakeProjectAssetMutationMixin:
@@ -169,139 +157,6 @@ def select_formal_video(
         )
 
     return _commit
-
-
-class FakeSDKClient:
-    """Fake Claude Agent SDK client for SessionActor / SessionManager tests.
-
-    支持：
-    - `async with`：`__aenter__` 记录 connect 的 current_task，`__aexit__` 记录 disconnect
-    - `method_tasks`: dict[str, list[asyncio.Task]] 记录每个方法被调用时的 task
-    - `messages` 初始化参数：`receive_response` 依次 yield 的初始消息
-    - `receive_response` 默认在 yield `type="result"` 后结束；
-    - `block_forever=True` 时，仅在 `interrupt()` 注入 None sentinel 后才结束（用于测试 interrupt 中断 query 的场景）
-    - `interrupt_message`：`interrupt()` 被调用时注入给 `receive_response` 的最后一条消息
-    - `connect_error`：`__aenter__` 时抛出的异常，用于模拟连接失败
-    """
-
-    def __init__(
-        self,
-        messages=None,
-        *,
-        block_forever: bool = False,
-        interrupt_message: dict | None = None,
-        connect_error: Exception | None = None,
-    ):
-        self._initial_messages = list(messages) if messages else []
-        self._block_forever = block_forever
-        self._interrupt_message = interrupt_message
-        self._connect_error = connect_error
-        self._pending_messages: asyncio.Queue[dict | None] = asyncio.Queue()
-        self.method_tasks: dict[str, list[asyncio.Task]] = {}
-        self.sent_queries: list = []
-        self.interrupted = False
-        self.disconnected = False
-
-    def _record(self, method: str) -> None:
-        self.method_tasks.setdefault(method, []).append(asyncio.current_task())
-
-    async def __aenter__(self):
-        self._record("connect")
-        if self._connect_error is not None:
-            raise self._connect_error
-        for msg in self._initial_messages:
-            await self._pending_messages.put(msg)
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        self._record("disconnect")
-        self.disconnected = True
-        return False
-
-    async def query(self, prompt, session_id: str = "default") -> None:
-        self._record("query")
-        self.sent_queries.append(prompt)
-
-    async def interrupt(self) -> None:
-        self._record("interrupt")
-        self.interrupted = True
-        if self._interrupt_message is not None:
-            await self._pending_messages.put(self._interrupt_message)
-        # 告知 receive_response "可以停止了"
-        await self._pending_messages.put(None)  # sentinel
-
-    async def receive_response(self):
-        self._record("receive_response")
-        while True:
-            msg = await self._pending_messages.get()
-            if msg is None:
-                return
-            yield msg
-            if msg.get("type") == "result" and not self._block_forever:
-                return
-
-    def push_message(self, msg: dict) -> None:
-        """测试辅助：运行中往消息流注入一条消息。"""
-        self._pending_messages.put_nowait(msg)
-
-    # 向后兼容：保留原方法签名（旧测试仍使用 `await client.connect()` / `await client.disconnect()`）
-    async def connect(self) -> None:
-        self._record("connect")
-        if self._connect_error is not None:
-            raise self._connect_error
-
-    async def disconnect(self) -> None:
-        self._record("disconnect")
-        self.disconnected = True
-
-
-async def build_managed_with_actor(
-    *,
-    session_id: str = "s1",
-    project_name: str = "demo",
-    status: str = "idle",
-    messages: list[dict] | None = None,
-    block_forever: bool = False,
-    on_message_hook=None,
-):
-    """测试辅助：围绕 FakeSDKClient 创建 SessionActor + ManagedSession，并启动 actor。
-
-    返回 (managed, actor, client)。测试完成后调用 `await managed.send_disconnect()`
-    清理，或由调用方自行管理生命周期。
-    """
-    from contextlib import asynccontextmanager
-
-    from server.agent_runtime.session_actor import SessionActor
-    from server.agent_runtime.session_manager import ManagedSession
-
-    client = FakeSDKClient(messages=messages, block_forever=block_forever)
-
-    @asynccontextmanager
-    async def _factory_cm():
-        async with client as c:
-            yield c
-
-    managed_ref: list = [None]
-
-    def _on_message(msg):
-        m = managed_ref[0]
-        if m is None:
-            return
-        if on_message_hook is not None:
-            on_message_hook(m, msg)
-        else:
-            m._on_actor_message(msg)
-
-    actor = SessionActor(client_factory=_factory_cm, on_message=_on_message)
-    managed = ManagedSession(
-        session_id=session_id,
-        actor=actor,
-        status=status,
-        project_name=project_name,
-    )
-    managed_ref[0] = managed
-    await actor.start()
-    return managed, actor, client
 
 
 def fake_reference_request_facts(

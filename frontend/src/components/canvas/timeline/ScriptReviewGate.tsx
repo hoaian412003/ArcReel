@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Lock, RotateCcw, Save, Wrench } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Lock, RotateCcw, Save } from "lucide-react";
 import type {
   DramaNormalizedScript,
   DramaSceneContent,
@@ -12,7 +12,6 @@ import type {
 } from "@/types";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { useScriptReviewDraft } from "@/hooks/useScriptReviewDraft";
 import { voidPromise } from "@/utils/async";
 import { EpisodeDurationSummary } from "@/components/shared/EpisodeDurationSummary";
@@ -188,7 +187,7 @@ function EpisodeSummary({ episode }: { episode: number }) {
  * 用户最需要看到面板的时候。原样展示 + 逐条违约足以回答「哪里不对、正在改的是什么」，修复由
  * Agent 在草稿上完成，晋升后本面板自动回到可编辑态。
  */
-function QuarantinePanel(props: { quarantine: ScriptReviewQuarantine; onRequestFix: () => void }) {
+function QuarantinePanel(props: { quarantine: ScriptReviewQuarantine }) {
   const { t } = useTranslation("dashboard");
   const violations = props.quarantine.violations;
   const rawDraft = props.quarantine.content;
@@ -199,10 +198,6 @@ function QuarantinePanel(props: { quarantine: ScriptReviewQuarantine; onRequestF
           <span className="text-[10.5px]" style={SECTION_LABEL_STYLE}>
             {t("review_quarantined_violations_label", { count: violations.length })}
           </span>
-          <button type="button" onClick={props.onRequestFix} className={GHOST_BTN_CLS}>
-            <Wrench className="h-3.5 w-3.5" />
-            {t("review_request_fix")}
-          </button>
         </div>
         {violations.length === 0 ? (
           <p className="text-[11.5px] text-text-3">{t("review_quarantined_no_violations")}</p>
@@ -288,24 +283,6 @@ export function ScriptReviewGate({ projectName, episode, contentMode, videoModel
       return { ...prev, segments: prev.segments.map((s, i) => (i === index ? { ...s, ...patch } : s)) };
     });
   };
-
-  // 待修复草稿的处置只能由 Agent 在草稿上完成（正式文件写禁、晋升要经工具全量重判），故这里
-  // 把逐条违约预填进对话输入框，用户一句话就能把上下文完整交给它，不必自己转述。
-  const handleRequestFix = useCallback(() => {
-    const violations = state?.quarantine?.violations ?? [];
-    const docType = contentMode === "drama" ? "drama_script_plan" : "narration_script_plan";
-    // 重算已无违约、但待修复草稿仍在场（Agent 已改对内容、尚未调晋升工具）：不能报「0 处违约
-    // 待修复」再让用户去改一份已经没问题的东西，正确的下一步是请 Agent 直接晋升。
-    const report =
-      violations.length === 0
-        ? t("dashboard:review_fix_request_promote_prefill", { episode, docType })
-        : [
-            t("dashboard:review_fix_request_prefill_header", { episode, count: violations.length, docType }),
-            ...violations.map((v, i) => String(i + 1) + ". " + v.message),
-          ].join("\n");
-    useAssistantStore.getState().setInput(report);
-    useAppStore.getState().setAssistantPanelOpen(true);
-  }, [state, episode, contentMode, t]);
 
   if (loading) {
     return <div className="flex h-64 items-center justify-center text-text-4">{t("dashboard:loading_script_plan")}</div>;
@@ -467,7 +444,7 @@ export function ScriptReviewGate({ projectName, episode, contentMode, videoModel
 
       {/* 结构化中间态卡片；待修复草稿在场时改为只读的违约面板 */}
       {quarantined ? (
-        <QuarantinePanel quarantine={quarantine} onRequestFix={handleRequestFix} />
+        <QuarantinePanel quarantine={quarantine} />
       ) : (
         <section className="rounded-[10px] border border-hairline px-3.5" style={CARD_STYLE}>
           <ul>

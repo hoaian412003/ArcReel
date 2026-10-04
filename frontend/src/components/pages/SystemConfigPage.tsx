@@ -18,7 +18,6 @@ import {
 import { useTranslation } from "react-i18next";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { ONBOARDING_ANCHORS } from "@/onboarding/anchors";
-import { AgentConfigTab } from "./AgentConfigTab";
 import { ApiKeysTab } from "./ApiKeysTab";
 import { AboutSection } from "./settings/AboutSection";
 import { MediaModelSection } from "./settings/MediaModelSection";
@@ -27,6 +26,7 @@ import { ProviderSection } from "./ProviderSection";
 import { UsageRecordsSection } from "../usage/UsageRecordsSection";
 import { EndpointsSection } from "./settings/endpoints/EndpointsSection";
 import { MarketSection } from "./settings/market/MarketSection";
+import { ClaudeAuthSection } from "./settings/ClaudeAuthSection";
 import {
   SUPPORTED_LANGUAGES,
   LANGUAGE_DISPLAY_LABELS,
@@ -41,20 +41,19 @@ import {
 // ---------------------------------------------------------------------------
 
 type SettingsSection =
-  | "agent"
   | "providers"
   | "endpoints"
   | "market"
   | "media"
   | "usage"
+  | "claude"
   | "api-keys"
   | "prompt-templates"
   | "about";
 
-/** 引导第 5/6 步指向的侧栏入口——只有这两项挂锚点，其余小节不在当前引导覆盖范围内。 */
+/** 引导指向的侧栏入口——只有供应商挂锚点，其余小节不在当前引导覆盖范围内。 */
 const SECTION_ONBOARDING_ANCHORS: Partial<Record<SettingsSection, string>> = {
   providers: ONBOARDING_ANCHORS.settingsProviders,
-  agent: ONBOARDING_ANCHORS.settingsAgent,
 };
 
 interface SectionDef {
@@ -77,7 +76,6 @@ const SECTION_GROUPS: SectionGroup[] = [
     kicker: "Configuration",
     items: [
       { id: "providers", labelKey: "dashboard:providers", Icon: Plug },
-      { id: "agent", labelKey: "dashboard:agents", Icon: Bot },
       { id: "endpoints", labelKey: "dashboard:ce_section_title", Icon: Waypoints },
       { id: "market", labelKey: "dashboard:market_section_title", Icon: Store },
       { id: "media", labelKey: "dashboard:models", Icon: Film },
@@ -87,6 +85,7 @@ const SECTION_GROUPS: SectionGroup[] = [
     kicker: "Access",
     items: [
       { id: "usage", labelKey: "dashboard:usage", Icon: BarChart3 },
+      { id: "claude", labelKey: "dashboard:claude_auth_nav", Icon: Bot },
       { id: "api-keys", labelKey: "dashboard:api_keys", Icon: KeyRound },
     ],
   },
@@ -110,11 +109,11 @@ export function SystemConfigPage() {
 
   const activeSection = useMemo((): SettingsSection => {
     const section = new URLSearchParams(search).get("section");
-    if (section === "agent") return "agent";
     if (section === "endpoints") return "endpoints";
     if (section === "market") return "market";
     if (section === "media") return "media";
     if (section === "usage") return "usage";
+    if (section === "claude") return "claude";
     if (section === "api-keys") return "api-keys";
     if (section === "prompt-templates") return "prompt-templates";
     if (section === "about") return "about";
@@ -232,7 +231,7 @@ export function SystemConfigPage() {
               {group.items.map(({ id, labelKey, Icon }) => {
                 const isActive = activeSection === id;
                 const hasIssue =
-                  (id === "providers" || id === "agent" || id === "media") &&
+                  (id === "providers" || id === "media") &&
                   configIssues.length > 0;
 
                 return (
@@ -332,9 +331,9 @@ export function SystemConfigPage() {
                 </div>
               )}
 
-              {activeSection === "agent" && <AgentConfigTab visible />}
               {activeSection === "media" && <MediaModelSection />}
               {activeSection === "usage" && <UsageRecordsSection />}
+              {activeSection === "claude" && <ClaudeAuthSection />}
               {activeSection === "api-keys" && (
                 <div className="p-6">
                   <ApiKeysTab />

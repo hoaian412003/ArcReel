@@ -9,8 +9,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from lib.db import get_async_session
+from lib.db.repositories.agent_credential_repo import AgentCredentialRepository
 from server.auth import CurrentUserInfo, get_current_user
-from server.routers import agent_config, custom_providers
+from server.routers import custom_providers
 from tests.auth_deps import AUTH_DEPENDENCIES
 
 
@@ -24,7 +25,6 @@ def _make_app(session_factory) -> FastAPI:
 
     app.dependency_overrides[get_async_session] = override_session
     app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="testuser", role="admin")
-    app.include_router(agent_config.router, prefix="/api/v1", dependencies=AUTH_DEPENDENCIES)
     app.include_router(custom_providers.router, prefix="/api/v1", dependencies=AUTH_DEPENDENCIES)
     return app
 
@@ -39,7 +39,7 @@ async def discover_client(db_engine):
 
 
 @pytest.mark.asyncio
-async def test_discover_falls_back_to_active_credential(discover_client, monkeypatch) -> None:
+async def test_discover_falls_back_to_active_credential(discover_client, db_factory, monkeypatch) -> None:
     captured: dict = {}
 
     async def fake_discover(*, discovery_format, base_url, api_key):
@@ -51,11 +51,16 @@ async def test_discover_falls_back_to_active_credential(discover_client, monkeyp
     monkeypatch.setattr("lib.custom_provider.discovery.discover_models", fake_discover)
 
     # Create an active credential first
-    create_resp = await discover_client.post(
-        "/api/v1/agent/credentials",
-        json={"preset_id": "deepseek", "api_key": "stored-sk"},
-    )
-    assert create_resp.status_code == 201, create_resp.text
+    async with db_factory() as session:
+        repo = AgentCredentialRepository(session)
+        cred = await repo.create(
+            preset_id="deepseek",
+            display_name="DeepSeek",
+            base_url="https://api.deepseek.com/anthropic",
+            api_key="stored-sk",
+        )
+        await repo.set_active(cred.id)
+        await session.commit()
 
     # /discover-anthropic with empty body → should pick up the active credential；
     # 预设凭证未覆盖 base_url，模型列表按预设目录的 discovery_url 取，而不是 messages 根

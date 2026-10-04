@@ -23,7 +23,7 @@ def test_list_projects_excludes_data_root_system_entries(tmp_path):
     pm.create_project("demo")
     pm.get_global_assets_root()
     pm.layout.trial_runs_dir.mkdir(parents=True)
-    pm.layout.user_memory_dir("default").mkdir(parents=True)
+    (pm.layout.users_dir / "default").mkdir(parents=True)
     pm.layout.generation_admission_locks_dir.mkdir(parents=True)
     pm.layout.sqlite_db_path.write_text("")
 

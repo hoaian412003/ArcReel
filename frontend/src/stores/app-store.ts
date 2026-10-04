@@ -20,54 +20,6 @@ interface FocusedContext {
 
 const ALL_ENTITIES_REVISION_KEY = "__all__";
 
-export const ASSISTANT_PANEL_DEFAULT_WIDTH = 505;
-export const ASSISTANT_PANEL_MIN_WIDTH = 360;
-export const ASSISTANT_PANEL_MAX_WIDTH = 720;
-const ASSISTANT_PANEL_WIDTH_STORAGE_KEY = "arcreel_assistant_panel_width";
-const ASSISTANT_PANEL_OPEN_STORAGE_KEY = "arcreel_assistant_panel_open";
-
-export function clampAssistantPanelWidth(value: number): number {
-  if (!Number.isFinite(value)) return ASSISTANT_PANEL_DEFAULT_WIDTH;
-  return Math.min(
-    ASSISTANT_PANEL_MAX_WIDTH,
-    Math.max(ASSISTANT_PANEL_MIN_WIDTH, Math.round(value)),
-  );
-}
-
-function readPersistedAssistantPanelWidth(): number {
-  if (typeof window === "undefined") return ASSISTANT_PANEL_DEFAULT_WIDTH;
-  try {
-    const raw = window.localStorage.getItem(ASSISTANT_PANEL_WIDTH_STORAGE_KEY);
-    if (!raw) return ASSISTANT_PANEL_DEFAULT_WIDTH;
-    const parsed = parseInt(raw, 10);
-    if (Number.isNaN(parsed)) return ASSISTANT_PANEL_DEFAULT_WIDTH;
-    return clampAssistantPanelWidth(parsed);
-  } catch {
-    return ASSISTANT_PANEL_DEFAULT_WIDTH;
-  }
-}
-
-function readPersistedAssistantPanelOpen(): boolean | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(ASSISTANT_PANEL_OPEN_STORAGE_KEY);
-    return raw === "true" ? true : raw === "false" ? false : null;
-  } catch {
-    return null;
-  }
-}
-
-function persistAssistantPanelOpen(open: boolean): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(ASSISTANT_PANEL_OPEN_STORAGE_KEY, String(open));
-  } catch {
-    // localStorage 不可用时仅保留内存值
-  }
-}
-
-const initialAssistantPanelOpen = readPersistedAssistantPanelOpen();
-
 interface AppState {
   // Context focus (design doc "Context-Aware" feature)
   focusedContext: FocusedContext | null;
@@ -77,8 +29,6 @@ interface AppState {
   scrollTarget: WorkspaceFocusTarget | null;
   triggerScrollTo: (target: WorkspaceFocusTargetInput) => void;
   clearScrollTarget: (requestId?: string) => void;
-  assistantToolActivitySuppressed: boolean;
-  setAssistantToolActivitySuppressed: (suppressed: boolean) => void;
 
   // Toast
   toast: Toast | null;
@@ -97,14 +47,6 @@ interface AppState {
   clearWorkspaceNotifications: () => void;
 
   // Panels
-  assistantPanelOpen: boolean;
-  assistantPanelInitialized: boolean;
-  initializeAssistantPanel: (openByDefault: boolean) => void;
-  toggleAssistantPanel: () => void;
-  setAssistantPanelOpen: (open: boolean) => void;
-  assistantPanelWidth: number;
-  setAssistantPanelWidth: (width: number) => void;
-  persistAssistantPanelWidth: () => void;
   /** 顶栏用量悬浮层的开合；画布侧也从这里打开面板。 */
   usagePanelOpen: boolean;
   setUsagePanelOpen: (open: boolean) => void;
@@ -195,9 +137,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return s;
     }),
-  assistantToolActivitySuppressed: false,
-  setAssistantToolActivitySuppressed: (suppressed) =>
-    set({ assistantToolActivitySuppressed: suppressed }),
 
   toast: null,
   pushToast: (text, tone = "info") =>
@@ -239,39 +178,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
   clearWorkspaceNotifications: () => set({ workspaceNotifications: [] }),
 
-  assistantPanelOpen: initialAssistantPanelOpen ?? false,
-  assistantPanelInitialized: initialAssistantPanelOpen !== null,
-  initializeAssistantPanel: (openByDefault) =>
-    set((s) => {
-      if (s.assistantPanelInitialized) return s;
-      return {
-        assistantPanelOpen: readPersistedAssistantPanelOpen() ?? openByDefault,
-        assistantPanelInitialized: true,
-      };
-    }),
-  toggleAssistantPanel: () =>
-    set((s) => {
-      const open = !s.assistantPanelOpen;
-      persistAssistantPanelOpen(open);
-      return { assistantPanelOpen: open, assistantPanelInitialized: true };
-    }),
-  setAssistantPanelOpen: (open) =>
-    set({ assistantPanelOpen: open, assistantPanelInitialized: true }),
-  assistantPanelWidth: readPersistedAssistantPanelWidth(),
-  setAssistantPanelWidth: (width) =>
-    set({ assistantPanelWidth: clampAssistantPanelWidth(width) }),
-  persistAssistantPanelWidth: () => {
-    if (typeof window === "undefined") return;
-    const width = clampAssistantPanelWidth(get().assistantPanelWidth);
-    try {
-      window.localStorage.setItem(
-        ASSISTANT_PANEL_WIDTH_STORAGE_KEY,
-        String(width),
-      );
-    } catch {
-      // localStorage 不可用（隐私模式 / quota exceeded）静默失败，内存值仍生效
-    }
-  },
   usagePanelOpen: false,
   setUsagePanelOpen: (open) => set({ usagePanelOpen: open }),
 

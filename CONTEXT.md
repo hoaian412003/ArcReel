@@ -568,7 +568,7 @@ _Avoid_: 预拆分例外、手动预拆分（作为特例称呼）、分集文�
 _Avoid_: 与产物时效的 stale 混为一谈、与制作状态混为一谈——它只说规划与产物的关系，不说做到哪一步。
 
 **附加指令（instructions）**：
-创作者为一次规划或生成附加的额外要求，只在该次操作中生效；反复提出的同一要求由 Agent 记忆承载为偏好。
+创作者为一次规划或生成附加的额外要求，只在该次操作中生效。
 _Avoid_: 指令、用户意见、附加说明、常驻偏好、创作要求、prompt。
 
 **分集规划（plan）**：
@@ -653,73 +653,13 @@ _Avoid_: 草稿（已指脚本流程里的待修复草稿与可编辑草稿）�
 
 ### Agent 运行时
 
-**ArcReel Agent**：
-在 ArcReel 中理解创作者要求、协助组织内容并调用创作能力完成工作的对话式 AI。中文产品命名写「ArcReel Agent」；其他中文说明可写「Agent」或「智能体」。
-_Avoid_: 助手、创作助手、Copilot。
-
 **外部 Agent 接入（external Agent integration）**：
 把运行在 ArcReel 之外的受信任 Agent 连接到 ArcReel 的过程，包括安装公开 skills、配置远程 MCP 与 API Key，并验证连通。
-_Avoid_: 仅称为 skills 安装、与 ArcReel Agent 配置混为一谈。
+_Avoid_: 仅称为 skills 安装。
 
 **Agent 工具集（Agent toolset）**：
-ArcReel 向 ArcReel Agent 与外部 Agent 提供的同一套创作工具。两类 Agent 调用同一个工具，得到同样的能力与结果，也受同样的迁移失败判定约束；差别只在两处：操作某个项目时，ArcReel Agent 的项目由所在会话决定，外部 Agent 每次指明项目；提交生成任务时，ArcReel Agent 等到任务结束才拿到结果，外部 Agent 先拿到提交回执、之后自行查询结果。
+ArcReel 经远程 MCP 向外部 Agent 提供的创作工具。每个工具一份与宿主无关的声明；外部 Agent 每次调用指明项目，受迁移失败判定约束；提交生成任务时先拿到提交回执，之后自行查询结果。
 _Avoid_: 工具目录、MCP 工具列表、工具注册表、sdk tools。
-
-**子智能体（subagent）**：
-Agent 为实现一个聚焦目标而委派的一段工作，运行时由下级 Agent 执行；主对话只展示其目标、状态和结果。
-_Avoid_: 子任务、子 Agent。
-
-**SessionActor**：
-每个 Agent 会话专属的执行体，串行化该会话对 SDK 的所有调用（见 `docs/adr/0028`）。
-_Avoid_: 与 ManagedSession 混为一谈。
-
-**Agent 启动失败（agent_startup_failure）**：
-Agent 尚未建立可用运行环境时发生的系统故障，位于任何对话轮次之前。
-_Avoid_: 与 Agent 轮次失败混为一谈。
-
-**Agent 轮次失败（agent_turn_failure）**：
-Agent 已成功启动后，某一轮未完成的故障终态；它是系统故障事件，不是 Agent 回答。
-_Avoid_: 把 SDK 合成的错误消息作为普通 Agent 回答。
-
-**故障观测（failure_observation）**：
-ArcReel 在一次 Agent 故障中实际获得的上下文与原始故障事实；它是排障证据，不是根因结论。
-_Avoid_: 把未识别事实归一成"未知错误"。
-
-**Agent 记忆（agent memory）**：
-Agent 跨会话持久保存、自主写入并可由创作者查看修改的关于创作者与项目的自然语言笔记，形态为一份逐行索引加按需读取的主题文件；只记 Agent 无法从项目数据或指令文件推出、且未来会话仍有用的偏好、纠正、决策与外部线索，分项目记忆与用户记忆两级。
-_Avoid_: 把项目正式数据、SDK transcript / 会话事件日志、附加指令或制作进度当作记忆；把 `CLAUDE.<mode>.md` 这类人写的指令文件叫作记忆。
-
-**项目记忆（project memory）**：
-随项目走的 Agent 记忆，只在该项目的会话中生效，承载该项目的风格取向、被确认的做法与创作者对本项目的纠正。
-_Avoid_: 跨项目复用；写进项目正式数据；与项目设置混为一谈。
-
-**用户记忆（user memory）**：
-按用户归属、对该用户所有项目生效的 Agent 记忆，承载创作者的身份背景与长期工作偏好。
-_Avoid_: 绑定服务实例或宿主目录；写入只对某一个项目成立的内容。
-
-**项目私有区（project private area）**：
-项目目录内由 ArcReel 运行时自行维护、不属于项目正式数据的落盘区，承载项目记忆这类「随项目目录、不随归档」的内容；不入归档、不入数据校验，也不随 Agent 运行 profile 的物化与重置一起被清掉。
-_Avoid_: 把它与 profile 物化目录混为一谈；把其中内容当作正式数据导出或校验。
-
-**SDK transcript**：
-SDK 按自身协议写入的会话记录，唯一职责是供 SDK 重建 Agent 上下文。
-_Avoid_: 把 transcript 当 UI 对话时间线的数据源。
-
-**会话事件日志（session event log）**：
-对话时间线的唯一读源：每个会话一条有序事件序列，是 SDK transcript 的物化视图。
-_Avoid_: 把它当第二真相源与 transcript 对账。
-
-**消息改写（message rewrite）**：
-用户对已发出的某条历史用户消息的编辑-重跑动作：等同于回到该消息发出前用改写后的内容重新发出，原消息及其后的全部对话随之废弃。
-_Avoid_: 与图片编辑的「编辑」混称。
-
-**分支会话（session branch）**：
-承接一次消息改写的新会话：改写点之前的对话前缀成为新会话的全部历史，原会话保留为不可见备份（见 `docs/adr/0058`）。
-_Avoid_: 与 SDK 原生 `fork_session` 混为一谈。
-
-**子时间线（subagent timeline）**：
-同一会话内属于同一个子智能体的消息序列，主时间线上只呈现一张可折叠的子智能体卡片。
-_Avoid_: 把子智能体消息平铺进主时间线。
 
 **Agent 运行 profile（agent_runtime_profile）**：
 Agent 专属的运行态配置树，与开发者本地的编辑器配置物理分离，运行时物化进各项目目录。
@@ -728,14 +668,6 @@ _Avoid_: 用「.claude」笼统指代、称为 agent config。
 **profile 物化（materialization）**：
 把 Agent 运行 profile 落盘进某个项目目录的过程，按该项目的创作类型选定变体。
 _Avoid_: 用「同步 / 复制」泛指。
-
-**Agent 沙箱（agent_sandbox）**：
-Agent 工具调用外围的内核级隔离层，约束沙箱内所有子进程的文件读写与网络（见 `docs/adr/0025`、`docs/adr/0026`）。
-_Avoid_: 用「沙箱」泛指应用层路径围栏 hook。
-
-**AgentAccessPolicy**：
-「Agent 能碰什么」的单一规则来源，同一份规则为内核沙箱与应用层围栏各做一种投影（见 `docs/adr/0046`）。
-_Avoid_: SandboxPolicy。
 
 ### 认证与凭证
 

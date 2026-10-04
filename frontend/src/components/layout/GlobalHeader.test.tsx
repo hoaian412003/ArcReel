@@ -5,7 +5,6 @@ import { memoryLocation } from "wouter/memory-location";
 import { GlobalHeader } from "@/components/layout/GlobalHeader";
 import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useTasksStore } from "@/stores/tasks-store";
 import { DEMO_PROJECT_NAME } from "@/onboarding/demo-project";
@@ -46,7 +45,6 @@ describe("GlobalHeader", () => {
   beforeEach(() => {
     useProjectsStore.setState(useProjectsStore.getInitialState(), true);
     useAppStore.setState(useAppStore.getInitialState(), true);
-    useAssistantStore.setState(useAssistantStore.getInitialState(), true);
     useTasksStore.setState(useTasksStore.getInitialState(), true);
     vi.restoreAllMocks();
   });

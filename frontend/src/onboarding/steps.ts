@@ -6,15 +6,15 @@
  * 字面量。`route` 是该步所需落地的页面（`OnboardingTour` 据此在步骤切换前先行导航），
  * 省略表示不要求特定路由。
  *
- * 全程 12 步，跨三个页面：大厅段（欢迎 → 新建项目入口 → 设置入口）→ 设置页段（供应商
- * → Agent）→ 回大厅（演示卡，进工作台的桥）→ 演示工作台段（项目概览 → Agent →
- * 角色/场景/道具 → 剧集分镜 → 导出）→ 收尾。每一次换页都由上一步高亮的入口提供动机：
+ * 全程 10 步，跨三个页面：大厅段（欢迎 → 新建项目入口 → 设置入口）→ 设置页段（供应商）
+ * → 回大厅（演示卡，进工作台的桥）→ 演示工作台段（项目概览 → 角色/场景/道具 → 剧集分镜
+ * → 导出）→ 收尾。每一次换页都由上一步高亮的入口提供动机：
  * 设置图标讲完进设置页，演示卡讲完进工作台，不存在没有来路的跳转。
  *
- * 步骤文案里指路用的名字（「供应商」「Agent」等）一律取被高亮元素在界面上的实际标签，
+ * 步骤文案里指路用的名字（「供应商」等）一律取被高亮元素在界面上的实际标签，
  * 不另造概念——用户照着文案在界面上找得到，才算指对了路。
  *
- * 工作台段落在演示项目的只读工作台上（`demo-project.ts`）。第 6 步的演示卡是
+ * 工作台段落在演示项目的只读工作台上（`demo-project.ts`）。第 5 步的演示卡是
  * `interactive`：用户点卡片本身或点「下一步」都会进入演示工作台，引导顺势推进到工作台
  * 首步（判定见 `OnboardingTour.tsx`）；工作台段内部的换路由仍由 `route` 强制导航驱动。
  *
@@ -54,16 +54,8 @@ export function buildTourSteps(t: TFunction<"onboarding">): TourStep[] {
       body: t("settings_providers_body"),
       route: ROUTE_APP_SETTINGS,
       // 设置页的内容区由 `section` 查询参数驱动（`SystemConfigPage`），锚点只在侧栏
-      // 入口上——不声明查询参数的话，两步之间内容区不会跟着切，讲 Agent 时右边还摆着
-      // 供应商。取值须与 `SystemConfigPage` 的 SettingsSection id 一致。
+      // 入口上；取值须与 `SystemConfigPage` 的 SettingsSection id 一致。
       query: { section: "providers" },
-    },
-    {
-      anchor: ONBOARDING_ANCHORS.settingsAgent,
-      title: t("settings_agent_title"),
-      body: t("settings_agent_body"),
-      route: ROUTE_APP_SETTINGS,
-      query: { section: "agent" },
     },
     {
       anchor: ONBOARDING_ANCHORS.lobbyDemoCard,
@@ -82,13 +74,6 @@ export function buildTourSteps(t: TFunction<"onboarding">): TourStep[] {
       anchor: ONBOARDING_ANCHORS.workbenchOverview,
       title: t("workbench_overview_title"),
       body: t("workbench_overview_body"),
-      route: DEMO_WORKBENCH,
-    },
-    {
-      anchor: ONBOARDING_ANCHORS.workbenchAgent,
-      title: t("workbench_agent_title"),
-      body: t("workbench_agent_body"),
-      // Agent 面板挂在工作台布局壳上，所有工作台路由都渲染；留在概览页讲，省一次导航。
       route: DEMO_WORKBENCH,
     },
     {

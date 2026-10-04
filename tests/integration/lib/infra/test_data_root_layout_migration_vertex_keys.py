@@ -66,9 +66,7 @@ async def _loaded_credential(session_factory: async_sessionmaker[AsyncSession]) 
 
 
 async def _migrate(deployed_data_root: Path, session_factory: async_sessionmaker[AsyncSession], tmp_path: Path) -> None:
-    await migrate_data_root_layout(
-        deployed_data_root, session_factory=session_factory, sdk_config_dir=tmp_path / "claude"
-    )
+    await migrate_data_root_layout(deployed_data_root, session_factory=session_factory)
 
 
 @pytest.mark.parametrize(

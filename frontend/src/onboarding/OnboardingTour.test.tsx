@@ -248,9 +248,9 @@ describe("OnboardingTour", () => {
     );
   }
 
-  /** 设置页两步的锚点。 */
+  /** 设置页一步的锚点。 */
   function mountSettingsAnchors(): HTMLElement[] {
-    return mountAnchors(ONBOARDING_ANCHORS.settingsProviders, ONBOARDING_ANCHORS.settingsAgent);
+    return mountAnchors(ONBOARDING_ANCHORS.settingsProviders);
   }
 
   function click(selector: string): void {
@@ -324,7 +324,7 @@ describe("OnboardingTour", () => {
     );
     await waitFor(() => expect(popoverTitle()).toBe("欢迎使用 ArcReel"));
 
-    for (let i = 0; i < 5; i++) click(".driver-popover-next-btn"); // → 演示卡（interactive 步，锚点在大厅）
+    for (let i = 0; i < 4; i++) click(".driver-popover-next-btn"); // → 演示卡（interactive 步，锚点在大厅）
     await waitFor(() => expect(popoverTitle()).toBe("演示项目"));
 
     // 演示卡步是 interactive，允许用户点卡片本身离开大厅进工作台；但如果落点是引导
@@ -350,7 +350,7 @@ describe("OnboardingTour", () => {
     );
     await waitFor(() => expect(popoverTitle()).toBe("欢迎使用 ArcReel"));
 
-    for (let i = 0; i < 5; i++) click(".driver-popover-next-btn"); // → 演示卡（interactive 步）
+    for (let i = 0; i < 4; i++) click(".driver-popover-next-btn"); // → 演示卡（interactive 步）
     await waitFor(() => expect(popoverTitle()).toBe("演示项目"));
 
     // 落点之外的去处一律拽回，不因为它在引导覆盖范围之外就放过：资产库是主界面路由但
@@ -363,33 +363,6 @@ describe("OnboardingTour", () => {
 
     anchors.forEach((el) => el.remove());
   }, 20_000);
-
-  it("switches the settings pane back to providers when stepping backwards from the agent step", async () => {
-    vi.spyOn(API, "getOnboardingStatus").mockResolvedValue({ seen: false });
-    const anchors = [...mountLobbyAnchors(), ...mountSettingsAnchors()];
-
-    const { hook, history } = memoryLocation({ path: "/app/projects", record: true });
-    render(
-      <Router hook={hook}>
-        <OnboardingTour />
-      </Router>,
-    );
-    await waitFor(() => expect(popoverTitle()).toBe("欢迎使用 ArcReel"));
-
-    for (let i = 0; i < 4; i++) click(".driver-popover-next-btn"); // → 配置 Agent
-    await waitFor(() => expect(popoverTitle()).toBe("配置 Agent"));
-    expect(history.at(-1)).toBe("/app/settings?section=agent");
-
-    // 两步同在 /app/settings，退回时 pathname 不变——内容区必须靠 section 参数切回
-    // 供应商，否则讲供应商时右边还摆着 Agent（正向同理）。
-    click(".driver-popover-prev-btn");
-
-    await waitFor(() => expect(popoverTitle()).toBe("配置供应商"));
-    expect(history.at(-1)).toBe("/app/settings?section=providers");
-    expect(API.markOnboardingSeen).not.toHaveBeenCalled();
-
-    anchors.forEach((el) => el.remove());
-  });
 
   it("degrades to a centered popover when the settings-step anchor never mounts", async () => {
     vi.spyOn(API, "getOnboardingStatus").mockResolvedValue({ seen: false });
@@ -419,7 +392,7 @@ describe("OnboardingTour", () => {
     lobbyAnchors.forEach((el) => el.remove());
   });
 
-  it("still marks the tour as seen when skipped mid-way through the settings steps", async () => {
+  it("still marks the tour as seen when skipped mid-way through the settings step", async () => {
     vi.spyOn(API, "getOnboardingStatus").mockResolvedValue({ seen: false });
     const lobbyAnchors = mountLobbyAnchors();
     const settingsAnchor = document.createElement("button");
@@ -447,18 +420,17 @@ describe("OnboardingTour", () => {
     [...lobbyAnchors, settingsAnchor].forEach((el) => el.remove());
   });
 
-  /** 演示工作台五步的锚点。 */
+  /** 演示工作台四步的锚点。 */
   function mountWorkbenchAnchors(): HTMLElement[] {
     return mountAnchors(
       ONBOARDING_ANCHORS.workbenchOverview,
-      ONBOARDING_ANCHORS.workbenchAgent,
       ONBOARDING_ANCHORS.workbenchLorebook,
       ONBOARDING_ANCHORS.workbenchTimeline,
       ONBOARDING_ANCHORS.workbenchExport,
     );
   }
 
-  /** 全程 12 步的锚点，供跑完整串联的用例一次挂齐。 */
+  /** 全程 10 步的锚点，供跑完整串联的用例一次挂齐。 */
   function mountAllAnchors(): HTMLElement[] {
     return [...mountLobbyAnchors(), ...mountSettingsAnchors(), ...mountWorkbenchAnchors()];
   }
@@ -466,7 +438,7 @@ describe("OnboardingTour", () => {
   const DEMO_WORKBENCH = `/app/projects/${DEMO_PROJECT_NAME}`;
   const DEMO_EPISODE = `${DEMO_WORKBENCH}/episodes/${DEMO_SCRIPTED_EPISODE}`;
 
-  it("walks all twelve steps from the lobby through the demo workbench and back to the lobby", async () => {
+  it("walks all ten steps from the lobby through the demo workbench and back to the lobby", async () => {
     vi.spyOn(API, "getOnboardingStatus").mockResolvedValue({ seen: false });
     const anchors = mountAllAnchors();
 
@@ -483,10 +455,8 @@ describe("OnboardingTour", () => {
       ["新建项目", "/app/projects"],
       ["设置", "/app/projects"],
       ["配置供应商", "/app/settings?section=providers"],
-      ["配置 Agent", "/app/settings?section=agent"],
       ["演示项目", "/app/projects"],
       ["项目概览", DEMO_WORKBENCH],
-      ["Agent", DEMO_WORKBENCH],
       ["角色、场景与道具", `${DEMO_WORKBENCH}/characters`],
       ["分镜画布", DEMO_EPISODE],
       ["导出", DEMO_EPISODE],
@@ -522,7 +492,7 @@ describe("OnboardingTour", () => {
     );
     await waitFor(() => expect(popoverTitle()).toBe("欢迎使用 ArcReel"));
 
-    for (let i = 0; i < 5; i++) click(".driver-popover-next-btn"); // → 演示卡（interactive）
+    for (let i = 0; i < 4; i++) click(".driver-popover-next-btn"); // → 演示卡（interactive）
     await waitFor(() => expect(popoverTitle()).toBe("演示项目"));
 
     // 顺着这一步给的入口点进演示工作台：不拽回大厅，引导顺势推进到工作台首步——
@@ -548,7 +518,7 @@ describe("OnboardingTour", () => {
     );
     await waitFor(() => expect(popoverTitle()).toBe("欢迎使用 ArcReel"));
 
-    for (let i = 0; i < 6; i++) click(".driver-popover-next-btn"); // → 项目概览（工作台第一步）
+    for (let i = 0; i < 5; i++) click(".driver-popover-next-btn"); // → 项目概览（工作台第一步）
     await waitFor(() => expect(popoverTitle()).toBe("项目概览"));
     expect(history.at(-1)).toBe(DEMO_WORKBENCH);
 
@@ -562,11 +532,11 @@ describe("OnboardingTour", () => {
     anchors.forEach((el) => el.remove());
   }, 20_000);
 
-  it("replays the full twelve steps from the settings entry", async () => {
+  it("replays the full ten steps from the settings entry", async () => {
     vi.spyOn(API, "getOnboardingStatus").mockResolvedValue({ seen: true });
     const anchors = mountAllAnchors();
 
-    // 重看入口在设置页，起步得先跨回大厅——重看和首弹共用同一条 12 步大纲。
+    // 重看入口在设置页，起步得先跨回大厅——重看和首弹共用同一条 10 步大纲。
     const { hook, history } = memoryLocation({ path: "/app/settings", record: true });
     render(
       <Router hook={hook}>
@@ -579,7 +549,7 @@ describe("OnboardingTour", () => {
     await waitFor(() => expect(popoverTitle()).toBe("欢迎使用 ArcReel"));
     expect(history.at(-1)).toBe("/app/projects");
 
-    for (let i = 0; i < 11; i++) click(".driver-popover-next-btn");
+    for (let i = 0; i < 9; i++) click(".driver-popover-next-btn");
     await waitFor(() => expect(popoverTitle()).toBe("开始你的第一个项目"));
     expect(history.at(-1)).toBe("/app/projects");
 
@@ -591,7 +561,7 @@ describe("OnboardingTour", () => {
     anchors.forEach((el) => el.remove());
   }, 20_000);
 
-  it("issues no requests of its own beyond the seen flag across the whole twelve-step run", async () => {
+  it("issues no requests of its own beyond the seen flag across the whole ten-step run", async () => {
     vi.spyOn(API, "getOnboardingStatus").mockResolvedValue({ seen: false });
     // 引导自身不该发任何别的请求：没有生成调用、没有入队、没有项目写入。挂载点之外
     // 的页面组件不在本用例里，这里守的是引导这条链路自己。
@@ -607,7 +577,7 @@ describe("OnboardingTour", () => {
     );
     await waitFor(() => expect(popoverTitle()).toBe("欢迎使用 ArcReel"));
 
-    for (let i = 0; i < 11; i++) click(".driver-popover-next-btn");
+    for (let i = 0; i < 9; i++) click(".driver-popover-next-btn");
     await waitFor(() => expect(popoverTitle()).toBe("开始你的第一个项目"));
     click(".driver-popover-next-btn");
     await waitFor(() => expect(API.markOnboardingSeen).toHaveBeenCalledTimes(1));

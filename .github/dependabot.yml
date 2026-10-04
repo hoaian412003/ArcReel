@@ -49,7 +49,6 @@ updates:
           - "patch"
       ai-sdks:
         patterns:
-          - "claude-agent-sdk"
           - "grpcio"
           - "mcp"
           - "google-genai"

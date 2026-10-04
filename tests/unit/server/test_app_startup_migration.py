@@ -13,7 +13,6 @@ import server.app as app_module
 from lib.infra.data_root_layout import DataRootLayout
 from lib.project.project_manager import ProjectManager
 from lib.project.project_migrations.runner import CURRENT_SCHEMA_VERSION
-from server.routers import assistant as assistant_router
 
 
 async def _noop_async(*args, **kwargs):
@@ -55,9 +54,6 @@ async def test_startup_migrates_projects_and_reaps_stale_backups(tmp_path, monke
     monkeypatch.setattr(app_module, "init_db", _noop_async)
     monkeypatch.setattr(lib.db, "init_db", _noop_async)
     monkeypatch.setattr(app_module, "create_generation_worker", _FakeWorker)
-    monkeypatch.setattr(assistant_router.assistant_service, "startup", _noop_async)
-    monkeypatch.setattr(assistant_router.assistant_service, "shutdown", _noop_async)
-    monkeypatch.setattr(app_module, "migrate_local_transcripts_to_store", _noop_async)
 
     app = app_module.app
     app.state = SimpleNamespace()
@@ -78,29 +74,19 @@ async def test_data_root_layout_migration_runs_before_every_project_walk(tmp_pat
     source_bytes = "春天来了".encode("gbk")
     (staged_project / "source" / "novel.txt").write_bytes(source_bytes)
     project_dir = DataRootLayout(data_root).projects_dir / staged_project.name
-    session_imported = False
 
     async def migrate_layout(root: Path, **_kwargs) -> None:
         assert root == data_root.resolve()
         project_dir.parent.mkdir(parents=True, exist_ok=True)
         staged_project.rename(project_dir)
 
-    async def import_transcripts(_store, **_kwargs) -> None:
-        nonlocal session_imported
-        assert project_dir.is_dir()
-        session_imported = True
-
     monkeypatch.setenv("ARCREEL_DATA_DIR", str(data_root))
-    monkeypatch.setenv("ARCREEL_SDK_SESSION_STORE", "db")
     monkeypatch.setattr(app_module, "migrate_data_root_layout", migrate_layout)
-    monkeypatch.setattr(app_module, "migrate_local_transcripts_to_store", import_transcripts)
     monkeypatch.setattr("lib.project.project_manager.get_project_manager", lambda: ProjectManager(data_root))
     monkeypatch.setattr(app_module, "ensure_auth_password", lambda: "test")
     monkeypatch.setattr(app_module, "init_db", _noop_async)
     monkeypatch.setattr(lib.db, "init_db", _noop_async)
     monkeypatch.setattr(app_module, "create_generation_worker", _FakeWorker)
-    monkeypatch.setattr(assistant_router.assistant_service, "startup", _noop_async)
-    monkeypatch.setattr(assistant_router.assistant_service, "shutdown", _noop_async)
 
     app = app_module.app
     app.state = SimpleNamespace()
@@ -108,7 +94,6 @@ async def test_data_root_layout_migration_runs_before_every_project_walk(tmp_pat
     async with app_module.lifespan(app):
         pass
 
-    assert session_imported
     migrated_source = (project_dir / "source" / "novel.txt").read_bytes()
     migrated_source.decode("utf-8")
     assert migrated_source != source_bytes

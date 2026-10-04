@@ -156,7 +156,6 @@ describe("useProjectEventsSSE", () => {
         }),
       }),
     );
-    expect(useAppStore.getState().assistantToolActivitySuppressed).toBe(true);
   });
 
   it("navigates product changes to the products page", async () => {

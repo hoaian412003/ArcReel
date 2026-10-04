@@ -76,9 +76,7 @@ async def _updated_at(session_factory: async_sessionmaker[AsyncSession], asset_i
 
 
 async def _migrate(projects: ProjectManager, session_factory: async_sessionmaker[AsyncSession], tmp_path: Path) -> None:
-    await migrate_data_root_layout(
-        projects.data_root, session_factory=session_factory, sdk_config_dir=tmp_path / "claude-config"
-    )
+    await migrate_data_root_layout(projects.data_root, session_factory=session_factory)
 
 
 def _assert_readable_from_global_library(projects: ProjectManager, stored_paths: list[str]) -> None:

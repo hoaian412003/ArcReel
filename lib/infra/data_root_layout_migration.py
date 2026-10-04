@@ -1,7 +1,7 @@
 """数据根布局迁移入口：把旧布局的数据根就地迁到 :class:`DataRootLayout` 描述的当前布局。
 
 启动时在挂文件日志 handler 之后、任何遍历项目的步骤（源文件编码迁移、项目 schema
-迁移、会话导入、profile 同步）之前执行。步骤按顺序执行，每一步都须能安全重跑；全部完成
+迁移、profile 同步）之前执行。步骤按顺序执行，每一步都须能安全重跑；全部完成
 后在 ``runtime/`` 写完成标记，此后启动只检查标记。某一步失败时记 ERROR、不写标记，
 异常原样上抛，调用方不得在半迁移的布局上继续遍历项目。
 """
@@ -22,7 +22,6 @@ from pathlib import Path
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from lib.agent.agent_session_store import AgentSessionEntry, AgentSessionSummary, make_project_key
 from lib.db.models.api_call import ApiCall
 from lib.db.models.asset import Asset, AssetDerivative
 from lib.db.models.credential import ProviderCredential
@@ -38,8 +37,6 @@ class DataRootMigrationContext:
 
     layout: DataRootLayout
     session_factory: async_sessionmaker[AsyncSession]
-    #: Claude SDK 配置目录（``CLAUDE_CONFIG_DIR`` 或 ``~/.claude``），SDK 本地会话数据在其下。
-    sdk_config_dir: Path
 
 
 MigrationStep = Callable[[DataRootMigrationContext], Awaitable[None]]
@@ -124,84 +121,6 @@ async def _move_projects_into_projects_dir(context: DataRootMigrationContext) ->
         moved.append(entry.name)
     if moved:
         logger.info("数据根布局迁移：%d 个目录移入 %s：%s", len(moved), projects_dir, ", ".join(moved))
-
-
-def _rename_sdk_session_dir(sdk_projects_dir: Path, legacy_key: str, current_key: str) -> None:
-    """SDK 本地会话目录按新键改名；尽力而为，失败只告警。"""
-    legacy_dir = sdk_projects_dir / legacy_key
-    target = sdk_projects_dir / current_key
-    try:
-        if not legacy_dir.is_dir():
-            return
-        if target.exists():
-            logger.warning("数据根布局迁移：SDK 会话目录 %s 已存在，%s 保持原样", target, legacy_dir)
-            return
-        legacy_dir.rename(target)
-    except OSError:
-        logger.warning("数据根布局迁移：SDK 会话目录 %s 改名失败", legacy_dir, exc_info=True)
-
-
-def _moved_project_names(projects_dir: Path) -> set[str]:
-    """``projects/`` 下的项目名：名字合法的目录，加上目录交换中间目录所属的项目（认领后成为该项目）。"""
-    names: set[str] = set()
-    for entry in projects_dir.iterdir():
-        if _is_project_named_dir(entry):
-            names.add(entry.name)
-        elif _is_project_swap_dir(entry):
-            names.add(rollback_project_name(entry.name) or staging_project_name(entry.name) or "")
-    names.discard("")
-    return names
-
-
-async def _rewrite_session_store_keys(context: DataRootMigrationContext) -> None:
-    """项目挪进 ``projects/`` 后，Agent 会话存储里按旧项目目录派生的键改写为按新目录派生的键。
-
-    会话存储键由项目目录的绝对路径派生（ADR 0029）。只改写仍在旧键下的记录；新键下已有同一
-    会话时保留两边并告警。SDK 自己的本地会话目录（``ARCREEL_SDK_SESSION_STORE=off`` 时唯一的
-    会话来源）同样按新键改名，失败只告警。
-    """
-    layout = context.layout
-    project_names = sorted(await asyncio.to_thread(_moved_project_names, layout.projects_dir))
-    key_pairs = [
-        (make_project_key(layout.root / name), make_project_key(layout.projects_dir / name)) for name in project_names
-    ]
-    key_pairs = [(legacy, current) for legacy, current in key_pairs if legacy != current]
-    rewritten: set[tuple[str, str]] = set()
-    async with context.session_factory() as session:
-        for legacy_key, current_key in key_pairs:
-            for table in (AgentSessionEntry, AgentSessionSummary):
-                legacy_ids = set(
-                    (await session.scalars(select(table.session_id).where(table.project_key == legacy_key))).all()
-                )
-                if not legacy_ids:
-                    continue
-                conflicting = set(
-                    (
-                        await session.scalars(
-                            select(table.session_id).where(
-                                table.project_key == current_key, table.session_id.in_(legacy_ids)
-                            )
-                        )
-                    ).all()
-                )
-                if conflicting:
-                    logger.warning(
-                        "数据根布局迁移：会话 %s 在新旧存储键下都有记录，旧键 %s 下的记录保持原样",
-                        sorted(conflicting),
-                        legacy_key,
-                    )
-                await session.execute(
-                    update(table)
-                    .where(table.project_key == legacy_key, table.session_id.not_in(conflicting))
-                    .values(project_key=current_key)
-                )
-                rewritten.update((current_key, session_id) for session_id in legacy_ids - conflicting)
-        await session.commit()
-    sdk_projects_dir = context.sdk_config_dir / "projects"
-    for legacy_key, current_key in key_pairs:
-        await asyncio.to_thread(_rename_sdk_session_dir, sdk_projects_dir, legacy_key, current_key)
-    if rewritten:
-        logger.info("数据根布局迁移：%d 个 Agent 会话改用新项目目录的存储键", len(rewritten))
 
 
 #: POSIX 绝对路径、Windows 盘符路径与 UNC 路径的开头。
@@ -336,7 +255,6 @@ async def _rename_global_assets_dir(context: DataRootMigrationContext) -> None:
 #: 旧布局的数据根内部目录（相对数据根），其下 ``users/`` 是用户数据。
 _LEGACY_INTERNAL_DIR = ".arcreel"
 #: 旧布局平放在数据根下的运行时状态（相对数据根）。
-_LEGACY_SESSION_IMPORT_MARKER = ".session_store_migration_done"
 _LEGACY_PROJECT_MIGRATION_ERROR_LOG = "_migration_errors.log"
 _LEGACY_GENERATION_ADMISSION_LOCKS_DIR = ".generation-admission-locks"
 
@@ -354,23 +272,17 @@ async def _move_user_data_to_users_dir(context: DataRootMigrationContext) -> Non
 
 
 async def _move_runtime_state_to_runtime_dir(context: DataRootMigrationContext) -> None:
-    """平放在数据根下的运行时状态收进 ``runtime/``；旧位置已完成的标记由新位置继承。
+    """平放在数据根下的运行时状态收进 ``runtime/``。
 
     生成准入锁只在持有期间有意义，旧锁目录直接删除。
     """
     layout = context.layout
     root = layout.root
-    legacy_marker = root / _LEGACY_SESSION_IMPORT_MARKER
     legacy_error_log = root / _LEGACY_PROJECT_MIGRATION_ERROR_LOG
     legacy_locks = root / _LEGACY_GENERATION_ADMISSION_LOCKS_DIR
-    if not (legacy_marker.exists() or legacy_error_log.exists() or legacy_locks.exists()):
+    if not (legacy_error_log.exists() or legacy_locks.exists()):
         return
     layout.runtime_dir.mkdir(exist_ok=True)
-    if legacy_marker.exists():
-        if layout.session_import_marker_path.exists():
-            legacy_marker.unlink()
-        else:
-            legacy_marker.rename(layout.session_import_marker_path)
     if legacy_error_log.exists():
         if layout.project_migration_error_log_path.exists():
             with layout.project_migration_error_log_path.open("a", encoding="utf-8") as merged:
@@ -499,7 +411,6 @@ _STEPS: tuple[MigrationStep, ...] = (
     # 项目搬迁排在系统条目各步之前：users、runtime 等是合法项目名，同名旧项目先搬走，
     # 同一次迁移里的后续步骤才能就位。
     _move_projects_into_projects_dir,
-    _rewrite_session_store_keys,
     _relativize_call_output_paths,
     _rename_global_assets_dir,
     _move_user_data_to_users_dir,
@@ -508,24 +419,17 @@ _STEPS: tuple[MigrationStep, ...] = (
 )
 
 
-def default_sdk_config_dir() -> Path:
-    """Claude SDK 配置目录：``CLAUDE_CONFIG_DIR`` > ``~/.claude``。"""
-    raw = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-    return Path(raw).expanduser() if raw else Path.home() / ".claude"
-
-
 async def migrate_data_root_layout(
     data_root: Path,
     *,
     session_factory: async_sessionmaker[AsyncSession],
-    sdk_config_dir: Path,
 ) -> None:
     """把 ``data_root`` 迁到当前布局；完成标记已在时什么都不做。"""
     layout = DataRootLayout(data_root)
     marker = layout.layout_migration_marker_path
     if await asyncio.to_thread(marker.is_file):
         return
-    context = DataRootMigrationContext(layout=layout, session_factory=session_factory, sdk_config_dir=sdk_config_dir)
+    context = DataRootMigrationContext(layout=layout, session_factory=session_factory)
     for step in _STEPS:
         name = getattr(step, "__name__", repr(step))
         logger.info("数据根布局迁移：执行 %s", name)

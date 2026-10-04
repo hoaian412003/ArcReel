@@ -3,7 +3,6 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { ScriptReviewGate } from "./ScriptReviewGate";
 import { API, ApiRequestError } from "@/api";
 import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import type { ScriptReviewState, VideoCapabilities } from "@/types";
 
 const VIDEO_CAPS = {
@@ -455,19 +454,11 @@ describe("ScriptReviewGate", () => {
     expect(screen.queryByDisplayValue("裴与出征后的第二年。")).not.toBeInTheDocument();
     expect(screen.getByText("确认并继续").closest("button")).toBeDisabled();
 
-    // 「让 Agent 修复」把逐条违约预填进对话输入框、并把对话面板打开：用户不必自己把报告
-    // 转述给 Agent。面板默认就是开着的，先关掉才断得出这次点击真的打开了它。
-    act(() => useAppStore.getState().setAssistantPanelOpen(false));
-    fireEvent.click(screen.getByText("让 Agent 修复"));
-    const input = useAssistantStore.getState().input;
-    expect(input).toContain("1 处违约待修复");
-    expect(input).toContain("doc_type=narration_script_plan");
-    expect(input).toContain("open_draft 返回的 revision 作为 base_revision");
-    expect(input).toContain("1. segment E1S01 的时长 5 不在模型档位 [4, 6, 8] 内");
-    expect(useAppStore.getState().assistantPanelOpen).toBe(true);
+    // 待修复草稿只读呈现，界面内不提供修复入口。
+    expect(screen.queryByText("让 Agent 修复")).not.toBeInTheDocument();
   });
 
-  it("asks the assistant to promote instead of listing violations when the draft has none", async () => {
+  it("states that revalidation found no violations when the quarantined draft has none", async () => {
     vi.spyOn(API, "getScriptReview").mockResolvedValue(
       dramaState({ quarantine: { content: { title: "第一集", scenes: [] }, violations: [] } }),
     );
@@ -477,16 +468,7 @@ describe("ScriptReviewGate", () => {
     expect(screen.getByText(/重新校验已无违约/)).toBeInTheDocument();
     expect(screen.getByText("确认并继续").closest("button")).toBeDisabled();
 
-    // 重算已无违约时预填的是「请晋升」，不是「有 0 处违约待修复」——后者会让用户去改一份
-    // 已经没问题的东西。
-    fireEvent.click(screen.getByText("让 Agent 修复"));
-    const input = useAssistantStore.getState().input;
-    expect(input).toContain("open_draft");
-    expect(input).toContain("promote_draft");
-    expect(input).toContain("doc_type=drama_script_plan");
-    expect(input).toContain("revision");
-    expect(input).toContain("base_revision");
-    expect(input).not.toContain("违约待修复");
+    expect(screen.queryByText("让 Agent 修复")).not.toBeInTheDocument();
   });
 
   it("adopts externally edited (agent) content on refetch when the user has no edits", async () => {

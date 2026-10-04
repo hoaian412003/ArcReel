@@ -71,7 +71,6 @@ MODULES = [
     "lib.backends.video_backends",
     # server
     "server",
-    "server.agent_runtime",
     "server.app",
     "server.auth",
     "server.dependencies",

@@ -2,7 +2,6 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { API, ApiRequestError } from "@/api";
 import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { ReferenceScriptPlanPreviewPanel } from "./ReferenceScriptPlanPreviewPanel";
 import { makeReferenceUnitCapability } from "@/test/factories";
@@ -111,8 +110,7 @@ function quarantinedState(): ScriptReviewState {
 describe("ReferenceScriptPlanPreviewPanel", () => {
   beforeEach(() => {
     useAppStore.setState(useAppStore.getInitialState(), true);
-    useAssistantStore.setState(useAssistantStore.getInitialState(), true);
-    // 确认后的全局副作用（toast + 预填）只在「用户仍在看这个项目」时才生效，测试渲染面板时
+    // 确认后的全局副作用（toast）只在「用户仍在看这个项目」时才生效，测试渲染面板时
     // 用的 projectName="p"，需要同步告诉 store 当前正在看的就是它。
     useProjectsStore.setState({ currentProjectName: "p" });
   });
@@ -250,7 +248,7 @@ describe("ReferenceScriptPlanPreviewPanel", () => {
     expect(screen.queryByText("本单元未引用场景，画面地点将由模型自由决定")).not.toBeInTheDocument();
   });
 
-  it("confirms, then prefills a continue message into the assistant input without sending", async () => {
+  it("confirms and shows the confirmed toast", async () => {
     vi.spyOn(API, "getScriptReview").mockResolvedValue(pendingState());
     const confirm = vi
       .spyOn(API, "confirmScriptReview")
@@ -262,8 +260,7 @@ describe("ReferenceScriptPlanPreviewPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /确认拆分，继续生成/ }));
 
     await waitFor(() => expect(confirm).toHaveBeenCalledWith("p", 1, {}));
-    await waitFor(() => expect(useAssistantStore.getState().input).toContain("第 1 集"));
-    expect(useAppStore.getState().assistantPanelOpen).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().toast?.tone).toBe("success"));
   });
 
   it("renders confirmed units without edit controls and offers the timeline", async () => {
@@ -433,8 +430,7 @@ describe("ReferenceScriptPlanPreviewPanel", () => {
     expect(button).toBeEnabled();
   });
 
-  it("suppresses the confirm toast/prefill if the user has switched to a different project mid-request", async () => {
-    useAppStore.setState({ assistantPanelOpen: false });
+  it("suppresses the confirm toast if the user has switched to a different project mid-request", async () => {
     vi.spyOn(API, "getScriptReview").mockResolvedValue(pendingState());
     let resolveConfirm: (value: ScriptReviewState) => void = () => {};
     vi.spyOn(API, "confirmScriptReview").mockReturnValue(
@@ -454,14 +450,12 @@ describe("ReferenceScriptPlanPreviewPanel", () => {
     // adopt() 运行在守卫之前，确认本身已生效——用按钮态的变化确认异步流程真的跑完了，
     // 而不是靠一个从始至终都为空的断言碰巧「通过」。
     await waitFor(() => expect(screen.getByRole("button", { name: "已确认" })).toBeDisabled());
-    expect(useAssistantStore.getState().input).toBe("");
     expect(useAppStore.getState().toast).toBeNull();
-    expect(useAppStore.getState().assistantPanelOpen).toBe(false);
   });
 
-  it("still shows the confirm toast/prefill after switching tabs within the same project", async () => {
+  it("still shows the confirm toast after switching tabs within the same project", async () => {
     // 同项目内切 tab（本组件会被卸载，但 useProjectsStore.currentProjectName 不变）不该被
-    // 当成「切走了」而抑制全局副作用——预填文案本身带着具体集号，写进全局输入框依然准确。
+    // 当成「切走了」而抑制确认提示。
     vi.spyOn(API, "getScriptReview").mockResolvedValue(pendingState());
     let resolveConfirm: (value: ScriptReviewState) => void = () => {};
     vi.spyOn(API, "confirmScriptReview").mockReturnValue(
@@ -476,8 +470,7 @@ describe("ReferenceScriptPlanPreviewPanel", () => {
     unmount();
     resolveConfirm(pendingState(CONFIRMED));
 
-    await waitFor(() => expect(useAssistantStore.getState().input).toContain("第 1 集"));
-    expect(useAppStore.getState().assistantPanelOpen).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().toast?.tone).toBe("success"));
   });
 
   it("quarantined state anchors a line-level violation inline and aggregates the unit-level one, blocking confirm", async () => {
@@ -488,23 +481,7 @@ describe("ReferenceScriptPlanPreviewPanel", () => {
     expect(screen.getByText("unit E1U01 使用了全角花括号")).toBeInTheDocument();
     expect(screen.getByText("unit E1U01 的台词念不完")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /确认拆分，继续生成/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "让 Agent 修复" })).toBeInTheDocument();
-  });
-
-  it("prefills a structured fix-request report on 'ask the assistant to fix it', without sending", async () => {
-    vi.spyOn(API, "getScriptReview").mockResolvedValue(quarantinedState());
-    render(<ReferenceScriptPlanPreviewPanel projectName="p" episode={1} lookup={LOOKUP} />);
-
-    await waitFor(() => expect(screen.getByRole("button", { name: "让 Agent 修复" })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "让 Agent 修复" }));
-
-    const input = useAssistantStore.getState().input;
-    expect(input).toContain("第 1 集");
-    expect(input).toContain("doc_type=reference_script_plan");
-    expect(input).toContain("open_draft 返回的 revision 作为 base_revision");
-    expect(input).toContain("1. unit E1U01 使用了全角花括号");
-    expect(input).toContain("2. unit E1U01 的台词念不完");
-    expect(useAppStore.getState().assistantPanelOpen).toBe(true);
+    expect(screen.queryByRole("button", { name: "让 Agent 修复" })).not.toBeInTheDocument();
   });
 
   it("shows an empty state when there is no script_plan content", async () => {
@@ -793,7 +770,7 @@ describe("ReferenceScriptPlanPreviewPanel", () => {
     });
   });
 
-  it("offers promotion when the draft has no violations", async () => {
+  it("shows the agent-handling notice when the draft has no violations", async () => {
     vi.spyOn(API, "getScriptReview").mockResolvedValue({
       ...quarantinedState(),
       quarantine: { content: quarantinedState().quarantine!.content, violations: [] },
@@ -803,14 +780,6 @@ describe("ReferenceScriptPlanPreviewPanel", () => {
     expect(await screen.findByText("草稿由 Agent 处理")).toBeInTheDocument();
     expect(screen.queryByText("待修复草稿 — 拆分未通过校验")).not.toBeInTheDocument();
     expect(screen.getByText("Agent 会在本集任务中继续处理草稿，完成后此处会自动更新")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "让 Agent 修复" }));
-    const input = useAssistantStore.getState().input;
-    expect(input).toContain("open_draft");
-    expect(input).toContain("promote_draft");
-    expect(input).toContain("doc_type=reference_script_plan");
-    expect(input).toContain("revision");
-    expect(input).toContain("base_revision");
-    expect(input).not.toContain("违约待修复");
     // 禁用判据是待处置草稿文件是否在场，不是重算后的违约数量——违约为空但草稿仍在场时确认依旧禁用。
     expect(screen.getByRole("button", { name: /确认拆分，继续生成/ })).toBeDisabled();
   });

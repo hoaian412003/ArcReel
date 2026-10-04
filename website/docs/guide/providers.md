@@ -7,26 +7,9 @@ update_docs: fact-check
 
 # 供应商与模型配置 {#providers}
 
-ArcReel 把 Agent（智能体）、文本生成、图像生成、视频生成和 TTS 分成独立能力。你可以为不同项目和媒体类型选择不同供应商，而不必把整条生产链绑定到一家平台。
+ArcReel 把文本生成、图像生成、视频生成和 TTS 分成独立能力。你可以为不同项目和媒体类型选择不同供应商，而不必把整条生产链绑定到一家平台。
 
-## 1. 先区分两类供应商 {#two-provider-categories}
-
-### 1.1 Agent 供应商 {#assistant-providers}
-
-Agent 负责：
-
-- 理解用户意图；
-- 分析小说和剧本；
-- 提取角色、场景和道具；
-- 规划分集；
-- 规范化剧本；
-- 编排后续生成任务。
-
-ArcReel 的 Agent Runtime 基于 Claude Agent SDK，支持 Anthropic 官方服务以及项目所支持的兼容配置。
-
-Agent 供应商不一定承担实际图片和视频生成。
-
-### 1.2 媒体与文本供应商 {#media-and-text-providers}
+## 1. 媒体与文本供应商 {#two-provider-categories}
 
 这些供应商负责：
 
@@ -37,7 +20,6 @@ Agent 供应商不一定承担实际图片和视频生成。
 
 一个完整项目可以采用组合策略，例如：
 
-- Agent：高质量推理模型；
 - 文本结构化：速度更快的文本模型；
 - 角色设计：高质量图像模型；
 - 批量分镜：低成本图像模型；

@@ -9,7 +9,6 @@ import type {
   ScriptReviewViolation,
 } from "@/types";
 import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useModelCapabilities } from "@/hooks/useModelCapabilities";
 import { useScriptReviewDraft } from "@/hooks/useScriptReviewDraft";
@@ -383,16 +382,11 @@ export function ReferenceScriptPlanPreviewPanel({
   const [overwriteOpen, setOverwriteOpen] = useState(false);
 
   const handleConfirmed = useCallback(() => {
-    // 保存 / 确认两次 await 期间用户可能已切走项目（本组件所在的 tab 可能因此被卸载）：只在项目
-    // 本身变了才抑制全局副作用，否则会把续写消息写进用户切换到的别的项目/会话。同项目内切
-    // tab（如切到「视频单元」，本面板同样会被卸载）不属于这种情况——预填文案本身带着具体
-    // 集号，写进全局 assistant 输入框依然准确，不该被同一份卸载信号误伤。
+    // 保存 / 确认两次 await 期间用户可能已切走项目：只在项目本身变了才抑制确认提示，
+    // 同项目内切 tab（本面板随之卸载）不属于这种情况。
     if (useProjectsStore.getState().currentProjectName !== projectName) return;
     pushToast(t("dashboard:review_confirmed"), "success");
-    // 确认放行 + 预填继续消息到会话输入框——只填不发送，用户自行核对后发送。
-    useAssistantStore.getState().setInput(t("reference_script_plan_confirm_continue_prefill", { episode }));
-    useAppStore.getState().setAssistantPanelOpen(true);
-  }, [projectName, episode, pushToast, t]);
+  }, [projectName, pushToast, t]);
 
   const {
     state,
@@ -439,19 +433,6 @@ export function ReferenceScriptPlanPreviewPanel({
     },
     [setDraft],
   );
-
-  const handleRequestFix = useCallback(() => {
-    const violations = state?.quarantine?.violations ?? [];
-    const report =
-      violations.length === 0
-        ? t("dashboard:review_fix_request_promote_prefill", { episode, docType: "reference_script_plan" })
-        : [
-            t("reference_script_plan_fix_request_prefill_header", { episode, count: violations.length }),
-            ...violations.map((v, i) => `${i + 1}. ${v.message}`),
-          ].join("\n");
-    useAssistantStore.getState().setInput(report);
-    useAppStore.getState().setAssistantPanelOpen(true);
-  }, [state, episode, t]);
 
   const projectHasScene = useMemo(() => Object.values(lookup).some((kind) => kind === "scene"), [lookup]);
 
@@ -615,11 +596,6 @@ export function ReferenceScriptPlanPreviewPanel({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {quarantined && (
-            <button type="button" onClick={handleRequestFix} className={GHOST_BTN_CLS}>
-              {t("reference_script_plan_request_fix")}
-            </button>
-          )}
           {confirmed && onOpenTimeline && (
             <button type="button" onClick={onOpenTimeline} className={GHOST_BTN_CLS}>
               <ArrowRight className="h-3.5 w-3.5" />

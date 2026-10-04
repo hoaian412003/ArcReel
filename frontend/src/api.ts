@@ -16,11 +16,6 @@ import type {
   EpisodeScript,
   TaskItem,
   TaskStats,
-  SessionMeta,
-  ImagePayload,
-  EntriesResponse,
-  TimelineEntry,
-  SkillInfo,
   ProjectOverview,
   ProjectChangeBatchPayload,
   ProjectEventSnapshotPayload,
@@ -115,7 +110,6 @@ import type {
   PresentationResourceType,
 } from "@/types/presentation";
 import type { Asset, AssetType, AssetCreatePayload, AssetUpdatePayload } from "@/types/asset";
-import type { AgentMemoryOverview, AgentMemoryScope } from "@/types/agent-memory";
 import type { WorkflowPlan, WorkflowPlanRequest } from "@/types/workflow";
 import type { DirectionReview, DirectionReviewDecision, FlowBoard } from "@/types/flow";
 import type { Screenplay, ScreenplayOperation } from "@/types/screenplay";
@@ -130,15 +124,6 @@ import type {
   QueueTaskListFilters,
   QueueTaskRow,
 } from "@/types/queue-monitor";
-import type {
-  AgentCredential,
-  CreateAgentCredentialRequest,
-  LocalLoginStatus,
-  PresetProvidersResponse,
-  TestConnectionRequest,
-  TestConnectionResponse,
-  UpdateAgentCredentialRequest,
-} from "@/types/agent-credential";
 import { openSseStream, type SseStreamHandle } from "@/utils/sse-stream";
 import {
   API_BASE,
@@ -156,9 +141,7 @@ import {
   type ScriptEditResult,
 } from "./api/errors";
 import type {
-  AgentProfileStatus,
   AssetRenameResult,
-  AssistantEntriesStreamOptions,
   CreateProjectPayload,
   EpisodeScriptSnapshot,
   ProjectAssetType,
@@ -174,7 +157,6 @@ import type {
 } from "./api/types";
 
 export {
-  AgentFailureError,
   ApiRequestError,
   ConflictError,
   NarratedVideoDurationError,
@@ -185,7 +167,6 @@ export {
   type ErrorResponse,
 } from "./api/errors";
 export type {
-  AgentProfileStatus,
   AssetRenameResult,
   LoginResponse,
   ProjectAssetType,
@@ -318,13 +299,6 @@ function videoCapabilitiesQuery(options: VideoCapabilitiesQuery): string {
     params.set("uses_reference_images", String(options.usesReferenceImages));
   }
   return params.size > 0 ? `?${params.toString()}` : "";
-}
-
-/** 记忆接口的路径前缀：用户记忆不带 user_id（服务端从当前登录用户派生）。 */
-function agentMemoryBase(scope: AgentMemoryScope): string {
-  return scope.level === "user"
-    ? "/agent/memory"
-    : `/projects/${encodeURIComponent(scope.projectName)}/agent-memory`;
 }
 
 /** 队列监控列表查询串：跳过 undefined / 空串。 */
@@ -519,73 +493,6 @@ class API {
 
   static async getVieneuVoices(): Promise<VieneuVoices> {
     return this.request("/vieneu/voices");
-  }
-
-  static async getAgentProfileStatus(name: string): Promise<AgentProfileStatus> {
-    return this.request(`/projects/${encodeURIComponent(name)}/agent-profile`);
-  }
-
-  static async resetAgentProfile(name: string): Promise<AgentProfileStatus> {
-    return this.request(`/projects/${encodeURIComponent(name)}/agent-profile/reset`, {
-      method: "POST",
-    });
-  }
-
-  // ==================== Agent 记忆 ====================
-
-  /**
-   * 用户记忆与项目记忆的接口形状完全一致，只有路径前缀不同；两级共用同一组方法，
-   * 调用点（同一个文件柜组件）因此只换 scope，不换调用。
-   */
-  static async getAgentMemory(
-    scope: AgentMemoryScope,
-    options: { signal?: AbortSignal } = {}
-  ): Promise<AgentMemoryOverview> {
-    return this.request(agentMemoryBase(scope), { signal: options.signal });
-  }
-
-  /** 记忆正文是含 frontmatter 的 Markdown 原文，按 text/plain 收发，不做任何解析。 */
-  static async getAgentMemoryFile(
-    scope: AgentMemoryScope,
-    filename: string,
-    options: { signal?: AbortSignal } = {}
-  ): Promise<string> {
-    const url = `${agentMemoryBase(scope)}/files/${encodeURIComponent(filename)}`;
-    const response = await fetch(`${API_BASE}${url}`, withAuth(url, { signal: options.signal }));
-    await throwIfNotOk(response, "获取记忆文件失败");
-    return response.text();
-  }
-
-  /** 纯覆盖写入：新建与保存走同一个 PUT，服务端无冲突检测。 */
-  static async saveAgentMemoryFile(
-    scope: AgentMemoryScope,
-    filename: string,
-    content: string
-  ): Promise<{ name: string }> {
-    const url = `${agentMemoryBase(scope)}/files/${encodeURIComponent(filename)}`;
-    const response = await fetch(
-      `${API_BASE}${url}`,
-      withAuth(url, {
-        method: "PUT",
-        headers: { "Content-Type": "text/plain" },
-        body: content,
-      })
-    );
-    await throwIfNotOk(response, "保存记忆文件失败");
-    return response.json() as Promise<{ name: string }>;
-  }
-
-  static async deleteAgentMemoryFile(
-    scope: AgentMemoryScope,
-    filename: string
-  ): Promise<{ name: string }> {
-    return this.request(`${agentMemoryBase(scope)}/files/${encodeURIComponent(filename)}`, {
-      method: "DELETE",
-    });
-  }
-
-  static async clearAgentMemory(scope: AgentMemoryScope): Promise<{ cleared: boolean }> {
-    return this.request(`${agentMemoryBase(scope)}/clear`, { method: "POST" });
   }
 
   static async deleteProject(name: string): Promise<SuccessResponse> {
@@ -2289,173 +2196,6 @@ class API {
     return response.json() as Promise<{ success: boolean; style_image: string; style_description: string; url: string }>;
   }
 
-  // ==================== Agent 会话 API ====================
-
-  /** Build the project-scoped assistant base path. */
-  private static assistantBase(projectName: string): string {
-    return `/projects/${encodeURIComponent(projectName)}/assistant`;
-  }
-
-  static async listAssistantSessions(
-    projectName: string,
-    status: string | null = null,
-    options: { signal?: AbortSignal } = {}
-  ): Promise<{ sessions: SessionMeta[] }> {
-    const params = new URLSearchParams();
-    if (status) params.append("status", status);
-    const query = params.toString();
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions${query ? "?" + query : ""}`,
-      { signal: options.signal }
-    );
-  }
-
-  static async getAssistantSession(
-    projectName: string,
-    sessionId: string,
-    options: { signal?: AbortSignal } = {}
-  ): Promise<{ session: SessionMeta }> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}`,
-      { signal: options.signal }
-    );
-  }
-
-  /** 冷读会话事件日志（after 为 seq 游标，-1 表示从头）。 */
-  static async listAssistantEntries(
-    projectName: string,
-    sessionId: string,
-    after: number = -1,
-    options: { signal?: AbortSignal } = {}
-  ): Promise<EntriesResponse> {
-    const query = after >= 0 ? `?after=${after}` : "";
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/entries${query}`,
-      { signal: options.signal }
-    );
-  }
-
-  static async sendAssistantMessage(
-    projectName: string,
-    content: string,
-    sessionId?: string | null,
-    images?: ImagePayload[],
-    clientKey?: string
-  ): Promise<{ session_id: string; status: string; entry: TimelineEntry | null }> {
-    return this.request(`${this.assistantBase(projectName)}/sessions/send`, {
-      method: "POST",
-      body: JSON.stringify({
-        content,
-        session_id: sessionId || undefined,
-        images: images || [],
-        client_key: clientKey || undefined,
-      }),
-    });
-  }
-
-  /**
-   * 改写会话中某条历史用户消息：服务端分叉出新会话并在其上重跑。
-   *
-   * `sessionId` 是被改写的原会话，响应里的 `session_id` 是承接改写的新会话。
-   * 运行中的会话由端点自动中断，调用方不必先停止。
-   *
-   * `images` 是锚点消息的图片附件，随改写后的文本一同进入分支会话的首条输入，
-   * 形态与发送端点一致。
-   */
-  static async rewriteAssistantMessage(
-    projectName: string,
-    sessionId: string,
-    anchorEntryUuid: string,
-    content: string,
-    images?: ImagePayload[],
-    clientKey?: string
-  ): Promise<{ status: string; session_id: string; origin_session_id: string | null; entry: TimelineEntry | null }> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/rewrite`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          anchor_entry_uuid: anchorEntryUuid,
-          content,
-          images: images || [],
-          client_key: clientKey || undefined,
-        }),
-      }
-    );
-  }
-
-  static async interruptAssistantSession(
-    projectName: string,
-    sessionId: string
-  ): Promise<SuccessResponse> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/interrupt`,
-      {
-        method: "POST",
-      }
-    );
-  }
-
-  static async answerAssistantQuestion(
-    projectName: string,
-    sessionId: string,
-    questionId: string,
-    answers: Record<string, string>
-  ): Promise<SuccessResponse> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(questionId)}/answer`,
-      {
-        method: "POST",
-        body: JSON.stringify({ answers }),
-      }
-    );
-  }
-
-  /** entry 流 SSE URL（after 为 seq 游标；断线续传由流式客户端的 Last-Event-ID 承担）。 */
-  static getAssistantEntriesStreamUrl(
-    projectName: string,
-    sessionId: string,
-    after: number = -1
-  ): string {
-    const base = `${API_BASE}${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/entries/stream`;
-    return after >= 0 ? `${base}?after=${after}` : base;
-  }
-
-  /** 订阅会话 entry 流；事件 id 即 seq，断线后自动带 Last-Event-ID 重建续传。 */
-  static openAssistantEntriesStream(options: AssistantEntriesStreamOptions): SseStreamHandle {
-    return openSseStream({
-      url: this.getAssistantEntriesStreamUrl(options.projectName, options.sessionId, options.after ?? -1),
-      headers: sseHeaders,
-      onMessage(message) {
-        const payload = parseSseJson(message.data, "会话");
-        if (payload) options.onEvent(message.event, payload);
-      },
-      onError: sseErrorHandler(options.onError),
-    });
-  }
-
-  static async listAssistantSkills(
-    projectName: string,
-    options: { signal?: AbortSignal } = {}
-  ): Promise<{ skills: SkillInfo[] }> {
-    return this.request(
-      `${this.assistantBase(projectName)}/skills`,
-      { signal: options.signal }
-    );
-  }
-
-  static async deleteAssistantSession(
-    projectName: string,
-    sessionId: string
-  ): Promise<SuccessResponse> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}`,
-      {
-        method: "DELETE",
-      }
-    );
-  }
-
   // ==================== 使用记录读接口 ====================
 
   /**
@@ -2618,60 +2358,6 @@ class API {
     );
     await throwIfNotOk(response, "上传凭证失败");
     return response.json() as Promise<ProviderCredential>;
-  }
-
-  // ==================== Agent 配置 / 凭证 API ====================
-
-  static async listAgentPresetProviders(): Promise<PresetProvidersResponse> {
-    return this.request("/agent/preset-providers");
-  }
-
-  static async listAgentCredentials(): Promise<{ credentials: AgentCredential[] }> {
-    return this.request("/agent/credentials");
-  }
-
-  static async createAgentCredential(
-    data: CreateAgentCredentialRequest,
-  ): Promise<AgentCredential> {
-    return this.request("/agent/credentials", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  static async updateAgentCredential(
-    id: number,
-    data: UpdateAgentCredentialRequest,
-  ): Promise<AgentCredential> {
-    return this.request(`/agent/credentials/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    });
-  }
-
-  static async deleteAgentCredential(id: number): Promise<void> {
-    return this.request(`/agent/credentials/${id}`, { method: "DELETE" });
-  }
-
-  static async activateAgentCredential(id: number): Promise<{ active_id: number }> {
-    return this.request(`/agent/credentials/${id}/activate`, { method: "POST" });
-  }
-
-  static async getLocalLoginStatus(): Promise<LocalLoginStatus> {
-    return this.request("/agent/local-login/status");
-  }
-
-  static async testAgentCredential(id: number): Promise<TestConnectionResponse> {
-    return this.request(`/agent/credentials/${id}/test`, { method: "POST" });
-  }
-
-  static async testAgentConnectionDraft(
-    data: TestConnectionRequest,
-  ): Promise<TestConnectionResponse> {
-    return this.request("/agent/test-connection", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
   }
 
   // ==================== 自定义供应商 API ====================

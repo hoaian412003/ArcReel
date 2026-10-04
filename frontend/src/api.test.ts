@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  AgentFailureError,
   API,
   ApiRequestError,
   ConflictError,
@@ -168,46 +167,6 @@ describe("API", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       await expect(API.request("/projects")).rejects.toThrow("Service Unavailable");
-    });
-
-    it("preserves a structured Agent startup failure observation", async () => {
-      const failure = {
-        version: 1,
-        phase: "startup" as const,
-        timestamp: "2026-07-23T01:02:03Z",
-        project_name: "demo",
-        session_id: null,
-        summary: {
-          source: "local_exception",
-          type: "NotImplementedError",
-          message: null,
-        },
-        raw: {
-          exception_chain: [{ type: "NotImplementedError", message: "", vendor_field: "keep-me" }],
-          sdk_stderr: "stderr evidence",
-        },
-      };
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-        mockResponse({
-          ok: false,
-          status: 502,
-          statusText: "Bad Gateway",
-          jsonData: {
-            detail: {
-              code: "agent_startup_failed",
-              message: "Agent 启动失败",
-              failure,
-            },
-          },
-        }),
-      ));
-
-      const error: AgentFailureError = await API.sendAssistantMessage("demo", "hello").catch((e) => e);
-
-      expect(error).toBeInstanceOf(AgentFailureError);
-      expect(error.message).toBe("Agent 启动失败");
-      expect(error.code).toBe("agent_startup_failed");
-      expect(error.failure).toEqual(failure);
     });
 
     it("preserves and presents a structured speech admission blocker", async () => {
@@ -675,7 +634,7 @@ describe("API", () => {
       expect(requestSpy).toHaveBeenCalledOnce();
     });
 
-    it("covers task, assistant, version and usage query builders", async () => {
+    it("covers task and version query builders", async () => {
       const requestSpy = vi
         .spyOn(API, "request")
         .mockResolvedValue({ success: true } as never);
@@ -700,15 +659,6 @@ describe("API", () => {
       await API.getVersions("demo", "storyboards", "seg-1");
       await API.restoreVersion("demo", "storyboards", "seg-1", 3);
 
-      await API.listAssistantSessions("demo", "running");
-      await API.getAssistantSession("demo", "session-1");
-      await API.listAssistantEntries("demo", "session-1", 5);
-      await API.sendAssistantMessage("demo", "hello", "session-1");
-      await API.interruptAssistantSession("demo", "session-1");
-      await API.answerAssistantQuestion("demo", "session-1", "q-1", { key: "a" });
-      await API.listAssistantSkills("demo");
-      await API.deleteAssistantSession("demo", "session-1");
-
       expect(requestSpy).toHaveBeenCalledWith("/tasks/task%20id");
       expect(requestSpy).toHaveBeenCalledWith(
         "/tasks?project_name=demo&status=running&task_type=video&source=webui&page=2&page_size=10",
@@ -717,15 +667,6 @@ describe("API", () => {
         "/projects/demo/tasks?status=failed&task_type=image&source=agent&page=3&page_size=20",
       );
       expect(requestSpy).toHaveBeenCalledWith("/tasks/stats?project_name=demo");
-      expect(requestSpy).toHaveBeenCalledWith(
-        "/projects/demo/assistant/sessions?status=running",
-        { signal: undefined },
-      );
-      expect(requestSpy).toHaveBeenCalledWith(
-        "/projects/demo/assistant/sessions/session-1/entries?after=5",
-        { signal: undefined },
-      );
-      expect(requestSpy).toHaveBeenCalledWith("/projects/demo/assistant/skills", { signal: undefined });
     });
 
     it("builds static file and stream urls", () => {
@@ -734,12 +675,6 @@ describe("API", () => {
       );
       expect(API.getFileUrl("my project", "source/a.txt", 3)).toBe(
         "/api/v1/files/my%20project/source/a.txt?v=3",
-      );
-      expect(API.getAssistantEntriesStreamUrl("demo", "session-1")).toBe(
-        "/api/v1/projects/demo/assistant/sessions/session-1/entries/stream",
-      );
-      expect(API.getAssistantEntriesStreamUrl("demo", "session-1", 7)).toBe(
-        "/api/v1/projects/demo/assistant/sessions/session-1/entries/stream?after=7",
       );
     });
 
@@ -1320,36 +1255,34 @@ describe("API", () => {
       handle.close();
     });
 
-    it("openAssistantEntriesStream resumes with Last-Event-ID after a drop and stops on 401", async () => {
+    it("openProjectEventStream resumes with Last-Event-ID after a drop and stops on 401", async () => {
       vi.useFakeTimers();
       setToken("jwt-1");
       const fake = stubSseFetch((index) => (index < 2 ? 200 : 401));
-      const onEvent = vi.fn();
+      const onChanges = vi.fn();
+      const onSnapshot = vi.fn();
       const onError = vi.fn();
 
-      const handle = API.openAssistantEntriesStream({
+      const handle = API.openProjectEventStream({
         projectName: "demo",
-        sessionId: "session-1",
-        after: 4,
-        onEvent,
+        onSnapshot,
+        onChanges,
         onError,
       });
       await flushStream();
 
-      expect(fake.latest.url).toBe("/api/v1/projects/demo/assistant/sessions/session-1/entries/stream?after=4");
+      expect(fake.latest.url).toBe("/api/v1/projects/demo/events/stream");
       expect(fake.latest.headers.get("Authorization")).toBe("Bearer jwt-1");
       expect(fake.latest.headers.has("Last-Event-ID")).toBe(false);
 
-      fake.latest.emit("entry", { seq: 5, type: "user" }, "5");
-      fake.latest.emit("status", { status: "running" });
+      fake.latest.emit("changes", { fingerprint: "f5", changes: [] }, "5");
+      fake.latest.emit("snapshot", { fingerprint: "f6" });
       await flushStream();
       fake.latest.fail();
       await flushStream();
 
-      expect(onEvent.mock.calls).toEqual([
-        ["entry", { seq: 5, type: "user" }],
-        ["status", { status: "running" }],
-      ]);
+      expect(onChanges).toHaveBeenCalledWith({ fingerprint: "f5", changes: [] });
+      expect(onSnapshot).toHaveBeenCalledWith({ fingerprint: "f6" });
 
       await vi.advanceTimersByTimeAsync(1000);
       await flushStream();
@@ -1669,79 +1602,6 @@ describe("custom endpoint test multipart", () => {
     expect(form.getAll("reference_images")).toEqual([ref1, ref2]);
     expect(form.getAll("reference_audio_files")).toEqual([audio]);
     expect((options.headers as Headers).has("Content-Type")).toBe(false);
-  });
-});
-
-describe("Agent 记忆的两级路径", () => {
-  beforeEach(() => {
-    globalThis.fetch = vi.fn();
-  });
-
-  function fetchMock() {
-    return globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-  }
-
-  it("用户记忆挂在不带 user_id 的路径上", async () => {
-    fetchMock().mockResolvedValueOnce(
-      new Response(JSON.stringify({ path: "/m", index: {}, files: [] }), { status: 200 }),
-    );
-    await API.getAgentMemory({ level: "user" });
-    expect(fetchMock().mock.calls[0]![0]).toBe("/api/v1/agent/memory");
-  });
-
-  it("项目记忆把项目名转义进路径", async () => {
-    fetchMock().mockResolvedValueOnce(
-      new Response(JSON.stringify({ path: "/m", index: {}, files: [] }), { status: 200 }),
-    );
-    await API.getAgentMemory({ level: "project", projectName: "my project" });
-    expect(fetchMock().mock.calls[0]![0]).toBe("/api/v1/projects/my%20project/agent-memory");
-  });
-
-  it("读取正文按 text/plain 原样取回，不做 JSON 解析", async () => {
-    fetchMock().mockResolvedValueOnce(
-      new Response("---\nname: tone\n---\n正文", {
-        status: 200,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-      }),
-    );
-    const content = await API.getAgentMemoryFile({ level: "user" }, "tone.md");
-    expect(content).toBe("---\nname: tone\n---\n正文");
-    expect(fetchMock().mock.calls[0]![0]).toBe("/api/v1/agent/memory/files/tone.md");
-  });
-
-  it("写入把正文整段作为请求体发出", async () => {
-    fetchMock().mockResolvedValueOnce(new Response(JSON.stringify({ name: "tone.md" }), { status: 200 }));
-    await API.saveAgentMemoryFile({ level: "project", projectName: "demo" }, "tone.md", "正文");
-    const [url, init] = fetchMock().mock.calls[0]! as [string, RequestInit];
-    expect(url).toBe("/api/v1/projects/demo/agent-memory/files/tone.md");
-    expect(init.method).toBe("PUT");
-    expect(init.body).toBe("正文");
-    expect(new Headers(init.headers).get("Content-Type")).toBe("text/plain");
-  });
-
-  it("清空走两级各自的 clear 端点", async () => {
-    fetchMock()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ cleared: true }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ cleared: true }), { status: 200 }));
-    await API.clearAgentMemory({ level: "user" });
-    await API.clearAgentMemory({ level: "project", projectName: "demo" });
-    expect(fetchMock().mock.calls[0]![0]).toBe("/api/v1/agent/memory/clear");
-    expect(fetchMock().mock.calls[1]![0]).toBe("/api/v1/projects/demo/agent-memory/clear");
-  });
-
-  it("删除单个文件带上文件名与 DELETE 方法", async () => {
-    fetchMock().mockResolvedValueOnce(new Response(JSON.stringify({ name: "MEMORY.md" }), { status: 200 }));
-    await API.deleteAgentMemoryFile({ level: "user" }, "MEMORY.md");
-    const [url, init] = fetchMock().mock.calls[0]! as [string, RequestInit];
-    expect(url).toBe("/api/v1/agent/memory/files/MEMORY.md");
-    expect(init.method).toBe("DELETE");
-  });
-
-  it("读取失败时把后端说明带进异常", async () => {
-    fetchMock().mockResolvedValueOnce(
-      new Response(JSON.stringify({ detail: "记忆文件不存在" }), { status: 404 }),
-    );
-    await expect(API.getAgentMemoryFile({ level: "user" }, "missing.md")).rejects.toThrow("记忆文件不存在");
   });
 });
 

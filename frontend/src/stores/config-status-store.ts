@@ -8,21 +8,19 @@ import { useEndpointCatalogStore } from "./endpoint-catalog-store";
 
 export interface ConfigIssue {
   key: string;
-  tab: "agent" | "providers" | "media" | "usage";
+  tab: "providers" | "media" | "usage";
   label: string;
 }
 
 async function getConfigStatus(): Promise<{
   issues: ConfigIssue[];
   availableMediaTypes: string[];
-  isEmbeddedAgentConfigured: boolean;
 }> {
   const issues: ConfigIssue[] = [];
 
-  const [{ providers }, { providers: customProviders }, configRes] = await Promise.all([
+  const [{ providers }, { providers: customProviders }] = await Promise.all([
     API.getProviders(),
     API.listCustomProviders(),
-    API.getSystemConfig(),
   ]);
 
   // Check any provider supports each required media type.
@@ -72,11 +70,7 @@ async function getConfigStatus(): Promise<{
   // 可用性经 availableMediaTypes 暴露给生成入口做"请先配置 audio 供应商"前置提示。
   const availableMediaTypes = ["image", "video", "text", "audio"].filter(hasMediaType);
 
-  return {
-    issues,
-    availableMediaTypes,
-    isEmbeddedAgentConfigured: configRes.settings.anthropic_api_key?.is_set ?? false,
-  };
+  return { issues, availableMediaTypes };
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +79,6 @@ async function getConfigStatus(): Promise<{
 
 interface ConfigStatusState {
   issues: ConfigIssue[];
-  isEmbeddedAgentConfigured: boolean;
   /** 当前已就绪供应商（含自定义）覆盖到的媒体类型集合。 */
   availableMediaTypes: string[];
   isComplete: boolean;
@@ -109,18 +102,17 @@ export const useConfigStatusStore = create<ConfigStatusState>((set, get) => {
     for (;;) {
       set({ loading: true, pendingRefresh: false });
       try {
-        const { issues, availableMediaTypes, isEmbeddedAgentConfigured } = await getConfigStatus();
+        const { issues, availableMediaTypes } = await getConfigStatus();
         set({
           issues,
           availableMediaTypes,
-          isEmbeddedAgentConfigured,
           isComplete: issues.length === 0,
           initialized: true,
         });
       } catch {
         // 失败回退未初始化并清空能力集：避免任何消费方（含未来不检查 initialized 的调用方）
         // 把上一次成功的过期数据当作可信，同时让下次 fetch() 仍可重试。
-        set({ initialized: false, availableMediaTypes: [], isEmbeddedAgentConfigured: false });
+        set({ initialized: false, availableMediaTypes: [] });
       }
       // loading 仅在整条链终止时才置 false:补跑间隙保持 true,避免 true→false→true 闪烁。
       if (!get().pendingRefresh) {
@@ -132,7 +124,6 @@ export const useConfigStatusStore = create<ConfigStatusState>((set, get) => {
 
   return {
     issues: [],
-    isEmbeddedAgentConfigured: false,
     availableMediaTypes: [],
     isComplete: true,
     loading: false,

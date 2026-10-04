@@ -205,8 +205,6 @@ MOTIVE_OVERRIDES = {
     "lib.artifacts.artifact_manifest._O_NOFOLLOW": MOTIVE_IO,
     "server.routers.system_config._read_app_version": MOTIVE_IO,
     "server.services.system.diagnostics._app_version": MOTIVE_IO,
-    "server.app._DOCKERENV_PATH": MOTIVE_IO,
-    "server.app._CGROUP_PATH": MOTIVE_IO,
     "server.app._migrate_source_encoding_on_startup": MOTIVE_IO,
     "server.routers.custom_providers._run_discover": MOTIVE_IO,
     "server.routers.custom_providers._test_google": MOTIVE_IO,
@@ -216,7 +214,6 @@ MOTIVE_OVERRIDES = {
     "server.services.tasks.reference_video_tasks._stage_provider_media_for_task": MOTIVE_IO,
     "server.services.grid.grid_split._register_split_entries_atomically": MOTIVE_IO,
     # 名字像 I/O，实际是纯判断 / 阈值常量 / 内部编排
-    "server.agent_runtime.event_log._is_client_key_violation": MOTIVE_LOGIC,
     "lib.backends.video_backends.v2_video_generations._LARGE_IMAGE_WARN_BYTES": MOTIVE_LOGIC,
     "server.services.admission.cost_estimation.quote_video_request_from_price": MOTIVE_LOGIC,
 }

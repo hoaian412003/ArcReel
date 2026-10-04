@@ -22,7 +22,6 @@
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.20",
-    "@headlessui/react": "^2.2.10",
     "@lobehub/icons": "^5.16.0",
     "@tanstack/react-virtual": "^3.14.9",
     "@visx/axis": "^4.0.0",

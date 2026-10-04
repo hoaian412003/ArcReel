@@ -6,7 +6,6 @@ import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
 import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -46,7 +45,6 @@ function renderAt(path: string) {
 function resetStores(): void {
   useAppStore.setState(useAppStore.getInitialState(), true);
   useProjectsStore.setState(useProjectsStore.getInitialState(), true);
-  useAssistantStore.setState(useAssistantStore.getInitialState(), true);
 }
 
 describe("AppRoutes", () => {
@@ -80,7 +78,7 @@ describe("AppRoutes", () => {
     expect(screen.getByText("页面未找到")).toBeInTheDocument();
   });
 
-  it("loads project workspace and resets assistant state", async () => {
+  it("loads project workspace", async () => {
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {
         title: "Demo Project",
@@ -94,24 +92,6 @@ describe("AppRoutes", () => {
       scripts: {},
     });
 
-    useAssistantStore.setState({
-      sessions: [
-        {
-          id: "session-1",
-          project_name: "old",
-          title: "Old",
-          status: "idle",
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
-        },
-      ],
-      currentSessionId: "session-1",
-      turns: [{ type: "user", content: [{ type: "text", text: "hello" }] }],
-      draftTurn: { type: "assistant", content: [{ type: "text", text: "draft" }] },
-      sessionStatus: "running",
-      isDraftSession: true,
-    });
-
     const view = renderAt("/app/projects/demo");
 
     expect(await screen.findByTestId("studio-layout")).toBeInTheDocument();
@@ -119,14 +99,6 @@ describe("AppRoutes", () => {
     await waitFor(() => {
       expect(API.getProject).toHaveBeenCalledWith("demo", { signal: expect.any(AbortSignal) });
     });
-
-    const assistant = useAssistantStore.getState();
-    expect(assistant.sessions).toEqual([]);
-    expect(assistant.currentSessionId).toBeNull();
-    expect(assistant.turns).toEqual([]);
-    expect(assistant.draftTurn).toBeNull();
-    expect(assistant.sessionStatus).toBeNull();
-    expect(assistant.isDraftSession).toBe(false);
 
     await waitFor(() => {
       const projectState = useProjectsStore.getState();
@@ -142,7 +114,7 @@ describe("AppRoutes", () => {
 
   it("切换界面语言不重跑真实项目的加载", async () => {
     // 回归：演示项目的常量随 `t` 重灌，但这条依赖不能落到真实项目的加载 effect 上——
-    // 否则切语言会先清空 store 闪一次空态，还连带清掉 Agent 会话状态。
+    // 否则切语言会先清空 store 闪一次空态。
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {
         title: "Demo Project",
@@ -309,7 +281,6 @@ describe("AppRoutes", () => {
     // 让配置拉取失败 → store 保持未初始化 → loader 按退避重试
     vi.spyOn(API, "getProviders").mockRejectedValue(new Error("backend not ready"));
     vi.spyOn(API, "listCustomProviders").mockRejectedValue(new Error("backend not ready"));
-    vi.spyOn(API, "getSystemConfig").mockRejectedValue(new Error("backend not ready"));
 
     renderAt("/app/projects");
 
@@ -325,24 +296,4 @@ describe("AppRoutes", () => {
     await vi.advanceTimersByTimeAsync(1600);
     expect(API.getProviders).toHaveBeenCalledTimes(3);
   });
-
-  it.each([
-    [false, false],
-    [true, true],
-  ])(
-    "无开合记忆时按内嵌智能体凭证状态初始化面板: configured=%s",
-    async (isEmbeddedAgentConfigured, expectedOpen) => {
-      useAppStore.setState({
-        assistantPanelOpen: !expectedOpen,
-        assistantPanelInitialized: false,
-      });
-      useConfigStatusStore.setState({ initialized: true, isEmbeddedAgentConfigured });
-
-      renderAt("/app/projects");
-
-      await waitFor(() => {
-        expect(useAppStore.getState().assistantPanelOpen).toBe(expectedOpen);
-      });
-    },
-  );
 });

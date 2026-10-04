@@ -49,15 +49,6 @@ REFERENCE_VIDEO_PROMPT_AUTHORING_QUARANTINE_FILENAME = "prompt_authoring_referen
 DRAMA_SCRIPT_PLAN_QUARANTINE_FILENAME = "script_plan_normalized_script.invalid.json"
 NARRATION_SCRIPT_PLAN_QUARANTINE_FILENAME = "script_plan_segments.invalid.json"
 
-#: 对 Agent 写禁的正式 script_plan 文件名（见 ``AgentAccessPolicy._is_protected_formal_script_plan``）。
-#: 收的是文件名而非按项目变体解析的路径：写禁在会话装配前就要成立，而项目的 content_mode /
-#: generation_mode 是运行时可变的，按项目状态分叉判定会让改过模式的项目落进无人拦的缝里。
-#: 判据是「该变体的修改已有草稿通道可走」——写禁与替代通道成对出现，只拒不给出路会
-#: 把 Agent 卡死。三条路线的正式 script_plan 均已有草稿通道，故三个文件名全部在表内。
-AGENT_PROTECTED_SCRIPT_PLAN_FILENAMES: frozenset[str] = frozenset(
-    {SCRIPT_PLAN_FILENAMES["drama"], SCRIPT_PLAN_FILENAMES["narration"], REFERENCE_VIDEO_SCRIPT_PLAN_FILENAME}
-)
-
 
 def script_plan_filename(content_mode: str) -> str | None:
     """该 content_mode 的结构化 script_plan 文件名；不走结构化 script_plan（如 ad）时返回 None。"""

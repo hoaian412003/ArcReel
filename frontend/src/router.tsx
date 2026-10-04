@@ -24,7 +24,6 @@ import {
 import { setApiReadOnly } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { errMsg } from "@/utils/async";
@@ -57,12 +56,7 @@ function ConfigStatusLoader() {
     const tick = async () => {
       await useConfigStatusStore.getState().fetch();
       if (cancelled) return;
-      const configStatus = useConfigStatusStore.getState();
-      if (configStatus.initialized) {
-        useAppStore
-          .getState()
-          .initializeAssistantPanel(configStatus.isEmbeddedAgentConfigured);
-      } else if (attempts < 5) {
+      if (!useConfigStatusStore.getState().initialized && attempts < 5) {
         attempts += 1;
         timer = setTimeout(() => void tick(), 800 * attempts);
       }
@@ -127,18 +121,11 @@ function StudioWorkspace() {
     tRef.current = t;
   }, [t]);
 
-  // 项目生命周期：清空上一个项目的 Agent 状态，再按项目类型取数据。
+  // 项目生命周期：按项目类型取数据。
   // 依赖里不含 `t` —— 界面语言变化只该重灌演示常量（见下一个 effect），不该让真实项目
-  // 整条加载重跑（会先清空 store 闪一次空态，还会连带清掉 Agent 会话状态）。
+  // 整条加载重跑（会先清空 store 闪一次空态）。
   useEffect(() => {
     if (!projectName) return;
-
-    const assistantState = useAssistantStore.getState();
-    assistantState.setSessions([]);
-    assistantState.setCurrentSessionId(null);
-    assistantState.resetTimeline();
-    assistantState.setSessionStatus(null);
-    assistantState.setIsDraftSession(false);
 
     // 引导演示项目在磁盘上并不存在：数据直接来自前端常量，不发请求，并在这段生命周期内
     // 锁死写请求。数据本身由下一个 effect 灌入。
