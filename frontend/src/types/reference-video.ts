@@ -103,6 +103,60 @@ export interface ReferenceVideoUnit {
   end_frame?: string;
   continuity_in?: string;
   continuity_out?: string;
+  /** 导演步骤写下的镜头表、台词落位、同期声与配乐；存量单元缺席。Mirrors ReferenceUnitDirectionOutput。 */
+  shots?: ReferenceShot[];
+  lines?: ReferenceLine[];
+  sounds?: string;
+  music?: string;
+}
+
+/** 运镜类型；取值与 lib/script/script_models.py 的 ReferenceCameraType 一一对应（MiniMax H3 官方运镜词表）。 */
+export const REFERENCE_CAMERA_TYPES = [
+  "static_shot",
+  "push_in",
+  "pull_out",
+  "zoom_in",
+  "zoom_out",
+  "pan_left",
+  "pan_right",
+  "truck_left",
+  "truck_right",
+  "tilt_up",
+  "tilt_down",
+  "pedestal_up",
+  "pedestal_down",
+  "arc_shot",
+  "tracking_shot",
+  "shake_slightly",
+  "shake_strongly",
+  "pov",
+  "roll_clockwise",
+  "roll_counterclockwise",
+] as const;
+export type ReferenceCameraType = (typeof REFERENCE_CAMERA_TYPES)[number];
+
+export const REFERENCE_CAMERA_AMPLITUDES = ["small", "medium", "large"] as const;
+export const REFERENCE_CAMERA_SPEEDS = ["slow", "normal", "fast"] as const;
+
+/** 单元里的一个镜头：切入秒数、取景、运镜（类型 + 幅度 + 速度）、动作与切镜理由。 */
+export interface ReferenceShot {
+  at_seconds: number;
+  framing: string;
+  camera: {
+    type: ReferenceCameraType;
+    amplitude?: (typeof REFERENCE_CAMERA_AMPLITUDES)[number];
+    speed?: (typeof REFERENCE_CAMERA_SPEEDS)[number];
+  };
+  action: string;
+  why_cut?: string;
+}
+
+/** 一句角色台词落在哪一镜、怎么说。 */
+export interface ReferenceLine {
+  speaker: string;
+  text: string;
+  shot: number;
+  delivery?: string;
 }
 
 /** 单元类型；取值与 lib/script/script_models.py 的 ReferenceUnitType 一一对应。 */
@@ -139,6 +193,8 @@ export interface DirectorBeat {
 export interface DirectorPerformance {
   character: string;
   note: string;
+  /** 说话角色的声音（音高、音色、语速）；导演步骤写入，存量说明缺席。 */
+  voice?: string;
 }
 
 /** 导演说明的可写字段；未传 = 不改，空串 / 空数组 = 清空。 */
@@ -151,6 +207,10 @@ export interface UnitDirectionPatch {
   end_frame?: string;
   continuity_in?: string;
   continuity_out?: string;
+  shots?: ReferenceShot[];
+  lines?: ReferenceLine[];
+  sounds?: string;
+  music?: string;
 }
 
 export type DubGender = "male" | "female";

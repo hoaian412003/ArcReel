@@ -62,11 +62,14 @@ from lib.script.reference_video.unit_capabilities import hydrate_reference_units
 from lib.script.reference_video.voice_settings import VoiceRenderSettings
 from lib.script.script_editor import ScriptEditError
 from lib.script.script_models import (
+    REFERENCE_DIRECTION_OUTPUT_FIELDS,
     REFERENCE_UNIT_DIRECTION_FIELDS,
     DirectorBeat,
-    DirectorPerformance,
     DubGender,
     DubLine,
+    ReferenceLine,
+    ReferencePerformance,
+    ReferenceShot,
     ReferenceUnitType,
 )
 from lib.speech.dub_settings import project_dub_target_language
@@ -451,11 +454,22 @@ class PatchUnitRequest(BaseModel):
     unit_type: ReferenceUnitType | None = None
     brief: str | None = None
     beats: list[DirectorBeat] | None = None
-    performance: list[DirectorPerformance] | None = None
+    performance: list[ReferencePerformance] | None = None
     must_not_show: str | None = None
     end_frame: str | None = None
     continuity_in: str | None = None
     continuity_out: str | None = None
+    # 导演步骤的镜头表、台词落位、同期声与配乐；形状见 ``ReferenceUnitDirectionOutput``。
+    shots: list[ReferenceShot] | None = None
+    lines: list[ReferenceLine] | None = None
+    sounds: str | None = None
+    music: str | None = None
+
+
+#: 解析预览「导演指南」可写的导演字段：存量字段与导演步骤的新字段的并集。
+_EDITABLE_DIRECTION_FIELDS: tuple[str, ...] = tuple(
+    dict.fromkeys((*REFERENCE_UNIT_DIRECTION_FIELDS, *REFERENCE_DIRECTION_OUTPUT_FIELDS))
+)
 
 
 def _find_unit(script: dict, unit_id: str, _t: Translator) -> dict:
@@ -488,7 +502,7 @@ async def patch_unit(
         fields["transition_to_next"] = req.transition_to_next
     if req.note is not None:
         fields["note"] = req.note
-    for direction_field in REFERENCE_UNIT_DIRECTION_FIELDS:
+    for direction_field in _EDITABLE_DIRECTION_FIELDS:
         value = getattr(req, direction_field)
         if value is not None:
             fields[direction_field] = [item.model_dump() for item in value] if isinstance(value, list) else value

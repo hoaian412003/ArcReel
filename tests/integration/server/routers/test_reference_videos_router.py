@@ -236,9 +236,49 @@ def test_patch_unit_saves_director_notes_and_leaves_other_fields_alone(reference
     assert unit["brief"] == "他想回家，危险逼近。"
 
 
+def test_patch_unit_saves_the_directors_shots_lines_voice_and_sound(reference_videos_client: TestClient):
+    """导演步骤写下的镜头表、台词落位、声音与配乐同样能在解析预览里改；没传的字段原样保留。"""
+    uid = _seed_unit(reference_videos_client)
+    url = f"/api/v1/projects/demo/reference-videos/episodes/1/units/{uid}"
+    shot = {
+        "at_seconds": 0,
+        "framing": "中景，张三居中",
+        "camera": {"type": "push_in", "amplitude": "small", "speed": "slow"},
+        "action": "推门",
+        "why_cut": "",
+    }
+
+    saved = reference_videos_client.patch(
+        url,
+        json={
+            "shots": [shot],
+            "lines": [{"speaker": "张三", "text": "我回来了。", "shot": 1, "delivery": "轻声"}],
+            "performance": [{"character": "张三", "note": "迟疑", "voice": "低沉，语速慢"}],
+            "sounds": "门轴吱呀",
+            "music": "低音提琴长音",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    unit = saved.json()["unit"]
+    assert unit["shots"][0]["camera"] == {"type": "push_in", "amplitude": "small", "speed": "slow"}
+    assert unit["lines"][0]["shot"] == 1
+    assert unit["performance"][0]["voice"] == "低沉，语速慢"
+    assert unit["sounds"] == "门轴吱呀"
+
+    cleared = reference_videos_client.patch(url, json={"music": ""})
+    assert cleared.json()["unit"]["music"] == ""
+    assert cleared.json()["unit"]["shots"][0]["action"] == "推门"
+
+
 @pytest.mark.parametrize(
     "body",
-    [{"unit_type": "not-a-type"}, {"beats": [{"at_pct": 101, "action": "x"}]}, {"beats": [{"action": "缺百分比"}]}],
+    [
+        {"unit_type": "not-a-type"},
+        {"beats": [{"at_pct": 101, "action": "x"}]},
+        {"beats": [{"action": "缺百分比"}]},
+        {"shots": [{"at_seconds": 0, "framing": "f", "camera": {"type": "dolly_zoom"}, "action": "a"}]},
+        {"lines": [{"speaker": "张三", "text": "x", "shot": 0}]},
+    ],
 )
 def test_patch_unit_rejects_malformed_director_notes(reference_videos_client: TestClient, body: dict):
     uid = _seed_unit(reference_videos_client)
