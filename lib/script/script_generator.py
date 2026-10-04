@@ -114,10 +114,14 @@ from lib.script.script_models import (
     AdReferenceFlatScript,
     AdVisualScript,
     DramaEpisodeScript,
+    DramaImageScript,
     DramaSceneContent,
+    DramaVideoScript,
     DramaVisualScript,
     NarrationEpisodeScript,
+    NarrationImageEpisodeScript,
     NarrationScriptPlanDraft,
+    NarrationVideoEpisodeScript,
     NarrationVisualEpisodeScript,
     ReferencePromptAuthoringFlatScript,
     ReferencePromptAuthoringH3FlatScript,
@@ -168,6 +172,18 @@ _VISUAL_RESPONSE_SCHEMA: dict[str, type[BaseModel]] = {
     "scenes": DramaVisualScript,
     "shots": AdVisualScript,
 }
+
+#: 分两轮编写的骨架：第一轮只写 image_prompt，第二轮看着已定画面只写 video_prompt。广告分镜仍一轮写完。
+_TWO_PASS_SCHEMAS: dict[str, dict[str, type[BaseModel]]] = {
+    "segments": {"image_prompt": NarrationImageEpisodeScript, "video_prompt": NarrationVideoEpisodeScript},
+    "scenes": {"image_prompt": DramaImageScript, "video_prompt": DramaVideoScript},
+}
+
+
+def _has_prompt(value: object) -> bool:
+    """条目上已经写好的提示词：结构形态，或非空白的文本形态。"""
+    return isinstance(value, dict) or (isinstance(value, str) and bool(value.strip()))
+
 
 # 质量探针阈值：仅捕极端短样本，正常完整描述应远超这些值。
 _QUALITY_PROBE_SCENE_MIN_LEN = 40
@@ -458,6 +474,15 @@ class ScriptGenerator:
         if targets.kind == "scenes":
             for scene in targets.entries:
                 require_script_unit_admitted("scenes", scene, ignore_marker=True)
+        if targets.kind in _TWO_PASS_SCHEMAS:
+            return await self._author_in_two_passes(
+                episode,
+                filename,
+                targets,
+                formal_baseline=formal_baseline,
+                instructions=instructions,
+                rewrite=bool(entry_ids),
+            )
         logger.info(
             "正在为第 %d 集编写提示词（%s，%d/%d 个条目）...",
             episode,
@@ -487,13 +512,158 @@ class ScriptGenerator:
         logger.info("剧本已保存至 %s", saved_path)
         return saved_path
 
+    async def _author_in_two_passes(
+        self,
+        episode: int,
+        filename: str,
+        targets: PromptAuthoringTargets,
+        *,
+        formal_baseline: str | None,
+        instructions: str | None,
+        rewrite: bool,
+    ) -> Path:
+        """分镜路线（旁白 / 剧情）的提示词编写：第一轮写 image_prompt，第二轮看着已定画面写 video_prompt。
+
+        第一轮的结果先落盘（条目仍带待编写标记），第二轮失败时下次只补第二轮，不重写已定的画面。
+        ``rewrite``（显式点名条目）时两轮都重写这些条目；否则第一轮只补还没有画面的条目。
+        """
+        schemas = _TWO_PASS_SCHEMAS[targets.kind]
+        entries = [dict(entry) for entry in targets.entries]
+        baseline = formal_baseline
+        need_image = [entry for entry in entries if rewrite or not _has_prompt(entry.get("image_prompt"))]
+        if need_image:
+            logger.info("正在为第 %d 集编写画面（%s，%d 个条目）...", episode, targets.kind, len(need_image))
+            image_targets = replace(targets, entries=tuple(need_image))
+            result = await self._generate_text(
+                TextGenerationRequest(
+                    prompt=await self._build_visual_prompt(episode, image_targets, instructions, write_image=True),
+                    response_schema=schemas["image_prompt"],
+                    max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+                )
+            )
+            images = self._merge_pass(
+                image_targets,
+                self._parse_pass(
+                    result.text, targets.kind, schemas["image_prompt"], id_field=targets.id_field, field="image_prompt"
+                ),
+                episode,
+                "image_prompt",
+            )
+            by_id = {str(entry[targets.id_field]): entry for entry in images}
+            entries = [by_id.get(str(entry[targets.id_field]), entry) for entry in entries]
+            baseline = await self._save_pending_progress(targets, entries, filename, baseline)
+
+        logger.info("正在为第 %d 集编写视频提示词（%s，%d 个条目）...", episode, targets.kind, len(entries))
+        video_targets = replace(targets, entries=tuple(entries))
+        result = await self._generate_text(
+            TextGenerationRequest(
+                prompt=await self._build_visual_prompt(episode, video_targets, instructions, write_image=False),
+                response_schema=schemas["video_prompt"],
+                max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+            )
+        )
+        authored = self._merge_pass(
+            video_targets,
+            self._parse_pass(
+                result.text, targets.kind, schemas["video_prompt"], id_field=targets.id_field, field="video_prompt"
+            ),
+            episode,
+            "video_prompt",
+        )
+        script_data = self._authored_script(episode, targets, authored)
+        pm = ProjectManager.for_project_dir(self.project_path)
+        saved_path = await run_sync_transaction(
+            pm.save_script,
+            self.project_path.name,
+            script_data,
+            filename,
+            validate=True,
+            expected_fingerprint=baseline,
+        )
+        self._quality_probe(script_data, episode)
+        logger.info("剧本已保存至 %s", saved_path)
+        return saved_path
+
+    async def _save_pending_progress(
+        self, targets: PromptAuthoringTargets, entries: list[dict], filename: str, baseline: str | None
+    ) -> str | None:
+        """第一轮结果落盘：条目写入画面、保留待编写标记；返回落盘后的内容指纹，作第二轮写回的并发基线。"""
+        by_id = {str(entry[targets.id_field]): entry for entry in entries}
+        script = dict(targets.script)
+        script[targets.kind] = [
+            by_id.get(str(item.get(targets.id_field)), item) if isinstance(item, dict) else item
+            for item in targets.items
+        ]
+        pm = ProjectManager.for_project_dir(self.project_path)
+        await run_sync_transaction(
+            pm.save_script,
+            self.project_path.name,
+            script,
+            filename,
+            validate=True,
+            expected_fingerprint=baseline,
+        )
+        return await asyncio.to_thread(content_fingerprint, self.project_path / "scripts" / filename)
+
+    @staticmethod
+    def _parse_pass(response_text: str, kind: str, schema: type[BaseModel], *, id_field: str, field: str) -> list[dict]:
+        """按本轮的 response_schema 严格校验响应，返回逐条目 dict（id + 本轮字段）。
+
+        校验前只保留每个条目的对齐锚与本轮字段：模型顺手多写了另一轮的字段时不整份作废，本轮字段照常严格校验。
+        """
+        text = strip_json_code_fences(response_text)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"提示词编写 JSON 解析失败: {e}") from e
+        if isinstance(data, dict) and isinstance(data.get(kind), list):
+            data = {
+                **data,
+                kind: [
+                    {key: item[key] for key in (id_field, field) if key in item} if isinstance(item, dict) else item
+                    for item in data[kind]
+                ],
+            }
+        try:
+            validated = schema.model_validate(data)
+        except ValidationError as e:
+            raise ValueError(f"提示词编写结构校验失败: {e}") from e
+        return cast(list[dict], validated.model_dump()[kind])
+
+    @staticmethod
+    def _merge_pass(targets: PromptAuthoringTargets, items: list[dict], episode: int, field: str) -> list[dict]:
+        """把本轮字段按条目 id 写回本轮的条目：只覆盖 ``field``，其余字段原样保留；缺、多、重都 fail-loud。"""
+        id_field = targets.id_field
+        by_id: dict[str, dict] = {}
+        for item in items:
+            entry_id = str(item[id_field])
+            if entry_id in by_id:
+                raise ValueError(f"episode {episode} 的 {field} {id_field} 重复: {entry_id}")
+            by_id[entry_id] = item
+        missing = [entry_id for entry_id in targets.ids if entry_id not in by_id]
+        if missing:
+            raise ValueError(f"episode {episode} 的 {field} 缺少本次编写的条目: {missing}")
+        extra = sorted(set(by_id) - set(targets.ids))
+        if extra:
+            raise ValueError(f"episode {episode} 的 {field} 含本次编写范围之外的 {id_field}: {extra}")
+        return [{**entry, field: by_id[str(entry[id_field])][field]} for entry in targets.entries]
+
     async def _build_visual_prompt(
-        self, episode: int, targets: PromptAuthoringTargets, instructions: str | None
+        self,
+        episode: int,
+        targets: PromptAuthoringTargets,
+        instructions: str | None,
+        *,
+        write_image: bool = True,
     ) -> str:
-        """分镜类条目（segments / scenes / shots）的视觉层 prompt：输入是正式剧本里这些条目的内容字段。"""
+        """分镜类条目（segments / scenes / shots）的视觉层 prompt：输入是正式剧本里这些条目的内容字段。
+
+        旁白 / 剧情分两轮：``write_image`` 为 True 时只求 image_prompt，为 False 时只求 video_prompt（条目带着
+        第一轮定下的画面）。广告分镜一轮写完，不看这个参数。
+        """
         entries = list(targets.entries)
         if targets.kind == "scenes":
-            return self._build_drama_prompt_authoring_prompt(entries, episode, instructions)
+            return self._build_drama_prompt_authoring_prompt(entries, episode, instructions, write_image=write_image)
         if targets.kind == "shots":
             return self._build_ad_shot_prompt_authoring_prompt(episode, targets, instructions)
         return build_narration_prompt(
@@ -509,6 +679,7 @@ class ScriptGenerator:
             # 输出语言取项目 source_language，与正式剧本透传的内容字段同一语言（同 drama）
             target_language=self.project_json.get("source_language") or "中文",
             instructions=instructions,
+            write_image=write_image,
         )
 
     def _project_bucket(self, key: str) -> dict:
@@ -730,7 +901,7 @@ class ScriptGenerator:
             )
 
     def _build_drama_prompt_authoring_prompt(
-        self, content_scenes: list, episode: int, instructions: str | None = None
+        self, content_scenes: list, episode: int, instructions: str | None = None, *, write_image: bool = True
     ) -> str:
         """构建 drama prompt_authoring（视觉层）prompt：把 script_plan 内容渲染为输入，仅求 image_prompt / video_prompt。"""
         characters = self.project_json.get("characters")
@@ -752,6 +923,7 @@ class ScriptGenerator:
             scenes=scenes,
             props=props,
             instructions=instructions,
+            write_image=write_image,
         )
 
     async def _generate_and_save(
@@ -859,6 +1031,10 @@ class ScriptGenerator:
             return prompt
         if not targets.entries:
             return _NO_ENTRY_TO_AUTHOR_NOTE
+        if targets.kind in _TWO_PASS_SCHEMAS:
+            # 两轮编写：还有条目缺画面（或显式重写）时预览第一轮，否则预览第二轮。
+            image_pass = bool(entry_ids) or any(not _has_prompt(entry.get("image_prompt")) for entry in targets.entries)
+            return await self._build_visual_prompt(episode, targets, instructions, write_image=image_pass)
         if targets.kind != "video_units":
             return await self._build_visual_prompt(episode, targets, instructions)
         if self.content_mode == "ad":

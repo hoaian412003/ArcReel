@@ -749,6 +749,76 @@ class DramaVisualScript(BaseModel):
     scenes: list[DramaSceneVisual] = Field(description="各分镜视觉层（按 scene_id 对齐 script_plan 内容）")
 
 
+# ============ 提示词编写两轮（先画面、后视频） ============
+#
+# 分镜路线（旁白 / 剧情）的提示词编写分两轮调用文本模型：第一轮只写 image_prompt，第二轮看着已定的画面写
+# video_prompt。两轮各自的 response_schema 只含本轮字段，视频按画面衔接，不必在一次产出里同时兼顾两件事。
+
+
+class NarrationImageSegment(BaseModel):
+    """旁白分镜第一轮（画面）的产出：对齐锚 + image_prompt。"""
+
+    model_config = _STRICT_CONFIG
+
+    segment_id: str = Field(min_length=1, description="对齐锚：必须取自分镜表，逐一对应、不增不减")
+    image_prompt: ImagePrompt = Field(description="分镜图生成提示词")
+
+
+class NarrationImageEpisodeScript(BaseModel):
+    """旁白分镜第一轮（画面）的 response_schema。"""
+
+    title: str = Field(description="剧集标题")
+    segments: list[NarrationImageSegment] = Field(description="各分镜的画面，按 segment_id 一一对齐")
+
+
+class NarrationVideoSegment(BaseModel):
+    """旁白分镜第二轮（视频）的产出：对齐锚 + video_prompt。"""
+
+    model_config = _STRICT_CONFIG
+
+    segment_id: str = Field(min_length=1, description="对齐锚：必须取自分镜表，逐一对应、不增不减")
+    video_prompt: VideoPrompt = Field(description="视频生成提示词")
+
+
+class NarrationVideoEpisodeScript(BaseModel):
+    """旁白分镜第二轮（视频）的 response_schema。"""
+
+    title: str = Field(description="剧集标题")
+    segments: list[NarrationVideoSegment] = Field(description="各分镜的视频提示词，按 segment_id 一一对齐")
+
+
+class DramaImageScene(BaseModel):
+    """剧情分镜第一轮（画面）的产出：对齐锚 + image_prompt。"""
+
+    model_config = _STRICT_CONFIG
+
+    scene_id: str = Field(min_length=1, description="对齐锚：必须等于已定分镜的 scene_id")
+    image_prompt: ImagePrompt = Field(description="分镜图生成提示词")
+
+
+class DramaImageScript(BaseModel):
+    """剧情分镜第一轮（画面）的 response_schema。"""
+
+    title: str = Field(default="", description="剧集标题（可选）")
+    scenes: list[DramaImageScene] = Field(description="各分镜的画面（按 scene_id 对齐）")
+
+
+class DramaVideoScene(BaseModel):
+    """剧情分镜第二轮（视频）的产出：对齐锚 + video_prompt（无 dialogue，口播在 utterances）。"""
+
+    model_config = _STRICT_CONFIG
+
+    scene_id: str = Field(min_length=1, description="对齐锚：必须等于已定分镜的 scene_id")
+    video_prompt: DramaVideoPrompt = Field(description="视频生成提示词")
+
+
+class DramaVideoScript(BaseModel):
+    """剧情分镜第二轮（视频）的 response_schema。"""
+
+    title: str = Field(default="", description="剧集标题（可选）")
+    scenes: list[DramaVideoScene] = Field(description="各分镜的视频提示词（按 scene_id 对齐）")
+
+
 # ============ 广告/短片（Ad） ============
 
 

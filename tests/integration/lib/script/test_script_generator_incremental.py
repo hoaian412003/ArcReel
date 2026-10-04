@@ -72,11 +72,17 @@ def _write_plan(project_dir: Path, filename: str, document: dict[str, Any]) -> P
     return path
 
 
-def _fake_generator(responses: list[str]) -> MagicMock:
-    """按调用次序吐出预置响应；多调一次即耗尽，用例据此断言「本轮没有调用模型」。"""
+def _fake_generator(responses: list[str], *, calls_per_response: int = 1) -> MagicMock:
+    """按调用次序吐出预置响应；多调一次即耗尽，用例据此断言「本轮没有调用模型」。
+
+    分镜路线的提示词编写一次 ``generate`` 调两轮模型（画面、视频），同一份带齐视觉层的响应两轮各取所需，
+    故 ``calls_per_response=2`` 时每份响应连发两次。
+    """
     generator = MagicMock()
     generator.model = "mock"
-    generator.generate = AsyncMock(side_effect=[MagicMock(text=text) for text in responses])
+    generator.generate = AsyncMock(
+        side_effect=[MagicMock(text=text) for text in responses for _ in range(calls_per_response)]
+    )
     return generator
 
 
@@ -234,7 +240,8 @@ class _Variant:
     def generator(self, project_dir: Path, responses: list[str]) -> ScriptGenerator:
         return ScriptGenerator(
             project_dir,
-            generator=_fake_generator(responses),
+            # 旁白 / 剧情一次编写调两轮模型（画面、视频）；参考生视频一轮。
+            generator=_fake_generator(responses, calls_per_response=1 if self.items_key == "video_units" else 2),
             config_resolver=cast(ConfigResolver, FakeConfigResolver(supported_durations=(4, 6, 8))),
         )
 
@@ -823,3 +830,87 @@ class TestScriptPlanMaterialization:
         await _materialize(project_dir, plan_path)
 
         assert _script(project_dir)["title"] == "第一集"
+
+
+# ---------------------------------------------------------------------------
+# 分镜路线两轮编写：先画面、后视频
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=[NARRATION, DRAMA], ids=lambda variant: variant.name)
+def storyboard_variant(request) -> _Variant:
+    return request.param
+
+
+def _storyboard_generator(project_dir: Path, responses: list[str]) -> ScriptGenerator:
+    """逐次吐出给定响应（不重复）：用例自己决定每一轮返回什么。"""
+    return ScriptGenerator(
+        project_dir,
+        generator=_fake_generator(responses),
+        config_resolver=cast(ConfigResolver, FakeConfigResolver(supported_durations=(4, 6, 8))),
+    )
+
+
+async def test_images_are_written_first_and_the_video_pass_sees_them(
+    tmp_path: Path, storyboard_variant: _Variant
+) -> None:
+    variant = storyboard_variant
+    first, second = variant.entry_ids
+    project_dir, plan_path = variant.build(tmp_path)
+    await _materialize(project_dir, plan_path)
+    response = variant.visual_factory(first, second, mark="定稿")
+    generator = _storyboard_generator(project_dir, [response, response])
+
+    await generator.generate(1)
+
+    calls = generator.generator.generate.await_args_list
+    image_request, video_request = (call.args[0] for call in calls)
+    assert "本轮写画面" in image_request.prompt
+    assert "本轮写视频" in video_request.prompt
+    assert f"已定画面：定稿-{first}" in video_request.prompt
+    entries = _entries(_script(project_dir), variant)
+    assert all(_authored_with(entries[entry_id], variant, "定稿") for entry_id in (first, second))
+    assert all(PENDING_AUTHORING_FIELD not in entry for entry in entries.values())
+
+
+async def test_a_failed_video_pass_keeps_the_images_and_resumes_with_the_video_pass_only(
+    tmp_path: Path, storyboard_variant: _Variant
+) -> None:
+    variant = storyboard_variant
+    first, second = variant.entry_ids
+    project_dir, plan_path = variant.build(tmp_path)
+    await _materialize(project_dir, plan_path)
+    images = variant.visual_factory(first, second, mark="定稿")
+
+    with pytest.raises(ValueError, match="结构校验失败"):
+        await _storyboard_generator(project_dir, [images, json.dumps({"broken": True})]).generate(1)
+
+    halfway = _entries(_script(project_dir), variant)
+    assert all(halfway[entry_id][PENDING_AUTHORING_FIELD] is True for entry_id in (first, second))
+    assert halfway[first]["image_prompt"]["scene"] == f"定稿-{first}"
+    assert halfway[first].get("video_prompt") is None
+
+    resumed = _storyboard_generator(project_dir, [variant.visual_factory(first, second, mark="不该覆盖画面")])
+    await resumed.generate(1)
+
+    assert resumed.generator.generate.await_count == 1
+    assert "本轮写视频" in resumed.generator.generate.await_args.args[0].prompt
+    done = _entries(_script(project_dir), variant)
+    assert done[first]["image_prompt"]["scene"] == f"定稿-{first}"
+    assert done[first]["video_prompt"]
+    assert all(PENDING_AUTHORING_FIELD not in entry for entry in done.values())
+
+
+async def test_dry_run_previews_the_pass_that_would_run_next(tmp_path: Path, storyboard_variant: _Variant) -> None:
+    variant = storyboard_variant
+    first, second = variant.entry_ids
+    project_dir, plan_path = variant.build(tmp_path)
+    await _materialize(project_dir, plan_path)
+
+    assert "本轮写画面" in await _converter(project_dir).build_prompt(1)
+
+    images = variant.visual_factory(first, second, mark="定稿")
+    with pytest.raises(ValueError, match="结构校验失败"):
+        await _storyboard_generator(project_dir, [images, json.dumps({"broken": True})]).generate(1)
+
+    assert "本轮写视频" in await _converter(project_dir).build_prompt(1)

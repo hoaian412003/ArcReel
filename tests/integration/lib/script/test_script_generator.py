@@ -166,6 +166,7 @@ class _FakeTextBackend:
     def __init__(self, response_text: str = "{}"):
         self._response_text = response_text
         self.last_request = None
+        self.requests: list = []
 
     @property
     def name(self):
@@ -181,6 +182,7 @@ class _FakeTextBackend:
 
     async def generate(self, request):
         self.last_request = request
+        self.requests.append(request)
         from lib.backends.text_backends.base import TextGenerationResult
 
         return TextGenerationResult(text=self._response_text, provider="fake", model="fake-model")
@@ -686,7 +688,7 @@ class TestScriptGenerator:
 
         assert baseline_thread
         assert baseline_thread != [loop_thread]
-        assert provider_saw_tick == [True]
+        assert provider_saw_tick == [True, True]  # 画面、视频两轮各调一次模型
 
     async def test_conversion_rejects_an_unregistered_formal_script_plan(self, tmp_path):
         """脚本规划未登记进产物清单：转换拒绝读取，不落正式剧本。"""
@@ -803,7 +805,7 @@ class TestScriptGenerator:
 
     async def test_generate_drama_prompt_authoring_passes_visual_schema(self, tmp_path):
         """drama prompt_authoring LLM 输出 schema 是 DramaVisualScript（仅 scene_id + 视觉字段，无非视觉字段）。"""
-        from lib.script.script_models import DramaVisualScript
+        from lib.script.script_models import DramaImageScript, DramaVideoScript
 
         project_path = tmp_path / "projects" / "demo"
         _write_drama_ledger_project(
@@ -818,13 +820,15 @@ class TestScriptGenerator:
         generator = ScriptGenerator(project_path, generator=fake, config_resolver=_resolver())
         output = await generator.generate(1)
 
-        schema = fake.backend.last_request.response_schema
-        assert schema is DramaVisualScript
-        props = DramaVisualScript.model_json_schema()["$defs"]["DramaSceneVisual"]["properties"]
-        # 非视觉字段不进 LLM 输出 schema（工程透传，杜绝漂移）
-        assert "utterances" not in props
-        assert "source_text" not in props
-        assert "duration_seconds" not in props
+        # 两轮：先画面（DramaImageScript）、后视频（DramaVideoScript）
+        assert [request.response_schema for request in fake.backend.requests] == [DramaImageScript, DramaVideoScript]
+        for schema, item in ((DramaImageScript, "DramaImageScene"), (DramaVideoScript, "DramaVideoScene")):
+            props = schema.model_json_schema()["$defs"][item]["properties"]
+            # 非视觉字段不进 LLM 输出 schema（工程透传，杜绝漂移）
+            assert "utterances" not in props
+            assert "source_text" not in props
+            assert "duration_seconds" not in props
+        assert "image_prompt" not in DramaVideoScript.model_json_schema()["$defs"]["DramaVideoScene"]["properties"]
         scene = json.loads(output.read_text(encoding="utf-8"))["scenes"][0]
         assert scene["source_text"] == "姜月茴缓步走进庭院，抬眼望来。"
         assert scene["utterances"][0]["text"] == "你来了。"
@@ -892,7 +896,7 @@ class TestScriptGenerator:
         # 空视觉响应 → 视觉层结构校验 fail-loud；但模型调用已发生，仍可断言请求参数
         fake = _FakeTextGenerator(json.dumps({"foo": "bar"}))
         generator = ScriptGenerator(project_path, generator=fake, config_resolver=_resolver())
-        with pytest.raises(ValueError, match="视觉层结构校验失败"):
+        with pytest.raises(ValueError, match="结构校验失败"):
             await generator.generate(1)
 
         assert fake.backend.last_request.max_output_tokens == DEFAULT_MAX_OUTPUT_TOKENS

@@ -594,13 +594,14 @@ class TestPromptAuthoringPromptGuards:
             **overrides,
         )
 
-    def _drama_prompt(self) -> str:
+    def _drama_prompt(self, **overrides) -> str:
         return build_drama_prompt(
             project_overview={"synopsis": "S", "genre": "G", "theme": "T", "world_setting": "W"},
             style="动漫",
             style_description="日漫半厚涂",
             scenes_content="### E2S01（时长 4 秒）\n视觉改编：xxx",
             episode=2,
+            **overrides,
         )
 
     def test_drama_prompt_injects_pacing(self, monkeypatch, tmp_path):
@@ -609,7 +610,7 @@ class TestPromptAuthoringPromptGuards:
 
     @pytest.mark.parametrize("instructions", [None, "", "末镜保留雨声。"])
     def test_narration_instructions_are_an_optional_section(self, instructions):
-        text = self._narration_prompt(instructions=instructions)
+        text = self._narration_prompt(instructions=instructions, write_image=False)
         if instructions:
             assert text.endswith("\n\n# 附加指令\n末镜保留雨声。")
             assert text.count("# 附加指令") == 1
@@ -682,10 +683,11 @@ class TestPromptAuthoringPromptGuards:
 
         编排层 CLAUDE.*.md 里的同名约束进不了这次调用，故此处锁的是 prompt 正文本身。
         """
+        # video_prompt 在第二轮（write_image=False）编写，触发词避讳随视频写作指引出现在那一轮。
         if builder == "drama":
-            text = self._drama_prompt()
+            text = self._drama_prompt(write_image=False)
         elif builder == "narration":
-            text = self._narration_prompt()
+            text = self._narration_prompt(write_image=False)
         else:
             text = build_ad_prompt(
                 project_overview={"synopsis": "S", "genre": "G", "theme": "T", "world_setting": "W"},
@@ -795,3 +797,56 @@ class TestDerivativeAssetCandidates:
         )
 
         assert "- 姜月茴/劲装：青衣少女\n  当前形态：换上黑色劲装" in prompt
+
+
+class TestTwoPassPromptAuthoring:
+    """分镜路线提示词编写分两轮：先画面、后视频；第二轮看得到第一轮定下的画面。"""
+
+    @staticmethod
+    def _segments(**extra) -> list[dict]:
+        return [{"segment_id": "E1S01", "novel_text": "他推开门。", "duration_seconds": 4, **extra}]
+
+    def _narration(self, **overrides) -> str:
+        return build_narration_prompt(
+            project_overview={"synopsis": "S", "genre": "G", "theme": "T", "world_setting": "W"},
+            style="动漫",
+            style_description="d",
+            characters={},
+            scenes={},
+            props={},
+            script_plan_segments=overrides.pop("segments", self._segments()),
+            episode=1,
+            **overrides,
+        )
+
+    def test_the_image_pass_only_asks_for_image_prompts(self) -> None:
+        text = self._narration(write_image=True)
+
+        assert "本轮写画面" in text
+        assert "image_prompt.scene" in text
+        assert "**video_prompt.action**" not in text
+
+    def test_the_video_pass_sees_the_settled_image_and_only_asks_for_video_prompts(self) -> None:
+        image = {
+            "scene": "昏暗走廊尽头的木门",
+            "composition": {"shot_type": "Medium Shot", "lighting": "冷光", "ambiance": "薄雾"},
+        }
+        text = self._narration(write_image=False, segments=self._segments(image_prompt=image))
+
+        assert "本轮写视频" in text
+        assert "已定画面：昏暗走廊尽头的木门（Medium Shot，冷光，薄雾）" in text
+        assert "**video_prompt.action**" in text
+        assert "image_prompt.scene" not in text
+
+    def test_drama_passes_split_the_same_way(self) -> None:
+        image_pass = build_drama_prompt(
+            project_overview={}, style="s", style_description="d", scenes_content="x", episode=1, write_image=True
+        )
+        video_pass = build_drama_prompt(
+            project_overview={}, style="s", style_description="d", scenes_content="x", episode=1, write_image=False
+        )
+
+        assert "本轮写画面" in image_pass
+        assert "**video_prompt.action**" not in image_pass
+        assert "本轮写视频" in video_pass
+        assert "**video_prompt.action**" in video_pass

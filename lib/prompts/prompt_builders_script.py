@@ -151,6 +151,20 @@ def _format_direction_lines(direction: object) -> list[str]:
     return lines
 
 
+def _format_settled_image(image_prompt: object) -> str:
+    """第二轮（视频）的输入：第一轮已定的画面，一行写清画面描述与构图。没有定稿画面时为空串。"""
+    if isinstance(image_prompt, str):
+        return _neutralize_tags(image_prompt.strip())
+    if not isinstance(image_prompt, dict):
+        return ""
+    scene = _clean(image_prompt.get("scene"))
+    raw_composition = image_prompt.get("composition")
+    composition = raw_composition if isinstance(raw_composition, dict) else {}
+    parts = [_clean(composition.get(key)) for key in ("shot_type", "lighting", "ambiance")]
+    detail = "，".join(part for part in parts if part)
+    return f"{scene}（{detail}）" if detail else scene
+
+
 def _format_narration_script_plan_segments(script_plan_segments: list[dict]) -> str:
     """把 script_plan 结构化分镜渲染为 prompt_authoring 的只读上下文：segment_id + 内容字段 + 逐字原文。
 
@@ -172,6 +186,8 @@ def _format_narration_script_plan_segments(script_plan_segments: list[dict]) -> 
         direction_lines = _format_direction_lines(seg.get("direction"))
         if direction_lines:
             entry += "\n" + "\n".join(f"  {line}" for line in direction_lines)
+        if settled := _format_settled_image(seg.get("image_prompt")):
+            entry += f"\n  已定画面：{settled}"
         lines.append(entry)
     return "\n".join(lines)
 
@@ -188,8 +204,12 @@ def build_narration_prompt(
     aspect_ratio: str = "9:16",
     target_language: str = "中文",
     instructions: str | None = None,
+    write_image: bool = True,
 ) -> str:
     """构建旁白/解说模式 prompt_authoring（视觉层）prompt。
+
+    提示词编写分两轮：``write_image`` 为 True 时只写 image_prompt（第一轮），为 False 时看着分镜表里
+    「已定画面」只写 video_prompt（第二轮）。
 
     script_plan 已定的 novel_text / 时长 / segment_break / 出场角色 / 场景 / 道具按 segment_id
     透传，prompt_authoring 只产 image_prompt 与 video_prompt。``<segments>`` 块为只读上下文，
@@ -206,6 +226,7 @@ def build_narration_prompt(
         segments_content=_format_narration_script_plan_segments(script_plan_segments),
         episode=episode,
         target_language=target_language,
+        write_image=write_image,
         instructions=instructions,
     )
 
@@ -266,6 +287,8 @@ def render_drama_content_for_prompt_authoring(content_scenes: list) -> str:
             source_block = _neutralize_tags(str(source_text)).replace("\n", "\n  ")
             lines.append(f"原文锚：{source_block}")
         lines.extend(_format_direction_lines(scene.get("direction")))
+        if settled := _format_settled_image(scene.get("image_prompt")):
+            lines.append(f"已定画面：{settled}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -297,8 +320,12 @@ def build_drama_prompt(
     scenes: dict | None = None,
     props: dict | None = None,
     instructions: str | None = None,
+    write_image: bool = True,
 ) -> str:
     """构建剧情演绎 prompt_authoring（视觉层）prompt。
+
+    提示词编写分两轮：``write_image`` 为 True 时只写 image_prompt（第一轮），为 False 时看着分镜内容里
+    「已定画面」只写 video_prompt（第二轮）。
 
     内容抽取前移到 script_plan（见 ADR 0041）：分镜边界、出场资产、逐字口播 utterances、原文锚
     source_text、视觉改编描述均已在 script_plan 定稿，``scenes_content`` 是其渲染输入
@@ -324,6 +351,7 @@ def build_drama_prompt(
         scenes_content=scenes_content,
         episode=episode,
         target_language=target_language,
+        write_image=write_image,
         instructions=instructions,
     )
 

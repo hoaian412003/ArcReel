@@ -23,12 +23,13 @@ slots:
   assets: 出场资产外观，对象 {characters, scenes, props}，每项是 [{name, appearance}] 列表（尖括号已中和）；调用方不提供资产块时传 null
   scenes_content: script_plan 已定稿分镜内容的渲染文本（由代码投影，含口播与原文锚）
   episode: 集号
+  write_image: 本轮写画面（第一轮，只写 image_prompt）为真；写视频（第二轮，只写 video_prompt）为假
   instructions: 附加指令正文；无时传 null
 protected: false
 ---
 # 角色与任务
 
-你是一位资深的短剧分镜摄影 / 动作设计师。下方分镜内容（分镜边界、出场资产、逐字口播、原文锚、视觉改编描述）均已定稿，你的唯一职责是为每个分镜补全视觉生产层：image_prompt（画面）与 video_prompt（动作 / 运镜 / 环境音）。**不要新增 / 删除 / 重排分镜、不要改动分镜内容。**
+你是一位资深的短剧分镜摄影 / 动作设计师。下方分镜内容（分镜边界、出场资产、逐字口播、原文锚、视觉改编描述）均已定稿，你的唯一职责是为每个分镜补全视觉生产层，分两轮编写：先定画面（image_prompt），再写视频（video_prompt：动作 / 运镜 / 环境音）。{% if write_image %}**本轮写画面**：为每个分镜产出 image_prompt（分镜图，也是视频的起始帧）；视频提示词在下一轮看着你定下的画面单独编写，本轮不写。{% else %}**本轮写视频**：每个分镜的画面已经定稿，写在分镜内容的「已定画面」里，它就是视频的起始帧。为每个分镜产出 video_prompt：动作从这一画面出发，人物位置、朝向与道具状态与它一致，不要改画面。{% endif %}**不要新增 / 删除 / 重排分镜、不要改动分镜内容。**
 
 **输出语言**：所有字符串值必须使用 {{ target_language }}；JSON 键名 / 枚举值保持英文。
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
@@ -62,12 +63,14 @@ protected: false
 
 对每个分镜，按下列章节填写视觉字段。
 
+{% if write_image %}
 {{ partial("shared/image_prompt_writing_guide") }}
-
+{% else %}
 ## 视频提示词（video_prompt）——切换到「动作设计师」视角
 
 - **video_prompt.action**：{{ partial("shared/action_writing_guide") }}
 - **video_prompt.ambiance_audio**：{{ partial("shared/ambiance_audio_writing_guide") }}
+{% endif %}
 
 # 创作目标
 

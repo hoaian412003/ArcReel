@@ -58,10 +58,10 @@ MCP 工具内部通过 `ScriptGenerator` 完成以下步骤：
 1. **加载 project.json** — 读取 content_mode、characters、scenes、props、overview、style
 2. **加载正式脚本** — 取本次要编写的条目（待编写条目，或 `entry_ids` 点名的条目）；ad 尚无正式脚本时整份生成
 3. **构建 Prompt** — 由 `lib.prompts.prompt_builders_script`、`lib.prompts.prompt_builders_reference` 或 `lib.prompts.prompt_builders_ad` 生成，输入是这些条目的内容字段
-4. **调用 TextBackend** — 由 `TextGenerator` 按项目配置选择文本模型，传入 Pydantic schema 作为 `response_schema` 强约束 JSON 结构
+4. **调用 TextBackend** — 由 `TextGenerator` 按项目配置选择文本模型，传入 Pydantic schema 作为 `response_schema` 强约束 JSON 结构。旁白 / 剧情的分镜路线分**两轮**：第一轮只写 `image_prompt`（分镜图，也是视频的起始帧），结果先落盘、条目仍待编写；第二轮看着已定画面只写 `video_prompt`，写回后清除待编写标记。第二轮失败时下一次调用只补第二轮，已定画面不重写；`entry_ids` 显式重写时两轮都重写所列条目。广告分镜仍一轮写完。
 5. **Pydantic 验证与写回** — LLM 只产出视觉层，后端按条目 id 写回正式脚本，内容字段不进 LLM 输出，从工程上杜绝其经 Structured Outputs 漂移：
-   - narration → `NarrationVisualEpisodeScript`（`segment_id` + image_prompt + video_prompt）
-   - drama（storyboard，含 grid_storyboard）→ `DramaVisualScript`（`scene_id` + image_prompt + video_prompt）
+   - narration → 第一轮 `NarrationImageEpisodeScript`（`segment_id` + image_prompt），第二轮 `NarrationVideoEpisodeScript`（`segment_id` + video_prompt）
+   - drama（storyboard，含 grid_storyboard）→ 第一轮 `DramaImageScript`（`scene_id` + image_prompt），第二轮 `DramaVideoScript`（`scene_id` + video_prompt）
    - ad 分镜 → `AdVisualScript`（`shot_id` + image_prompt + video_prompt）；ad 整份生成 → `AdEpisodeScript`（storyboard）或 `AdReferenceFlatScript`（reference_video）
    - reference_video → `ReferencePromptAuthoringFlatScript`：待编写单元按顺序各一段改写后的正文，台词逐字保留
 6. **补充元数据** — `episode`、`content_mode`、`novel`（项目 title + `第N集`）、时间戳。这些字段对 LLM 隐藏（SkipJsonSchema），由后端从 `project.json` 注入，避免 LLM 幻觉污染下游消费方（compose-video 的 mp4 文件名、剪映草稿等）。
