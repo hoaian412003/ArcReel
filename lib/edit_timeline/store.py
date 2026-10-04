@@ -78,6 +78,7 @@ def create_timeline(
     clips: Sequence[Clip | dict],
     author: str,
     summary: str = "create",
+    voice_over: bool = False,
 ) -> Timeline:
     """以给定片段序列新建一条时间线（首个修订）。"""
     timeline = Timeline(
@@ -92,6 +93,7 @@ def create_timeline(
                 summary=summary,
                 created_at=_now(),
                 clips=_validated_clips(clips),
+                voice_over=voice_over,
             )
         ],
     )
@@ -110,6 +112,7 @@ def copy_timeline(project_dir: Path, episode: int, source_id: str, *, name: str,
         clips=source.latest.clips,
         author=author,
         summary=f"copy of {source.name}",
+        voice_over=source.latest.voice_over,
     )
 
 
@@ -122,8 +125,9 @@ def append_revision(
     clips: Sequence[Clip | dict],
     author: str,
     summary: str,
+    voice_over: bool | None = None,
 ) -> Timeline:
-    """追加新修订；``parent_revision`` 不是最新时拒绝写入。"""
+    """追加新修订；``parent_revision`` 不是最新时拒绝写入。``voice_over`` 缺省沿用上一修订。"""
     new_clips = _validated_clips(clips)
     with project_metadata_lock(project_dir):
         timeline = get_timeline(project_dir, episode, timeline_id)
@@ -138,6 +142,7 @@ def append_revision(
                 summary=summary,
                 created_at=_now(),
                 clips=new_clips,
+                voice_over=timeline.latest.voice_over if voice_over is None else voice_over,
             )
         )
         _write(project_dir, timeline)
@@ -166,6 +171,7 @@ def rollback(
         clips=target.clips,
         author=author,
         summary=f"rollback to revision {to_revision}",
+        voice_over=target.voice_over,
     )
 
 

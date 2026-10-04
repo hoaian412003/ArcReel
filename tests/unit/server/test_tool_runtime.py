@@ -263,8 +263,54 @@ async def test_text_task_service_registration_is_cleaned_when_batch_read_fails()
             services=services,
         )
 
-    assert "task-1" not in tool_runtime._TEXT_TASK_SERVICES
+    assert (
+        tool_runtime._text_task_key("demo", "text_episode_script", "episode-1") not in tool_runtime._TEXT_TASK_SERVICES
+    )
     assert exc_info.value.__notes__ == ["fresh batch cleanup also failed: cleanup database unavailable"]
+
+
+async def test_embedded_text_task_services_are_registered_before_the_task_can_be_claimed() -> None:
+    """worker 一认领就会取用登记：入队返回之后再登记，快的 worker 会抢先落到按当前配置解析的路径上。"""
+    seen_at_enqueue: list[bool] = []
+
+    class _Queue:
+        async def get_active_tasks_for_resources(self, **_kwargs):
+            return []
+
+        async def create_generation_batch(self, **_kwargs):
+            return "batch-3"
+
+        async def is_worker_online(self, **_kwargs):
+            return True
+
+        async def enqueue_task(self, **_kwargs):
+            key = tool_runtime._text_task_key("demo", "text_episode_script", "episode-1")
+            seen_at_enqueue.append(key in tool_runtime._TEXT_TASK_SERVICES)
+            raise RuntimeError("stop after the enqueue point")
+
+        async def delete_fresh_generation_batch(self, **_kwargs):
+            return None
+
+    services = Services(
+        projects=_Projects({}),
+        workflow_planner=_Planner(_status()),
+        capabilities=_Capabilities(),
+        queue=_Queue(),
+    )
+
+    with pytest.raises(RuntimeError, match="stop after the enqueue point"):
+        await tool_runtime._submit_text_task(
+            task_type="text_episode_script",
+            operation="generate_episode_script",
+            unit_id="episode-1",
+            payload={},
+            scope=ProjectScope("demo", Path("/projects")),
+            caller=CallerContext(user_id="u1", source="embedded"),
+            services=services,
+        )
+
+    assert seen_at_enqueue == [True]
+    assert not tool_runtime._TEXT_TASK_SERVICES
 
 
 async def test_mcp_dedupe_does_not_remove_embedded_text_task_registration() -> None:
@@ -291,7 +337,8 @@ async def test_mcp_dedupe_does_not_remove_embedded_text_task_registration() -> N
         capabilities=_Capabilities(),
         queue=_Queue(),
     )
-    tool_runtime._TEXT_TASK_SERVICES["task-shared"] = owner
+    shared_key = tool_runtime._text_task_key("demo", "text_episode_script", "episode-1")
+    tool_runtime._TEXT_TASK_SERVICES[shared_key] = (ProjectScope("demo", Path("/projects")), owner)
     try:
         outcome = await tool_runtime._submit_text_task(
             task_type="text_episode_script",
@@ -304,9 +351,9 @@ async def test_mcp_dedupe_does_not_remove_embedded_text_task_registration() -> N
         )
 
         assert outcome.value == {"batch_id": "batch-2", "done": False}
-        assert tool_runtime._TEXT_TASK_SERVICES["task-shared"] is owner
+        assert tool_runtime._TEXT_TASK_SERVICES[shared_key][1] is owner
     finally:
-        tool_runtime._TEXT_TASK_SERVICES.pop("task-shared", None)
+        tool_runtime._TEXT_TASK_SERVICES.pop(shared_key, None)
 
 
 async def test_text_task_conflict_deletes_the_unassociated_batch() -> None:

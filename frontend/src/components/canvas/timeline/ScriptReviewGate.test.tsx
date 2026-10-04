@@ -100,7 +100,7 @@ describe("ScriptReviewGate", () => {
 
     await waitFor(() => expect(screen.getByDisplayValue("你终于回来了。")).toBeInTheDocument());
     expect(screen.getByDisplayValue("阿离")).toBeInTheDocument();
-    expect(screen.getByText("E1S01")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("雨夜，阿离立于屋檐下")).toBeInTheDocument();
     expect(screen.getByText("待确认")).toBeInTheDocument();
     expect(screen.getByText("确认并继续")).toBeInTheDocument();
   });
@@ -132,7 +132,7 @@ describe("ScriptReviewGate", () => {
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="drama" onOpenTimeline={openTimeline} />);
 
     expect(await screen.findByText("你终于回来了。")).toBeInTheDocument();
-    expect(screen.getByText("三年后，阿离立于屋檐下：你终于回来了。")).toBeInTheDocument();
+    expect(screen.getByText("雨夜，阿离立于屋檐下")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除发声" })).not.toBeInTheDocument();
     expect(screen.getByText("内容已确认，此处只读。请在时间线上修改；要整集重做，请重跑脚本规划后再确认。")).toBeInTheDocument();
@@ -418,7 +418,7 @@ describe("ScriptReviewGate", () => {
     vi.spyOn(API, "getScriptReview").mockResolvedValue(dramaState());
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="drama" />);
 
-    await waitFor(() => expect(screen.getByText("E1S01")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByDisplayValue("雨夜，阿离立于屋檐下")).toBeInTheDocument());
     expect(screen.queryByText(/目标/)).not.toBeInTheDocument();
   });
 
@@ -427,7 +427,6 @@ describe("ScriptReviewGate", () => {
     render(<ScriptReviewGate projectName="p" episode={1} contentMode="narration" />);
 
     await waitFor(() => expect(screen.getByDisplayValue("裴与出征后的第二年。")).toBeInTheDocument());
-    expect(screen.getByText("E1S01")).toBeInTheDocument();
   });
 
   it("locks the panel and lists violations when a draft needs fixes", async () => {

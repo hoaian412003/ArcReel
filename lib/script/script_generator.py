@@ -378,8 +378,7 @@ class ScriptGenerator:
                 任一 id 不在正式剧本内即报错、不落盘。
             rewritten_entry_ids: 可选收集器；非 None 时就地填入本次编写的条目 id（剧本顺序），
                 供调用方在回执里列出。ad 整份生成时保持为空。
-            keep_text: 只重写 H3 载荷、单元正文原样保留（H3 Ref2VA 提示词档的「重新生成 H3 提示词」）；
-                须同时点名 entry_ids，且仅适用于 H3 提示词档。
+            keep_text: 只写 H3 载荷、单元正文原样保留；H3 Ref2VA 提示词档下总是如此，其它提示词档不接受。
 
         Returns:
             正式剧本 JSON 文件路径
@@ -426,8 +425,10 @@ class ScriptGenerator:
                 output_filename,
             )
 
-        if keep_text and not (is_h3_ref2va(self.project_json) and entry_ids):
-            raise PromptAuthoringTargetError("keep_text 仅适用于 H3 Ref2VA 提示词档，且须用 entry_ids 点名条目")
+        if keep_text and not is_h3_ref2va(self.project_json):
+            raise PromptAuthoringTargetError("keep_text 仅适用于 H3 Ref2VA 提示词档")
+        # H3 Ref2VA 提示词档：单元正文是内容确认定稿的内容，提示词编写只写 H3 载荷，正文一律原样保留。
+        keep_text = keep_text or is_h3_ref2va(self.project_json)
         if rewritten_entry_ids is not None:
             rewritten_entry_ids[:] = targets.ids
         output_path = self.project_path / "scripts" / filename

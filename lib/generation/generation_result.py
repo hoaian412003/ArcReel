@@ -237,6 +237,9 @@ _TASK_FAILURE_ACTIONS: dict[str, GenerationAction] = {
     "restart_lost_no_job_id": GenerationAction.RETRY,
     "restart_lost_resume_no_job_id": GenerationAction.RETRY,
     "restart_lost_checkpoint_no_job_id": GenerationAction.RETRY,
+    # 对账 / 管理员判失败：只是我方失去了对供应商状态的把握，任务本身没有缺陷。
+    "provider_sync_lost": GenerationAction.RETRY,
+    "manually_marked_failed": GenerationAction.RETRY,
     "resume_unsupported_provider": GenerationAction.RETRY,
     "resume_unsupported_capacity_zero": GenerationAction.RETRY,
     "resume_unsupported_detail": GenerationAction.RETRY,

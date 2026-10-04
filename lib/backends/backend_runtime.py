@@ -34,6 +34,7 @@ from lib.backends.http_status_errors import (
     redacted_status_error,
 )
 from lib.infra.logging_utils import redact_diagnostic_text, sanitize_diagnostic_payload
+from lib.infra.poll_sync_hook import fire_provider_sync
 from lib.infra.retry import (
     BASE_RETRYABLE_ERRORS,
     AsyncClock,
@@ -441,6 +442,7 @@ async def poll_with_retry[T](
             )
         else:
             consecutive_failures = 0
+            await fire_provider_sync(label=label)
             error_msg = is_failed(result)
             if error_msg is not None:
                 raise RuntimeError(error_msg)

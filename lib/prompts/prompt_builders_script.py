@@ -75,6 +75,27 @@ def _outline_slot(outline: object) -> dict | None:
     return projected if any(projected.values()) else None
 
 
+def _screenplay_slot(screenplay: object) -> dict | None:
+    """已通过剧本的键齐全投影；没有剧本（``None`` / 非对象 / 无场次）时为 ``None``，模版不渲染剧本分节。
+
+    只取模版用到的字段：落盘文件里的审阅记录等元数据不进提示词。
+    """
+    if not isinstance(screenplay, dict):
+        return None
+    scenes = screenplay.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        return None
+    return {
+        "title": screenplay.get("title") or "",
+        "logline": screenplay.get("logline") or "",
+        "scenes": [
+            {key: scene.get(key) for key in ("heading", "summary", "estimated_seconds", "text")}
+            for scene in scenes
+            if isinstance(scene, dict)
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # 两段式分层文案（见 ADR 0041）：script_plan（normalize）= 内容、prompt_authoring（drama）= 视觉。
 #
@@ -97,6 +118,39 @@ def _neutralize_tags(value: str) -> str:
     return value.replace("<", "＜").replace(">", "＞")
 
 
+def _clean(value: object) -> str:
+    return _neutralize_tags(value.strip()) if isinstance(value, str) else ""
+
+
+def _format_direction_lines(direction: object) -> list[str]:
+    """把条目的导演说明渲染为「导演：」行组（镜头与意图、表演、衔接）；条目没有导演说明时为空。
+
+    动态文本过 ``_neutralize_tags``；字段缺失按空处理，渲染本身 fail-soft，结构校验在导演步骤写入时已做。
+    """
+    if not isinstance(direction, dict):
+        return []
+    raw_camera = direction.get("camera")
+    camera = raw_camera if isinstance(raw_camera, dict) else {}
+    shot = " / ".join(part for part in (_clean(camera.get(key)) for key in ("angle", "shot_size", "movement")) if part)
+    intent = _clean(camera.get("intent"))
+    head = f"导演：镜头 {shot}" if shot else "导演："
+    if intent:
+        head += f"（意图：{intent}）"
+    lines = [head]
+    raw_performance = direction.get("performance")
+    notes = [
+        f"{_clean(item.get('character'))}——{_clean(item.get('note'))}"
+        for item in (raw_performance if isinstance(raw_performance, list) else [])
+        if isinstance(item, dict) and _clean(item.get("character")) and _clean(item.get("note"))
+    ]
+    if notes:
+        lines.append("  表演：" + "；".join(notes))
+    continuity_in, continuity_out = _clean(direction.get("continuity_in")), _clean(direction.get("continuity_out"))
+    if continuity_in or continuity_out:
+        lines.append(f"  衔接：开场 {continuity_in or '—'} ｜ 结束 {continuity_out or '—'}")
+    return lines
+
+
 def _format_narration_script_plan_segments(script_plan_segments: list[dict]) -> str:
     """把 script_plan 结构化分镜渲染为 prompt_authoring 的只读上下文：segment_id + 内容字段 + 逐字原文。
 
@@ -114,9 +168,11 @@ def _format_narration_script_plan_segments(script_plan_segments: list[dict]) -> 
         prop_names = _neutralize_tags("、".join(seg.get("props") or []) or "无")
         # 多行 novel_text 续行缩进进原文块，避免 flush-left 溢出 <segments>；尖括号一并中和防注入
         novel_block = _neutralize_tags(seg.get("novel_text") or "").replace("\n", "\n  ")
-        lines.append(
-            f"- {sid}（时长 {dur}s{brk}）｜出场角色：{chars}｜场景：{scene_names}｜道具：{prop_names}\n  原文：{novel_block}"
-        )
+        entry = f"- {sid}（时长 {dur}s{brk}）｜出场角色：{chars}｜场景：{scene_names}｜道具：{prop_names}\n  原文：{novel_block}"
+        direction_lines = _format_direction_lines(seg.get("direction"))
+        if direction_lines:
+            entry += "\n" + "\n".join(f"  {line}" for line in direction_lines)
+        lines.append(entry)
     return "\n".join(lines)
 
 
@@ -209,6 +265,7 @@ def render_drama_content_for_prompt_authoring(content_scenes: list) -> str:
         if source_text:
             source_block = _neutralize_tags(str(source_text)).replace("\n", "\n  ")
             lines.append(f"原文锚：{source_block}")
+        lines.extend(_format_direction_lines(scene.get("direction")))
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -288,6 +345,7 @@ def build_normalize_prompt(
     episode_target_duration: int | None = None,
     episode_outline: dict | None = None,
     next_episode_outline: dict | None = None,
+    screenplay: dict | None = None,
     instructions: str | None = None,
 ) -> str:
     """脚本规划的规范化 prompt：源文 → 结构化分镜内容（utterances + source_text + 视觉改编描述）。
@@ -329,6 +387,7 @@ def build_normalize_prompt(
         episode_target_duration=episode_target_duration,
         episode_outline=_outline_slot(episode_outline),
         next_episode_outline=_outline_slot(next_episode_outline),
+        screenplay=_screenplay_slot(screenplay),
         instructions=instructions or None,
     )
 
@@ -345,6 +404,7 @@ def build_narration_split_prompt(
     episode: int,
     target_language: str = "中文",
     episode_target_duration: int | None = None,
+    screenplay: dict | None = None,
     instructions: str | None = None,
 ) -> str:
     """脚本规划的旁白/解说分镜拆分 prompt：源文 → 结构化分镜表（逐字 novel_text + 时长 + 资产登记）。
@@ -381,7 +441,128 @@ def build_narration_split_prompt(
         episode_target_duration=episode_target_duration,
         episode=episode,
         target_language=target_language,
+        screenplay=_screenplay_slot(screenplay),
         instructions=instructions,
+    )
+
+
+def render_director_entries(entries: list[dict], kind: str, *, target_ids: list[str] | None = None) -> str:
+    """把全集条目渲染为导演步骤的输入块：id、时长、出场角色、画面 / 原文与口播，已有导演说明时一并列出。
+
+    ``kind`` 是骨架种类（``segments`` 旁白 / ``scenes`` 剧情）。``target_ids`` 非空时，本次要重做的条目带「（本次重做）」标记，
+    其余条目的现有导演说明作前后文参照。动态文本过 ``_neutralize_tags``。
+    """
+    if not entries:
+        return "（无分镜内容）"
+    id_field, chars_field = (
+        ("segment_id", "characters_in_segment") if kind == "segments" else ("scene_id", "characters_in_scene")
+    )
+    targeted = set(target_ids or ())
+    blocks: list[str] = []
+    for index, entry in enumerate(entries, start=1):
+        entry_id = _neutralize_tags(str(entry.get(id_field) or "?"))
+        duration = entry.get("duration_seconds")
+        mark = "（本次重做）" if str(entry.get(id_field)) in targeted else ""
+        header = f"### {index}. {entry_id}" + (f"（时长 {duration} 秒）" if duration else "") + mark
+        raw_chars = entry.get(chars_field)
+        chars = [name for name in (raw_chars if isinstance(raw_chars, list) else []) if isinstance(name, str)]
+        lines = [header, f"出场角色：{_neutralize_tags('、'.join(chars) or '无')}"]
+        if kind == "segments":
+            lines.append("原文：" + _neutralize_tags(str(entry.get("novel_text") or "")).replace("\n", "\n  "))
+        else:
+            description = entry.get("scene_description")
+            if description:
+                lines.append("画面：" + _neutralize_tags(str(description)).replace("\n", "\n  "))
+            raw_utterances = entry.get("utterances")
+            for utterance in raw_utterances if isinstance(raw_utterances, list) else []:
+                if not isinstance(utterance, dict):
+                    continue
+                text = _neutralize_tags(str(utterance.get("text") or "")).replace("\n", "\n    ")
+                if utterance.get("kind") == "dialogue":
+                    lines.append(f"  - [台词] {_neutralize_tags(str(utterance.get('speaker') or ''))}：{text}")
+                else:
+                    lines.append(f"  - [画外音] {text}")
+        if entry.get("segment_break") is True:
+            lines.append("场景切换点")
+        lines.extend(_format_direction_lines(entry.get("direction")))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def build_director_prompt(
+    *,
+    project_overview: dict,
+    characters: dict | None,
+    scenes: dict | None,
+    props: dict | None,
+    entries: list[dict],
+    kind: str,
+    episode: int,
+    target_ids: list[str] | None = None,
+    revision_note: str | None = None,
+    target_language: str = "中文",
+    instructions: str | None = None,
+) -> str:
+    """构建导演步骤 prompt：全集条目 + 资产外观 → 集级导演规划与逐条目导演说明（``DirectorEpisodeOutput``）。
+
+    ``target_ids`` 非空表示只修订这些条目（其余条目的现有说明作参照）；``revision_note`` 是审阅者的修改意见。
+    """
+    return builtin_templates.render(
+        "text/director_episode",
+        target_language=target_language,
+        project_overview=_overview_slot(project_overview),
+        assets=_project_asset_appearances(characters, scenes, props),
+        entries_content=render_director_entries(entries, kind, target_ids=target_ids),
+        episode=episode,
+        total_entries=len(entries),
+        target_entry_ids=list(target_ids) if target_ids else None,
+        revision_note=_stripped_text(revision_note),
+        instructions=instructions or None,
+    )
+
+
+def build_screenplay_prompt(
+    *,
+    novel_text: str,
+    project_overview: dict,
+    style: str | None,
+    characters: dict,
+    scenes: dict,
+    props: dict,
+    episode: int,
+    source_kind: str = "novel",
+    target_language: str = "中文",
+    source_language: str | None = None,
+    speech_rate_override: float | None = None,
+    episode_target_duration: int | None = None,
+    episode_outline: dict | None = None,
+    next_episode_outline: dict | None = None,
+    instructions: str | None = None,
+) -> str:
+    """编剧步骤 prompt：源文 → 面向审阅者的单集剧本（``ScreenplayDraft``），含逐场预计时长。
+
+    narration / drama 两种内容类型与两条生成路线共用同一份模版（``text/screenplay``）。时长相关的能力档位
+    （``supported_durations`` 等）不在本阶段：那是后续单元拆解的事，这里只按口播语速与动作长短估算。
+    ``source_kind`` 非 ``"screenplay"`` 的取值一律按 ``"novel"`` 渲染；``source_language`` 非字符串回退默认语速。
+    """
+    source_language = source_language if isinstance(source_language, str) else None
+    return builtin_templates.render(
+        "text/screenplay",
+        source_kind="screenplay" if source_kind == "screenplay" else "novel",
+        target_language=target_language,
+        project_overview=_overview_slot(project_overview),
+        style=_stripped_text(style),
+        character_names=asset_reference_names("character", characters),
+        scene_names=asset_reference_names("scene", scenes),
+        prop_names=asset_reference_names("prop", props),
+        novel_text=novel_text,
+        episode=episode,
+        speech_rate=f"{speech_rate_units_per_second(source_language, speech_rate_override):g}",
+        speech_unit=reading_unit_noun(source_language),
+        episode_target_duration=episode_target_duration,
+        episode_outline=_outline_slot(episode_outline),
+        next_episode_outline=_outline_slot(next_episode_outline),
+        instructions=instructions or None,
     )
 
 

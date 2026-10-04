@@ -28,7 +28,7 @@ mcp__arcreel__get_workflow_plan({
 
 | 字段 | 含义 |
 |---|---|
-| `steps[]` | 有序步骤。`id` 是稳定步骤名，`state` ∈ `completed` / `ready` / `active` / `blocked` / `pending` / `skipped`，`required=false` 表示该步骤在本项目模式组合下不适用 |
+| `steps[]` | 有序步骤。`id` 是稳定步骤名，`state` ∈ `completed` / `ready` / `active` / `blocked` / `pending` / `skipped`，`required=false` 表示该步骤在本项目模式组合下不适用（可选步骤 `voice_over` 除外：它只出现在启用配音的项目，`required=false` 表示可选、不阻断导出，见下）|
 | `steps[].action` | 该步骤自己的受控动作（可能为 null） |
 | `steps[].artifacts` | 该步骤的产物时效快照：`current_ids` / `stale_ids` / `missing_ids` 三个 ID 桶，外加集合级 `state`（`current` / `stale` / `partial` / `missing` / `blocked` / `not_applicable`）。`blocked` 是集合级状态，**没有**逐 ID 的 blocked 桶 |
 | `steps[].tasks[]` | 该步骤的活动任务观察，每条含 `task_id`、`status`、`provider_checkpoint`、`problem` |
@@ -81,13 +81,17 @@ ID 参数时，前者传入，后者必须**省略该参数**，不得把 `[]` �
 | `analyze_assets` | dispatch `analyze-assets` 子智能体 |
 | `reset_episode_planning` | `mcp__arcreel__reset_episode_planning`，按 `next_action.args` 传参 |
 | `plan_episodes` | `mcp__arcreel__plan_episodes` |
-| `prepare_script_plan` | dispatch `next_action.args.preprocessor` 指名的子智能体 |
-| `confirm_script_plan` | `mcp__arcreel__confirm_script_review` |
+| `write_screenplay` | dispatch `write-screenplay` 子智能体（旁白 / 剧情项目的新一集：本集还没有脚本规划，且没有剧本或剧本依据的源文已变化）；`args.episode` |
+| `review_screenplay` | 剧本待人工审阅（需要用户决定，对话中进行；Web 的 Flow 标签页是等价路径）：`mcp__arcreel__get_screenplay` 取可读剧本与逐场预计时长 / 总时长展示给用户；用户表态后通过 `mcp__arcreel__approve_screenplay`（带 `args.fingerprint`），要求修改用 `mcp__arcreel__patch_screenplay` 按场次改（`base_fingerprint` 取自 `get_screenplay`），整集重做把用户的修改要求作 `instructions`（附加指令）重跑 `write_screenplay` |
+| `prepare_script_plan` | 单元拆解：依据已通过的剧本与源文划分单元；dispatch `next_action.args.preprocessor` 指名的子智能体。有已通过剧本时拆解成功即自动完成内容确认 |
+| `confirm_script_plan` | `mcp__arcreel__confirm_script_review`（存量路径：没有剧本的集；或该集已有正式脚本、自动确认需要用户同意覆盖时） |
+| `direct_episode` | dispatch `direct-episode` 子智能体（只在 narration / drama 项目（两条路线）、该集仍有待编写条目时出现）；`args.entry_ids` / `args.note` 是审阅者点名要改的分镜与修改意见 |
+| `review_direction` | 导演结果待人工审阅：dispatch `report-director` 子智能体呈现报告，用户表态后调 `mcp__arcreel__decide_direction_review`；Web 的 Flow 标签页是等价的审阅路径 |
 | `generate_script` | dispatch `create-episode-script` 子智能体（ad 直接调 `mcp__arcreel__generate_episode_script`） |
 | `author_prompts` | 正式剧本里有待编写条目，`requested_ids` 列出这些条目：调 `mcp__arcreel__generate_episode_script`，不传 `entry_ids`，即编写全部待编写条目（见 generate-script skill） |
 | `generate_asset_sheets` | dispatch `generate-assets` 子智能体，逐类型调用 `mcp__arcreel__generate_assets` 并传 `names`。因缺少 description 记为 `blocked` 的资产（`fix_input`）：依据原文写好描述，经 `mcp__arcreel__patch_project` 补上后再生成；原文没有依据时向用户确认描述，或请用户在 Web 端上传资产图。描述补上或资产图上传之前，后续 `names` 排除这些资产 |
 | `generate_storyboards` | dispatch `generate-assets` 子智能体，调用 `mcp__arcreel__generate_storyboards` 并传 `segment_ids` |
-| `generate_grid` | dispatch `generate-assets` 子智能体，调用 `mcp__arcreel__generate_grid`，不传 `scene_ids`（缺失即生成）；联合图就绪后经用户审阅同意，再调 `mcp__arcreel__split_grids` |
+| `generate_grid` | dispatch `generate-assets` 子智能体，调用 `mcp__arcreel__generate_grid`，不传 `scene_ids`（缺失即生成）；联合图就绪后直接调 `mcp__arcreel__split_grids` |
 | `repair_video_units` | `mcp__arcreel__get_episode_script` + `mcp__arcreel__patch_episode_script` 一次改完，再点名重做 |
 | `patch_episode_script` | 计划注入：`next_action.args` 已给 `base_revision` 与逐条 `problems`，一次批量改完 |
 | `choose_narration_delivery` | 计划注入：见「旁白交付」 |
@@ -162,6 +166,22 @@ ID 参数时，前者传入，后者必须**省略该参数**，不得把 `[]` �
 **未配置 TTS 时默认走后期配音。** `tts_not_configured` 只是「这次选了 TTS 但没有可用供应商」
 的事实，不是工作流缺口，也不拦导出。此时告诉用户后期配音方式照常可用、视频不受影响，
 **不要建议用户为了继续做视频去配置 TTS 供应商**；只有用户主动想要 in-app 旁白时才说明去哪配。
+
+## 可选步骤：越南语配音（`voice_over`）
+
+参考生视频项目启用越南语配音（`project.json` 的 `dub_target_language: "vi"`）时，计划在 `video` 与 `export`
+之间多出步骤 `voice_over`；其他项目的计划里没有这一步。它不是 `next_action` 的来源：
+
+- `required` 恒为 `false`，永不阻断导出——配音缺口不会让 `next_action` 停在这一步，视频齐备时仍是 `export`。
+- `steps[].state`：视频未齐为 `pending`；视频齐备后，每个已有成片的单元台词与配音音频都齐为 `completed`，
+  有缺口为 `ready`，配音任务在跑为 `active`。`artifacts.current_ids` / `missing_ids` 是配音齐备 / 未齐的单元，
+  `artifacts.tool` / `artifacts.status_tool` 指向 `generate_dub_voiceover` / `get_dub_status`。
+- 做法：`mcp__arcreel__generate_dub_voiceover({"script": target.script_filename})` 入队（可选 `unit_ids`、
+  `skip_timing`），立即返回 `task_ids` / `unit_ids` / `skipped`；它**不是生成批次**，没有 `generation_batch`，
+  用 `mcp__arcreel__get_dub_status({"script": target.script_filename})` 轮询到 `active_tasks.running` 为 `false`。
+- 项目未启用配音时，两个工具返回 `dub_not_enabled`（`patch_project` 的 `settings` 设
+  `dub_target_language: "vi"` 开启）；非参考生视频返回 `dub_not_applicable`；本地配音被系统设置关闭返回
+  `dub_vieneu_disabled`。
 
 ## 整批准入判定
 

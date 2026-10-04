@@ -2,8 +2,10 @@ import pytest
 from pydantic import ValidationError
 
 from lib.script.script_models import (
+    REFERENCE_UNIT_DIRECTION_FIELDS,
     NovelInfo,
     ReferenceResource,
+    ReferenceScriptPlanDraft,
     ReferenceVideoScript,
     ReferenceVideoUnit,
 )
@@ -111,3 +113,24 @@ def test_reference_video_unit_rejects_duration_out_of_structural_range():
         _make_unit(duration_seconds=0)
     with pytest.raises(ValidationError):
         _make_unit(duration_seconds=9999)
+
+
+def test_reference_script_plan_draft_without_director_plan_still_validates():
+    """存量 script_plan 不带导演规划：集级为 None，unit 级导演字段取空缺省。"""
+    draft = ReferenceScriptPlanDraft.model_validate(
+        {"units": [{"unit_id": "E1U01", "text": "x", "duration_seconds": 8}]}
+    )
+    assert draft.director_plan is None
+    unit = draft.model_dump()["units"][0]
+    assert unit["unit_type"] is None
+    assert unit["brief"] == ""
+    assert unit["beats"] == []
+    assert set(REFERENCE_UNIT_DIRECTION_FIELDS) <= set(unit)
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("Tension_Build ", "tension_build"), ("not-a-type", "other")])
+def test_reference_script_plan_unit_type_normalizes_case_and_unknown_values(raw: str, expected: str):
+    draft = ReferenceScriptPlanDraft.model_validate(
+        {"units": [{"unit_id": "E1U01", "text": "x", "duration_seconds": 8, "unit_type": raw}]}
+    )
+    assert draft.units[0].unit_type == expected

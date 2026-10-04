@@ -42,14 +42,17 @@ from lib.script.draft_quarantine import (
     write_quarantine,
 )
 from lib.script.draft_violation import DraftViolation
+from lib.script.reference_video.director_validation import has_director_content
 from lib.script.script_generator import ScriptGenerator
 from lib.script.script_models import (
+    REFERENCE_UNIT_DIRECTION_FIELDS,
     NarrationScriptPlanDraft,
     build_drama_normalized_script_model,
     build_reference_units_script_plan_model,
 )
 from lib.speech.speech_composition import admit_script_unit
 from server.text_generation import (
+    DIRECTOR_REQUIRED_META_KEY,
     SOFT_VIOLATION_NOTE_QUARANTINED,
     ReferenceSplitCaps,
     _build_reference_units_from_flat,
@@ -65,6 +68,7 @@ from server.text_generation import (
     _narration_script_plan_result_text,
     _reference_result_text,
     _reference_soft_violation_lines,
+    _script_plan_content,
     _uses_reference_video_units,
     _video_facts_failure_text,
     fetch_storyboard_durations,
@@ -169,6 +173,8 @@ class ReferenceDraftRevalidation(NamedTuple):
     schema_failed: bool
     basis: ArtifactBasis | None
     soft_violations: list[str]
+    #: 收编后的集级导演规划；存量草稿不带导演规划时为 None。
+    director_plan: dict[str, Any] | None = None
 
 
 async def revalidate_reference_script_plan_draft(
@@ -223,6 +229,7 @@ async def revalidate_reference_script_plan_draft(
     schema = build_reference_units_script_plan_model(split_caps.durations)
     violations: list[DraftViolation] = []
     flat_units: list[dict[str, Any]] = []
+    director_plan: dict[str, Any] | None = None
     if not isinstance(raw_units, list) or not raw_units:
         logger.debug("草稿 content.units 形状非法: %s", type(raw_units).__name__)
         violations = [
@@ -233,7 +240,11 @@ async def revalidate_reference_script_plan_draft(
         ]
     else:
         try:
-            flat_units = schema.model_validate({"units": raw_units}).model_dump()["units"]
+            validated = schema.model_validate(
+                {"director_plan": draft.content.get("director_plan"), "units": raw_units}
+            ).model_dump()
+            flat_units = validated["units"]
+            director_plan = validated.get("director_plan")
         except ValidationError as exc:
             violations = [
                 DraftViolation(
@@ -256,6 +267,8 @@ async def revalidate_reference_script_plan_draft(
         novel_text=novel_text,
         caps=split_caps,
         source_language=source_language,
+        director_plan=director_plan,
+        require_director=draft.meta.get(DIRECTOR_REQUIRED_META_KEY) is True,
     )
     # 软违约与硬违约在同一次重判里一并产出：有硬违约时也要算，晋升被挡下时的报告同样带着它们，
     # 否则 Agent 修草稿的每一轮都看不见降级提示，直到最后一轮晋升成功才第一次读到。
@@ -273,6 +286,7 @@ async def revalidate_reference_script_plan_draft(
         schema_failed=False,
         basis=script_plan_basis,
         soft_violations=soft_violations,
+        director_plan=director_plan,
     )
 
 
@@ -325,17 +339,22 @@ def _open_script_plan_draft(
         content = to_draft_shape(data) if isinstance(data, dict) else None
         if content is None:
             raise DraftWorkflowError("draft_source_missing", missing_detail)
+        meta: dict[str, Any] = {
+            "source": source or None,
+            "base_fingerprint": script_review.content_fingerprint_of_data(data),
+            _FORMAL_EDIT_META_KEY: True,
+        }
+        # 正式文件带导演规划时，编辑副本同样必须带：清空导演内容不能借编辑副本晋升。
+        units = content.get("units")
+        if has_director_content(content.get("director_plan"), units if isinstance(units, list) else []):
+            meta[DIRECTOR_REQUIRED_META_KEY] = True
         write_quarantine(
             project_path,
             episode,
             kind,
             content=content,
             violations=[],
-            meta={
-                "source": source or None,
-                "base_fingerprint": script_review.content_fingerprint_of_data(data),
-                _FORMAL_EDIT_META_KEY: True,
-            },
+            meta=meta,
         )
 
 
@@ -417,7 +436,7 @@ async def _promote_reference_script_plan(
             project_path,
             episode,
             QUARANTINE_KIND_SCRIPT_PLAN,
-            {"units": flat_units},
+            _script_plan_content(flat_units, revalidation.director_plan),
             violations,
             draft.meta,
         )
@@ -434,7 +453,7 @@ async def _promote_reference_script_plan(
             _commit_reference_script_plan,
             project_path,
             episode,
-            {"units": units},
+            _script_plan_content(units, revalidation.director_plan),
             expected,
             revalidation.basis,
             before_commit,
@@ -543,6 +562,10 @@ def _flatten_reference_script_plan_units(units: list[Any]) -> list[dict[str, Any
             "source_text": unit.get("source_text", ""),
             "text": text if isinstance(text, str) else "",
         }
+        # 导演说明原样带回草稿，让 Agent 在同一份草稿里改。
+        for field in REFERENCE_UNIT_DIRECTION_FIELDS:
+            if field in unit:
+                flat_unit[field] = unit[field]
         # 配音行去掉服务端派生的 source_text / start_seconds，只留 Agent 可改的四个字段。
         dub_lines = unit.get("dub_lines")
         if isinstance(dub_lines, list) and dub_lines:
@@ -561,7 +584,10 @@ def _reference_script_plan_draft_shape(content: dict[str, Any]) -> dict[str, Any
     units = content.get("units")
     if not isinstance(units, list) or not units:
         return None
-    return {"units": _flatten_reference_script_plan_units(units)}
+    director_plan = content.get("director_plan")
+    return _script_plan_content(
+        _flatten_reference_script_plan_units(units), director_plan if isinstance(director_plan, dict) else None
+    )
 
 
 def _drama_script_plan_draft_shape(content: dict[str, Any]) -> dict[str, Any] | None:
@@ -1024,7 +1050,9 @@ async def revalidate_script_plan_draft(
             draft,
             config_resolver=config_resolver,
         )
-        content = None if reference.schema_failed else {"units": reference.flat_units}
+        content = (
+            None if reference.schema_failed else _script_plan_content(reference.flat_units, reference.director_plan)
+        )
         return ScriptPlanDraftRevalidation(reference.violations, content)
     revalidator = _SINGLE_SCRIPT_PLAN_REVALIDATORS.get(draft.kind)
     if revalidator is None:

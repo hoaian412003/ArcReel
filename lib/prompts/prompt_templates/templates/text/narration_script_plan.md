@@ -25,6 +25,7 @@ slots:
   max_duration: 最长合法秒数
   default_duration: 默认秒数偏好；缺值或不在合法档位时传 null
   episode_target_duration: 单集目标秒数；缺值传 null
+  screenplay: 已确认剧本 {title, logline, scenes[{heading, summary, estimated_seconds, text}]}；没有已确认剧本时传 null
   instructions: 附加指令正文；缺值传 null
 protected: false
 ---
@@ -52,6 +53,12 @@ protected: false
 <novel>
 {{ novel_text }}
 </novel>
+{% if screenplay %}
+
+{{ partial("shared/lists/screenplay_block") }}
+{{ partial("shared/screenplay/narration") }}
+{{ partial("shared/screenplay/common_rules") }}
+{% endif %}
 
 # 拆分规则
 

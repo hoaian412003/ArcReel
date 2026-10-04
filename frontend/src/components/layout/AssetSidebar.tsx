@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clapperboard,
+  Columns3,
   LayoutDashboard,
   BookOpen,
   Users,
@@ -94,10 +95,11 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
 
   const navItems: NavItem[] = [
     { key: "overview", path: "/", label: t("dashboard:workspace_nav_overview"), icon: LayoutDashboard },
-    // 演示项目没有可切片的源文件，且后端不存在该项目，隐藏入口而非渲染必然报错的空页
+    // 演示项目没有后端数据，Flow 看板与源文件入口一并隐藏，而非渲染必然报错的空页
     ...(demoMode
       ? []
       : [
+          { key: "flow", path: "/flow", label: t("dashboard:flow_nav_label"), icon: Columns3 },
           {
             key: "source",
             path: "/source",

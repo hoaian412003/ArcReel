@@ -15,8 +15,11 @@ from lib.infra.subprocess_deadline import Spawner, run_with_deadline
 
 logger = logging.getLogger(__name__)
 
-#: 原视频音量缺省为一半，让配音盖过原声又保留环境氛围。
-DEFAULT_ORIGINAL_VOLUME = 0.5
+#: 原视频音量缺省压到 30%，配音以满音量叠加其上，原声的环境氛围仍然保留。
+DEFAULT_ORIGINAL_VOLUME = 0.3
+
+#: 限幅器上限（线性幅度，略低于满刻度）。
+MIX_LIMIT = 0.97
 
 _RENDER_DEADLINE_SECONDS = 300.0
 _RENDER_GRACE_SECONDS = 5.0
@@ -63,7 +66,9 @@ def build_dub_mix_args(
         label = f"[dub{position}]"
         filters.append(f"[{position}:a]adelay={delay_ms}|{delay_ms}{label}")
         labels.append(label)
-    filters.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0[aout]")
+    # normalize=0 让两路按原音量相加（配音不被压低）；原声叠上满音量的配音仍可能超过满刻度，末尾加限幅器防破音
+    filters.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0[mix]")
+    filters.append(f"[mix]alimiter=limit={MIX_LIMIT}[aout]")
 
     args += [
         "-filter_complex",

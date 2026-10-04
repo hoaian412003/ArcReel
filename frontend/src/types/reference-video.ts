@@ -94,6 +94,63 @@ export interface ReferenceVideoUnit {
   h3_prompt?: H3PromptSections & { source_text_hash?: string };
   /** 越南语配音台词；项目未启用配音或尚未生成时缺席。 */
   dub_lines?: DubLine[];
+  /** 导演说明：脚本规划随单元产出，创作者可在解析预览里改；存量单元缺席。Mirrors ReferenceUnitDirection。 */
+  unit_type?: ReferenceUnitType | null;
+  brief?: string;
+  beats?: DirectorBeat[];
+  performance?: DirectorPerformance[];
+  must_not_show?: string;
+  end_frame?: string;
+  continuity_in?: string;
+  continuity_out?: string;
+}
+
+/** 单元类型；取值与 lib/script/script_models.py 的 ReferenceUnitType 一一对应。 */
+export const REFERENCE_UNIT_TYPES = [
+  "establishing",
+  "character_intro",
+  "exposition",
+  "dialogue_drama",
+  "romance",
+  "heartbreak",
+  "family_warmth",
+  "conflict",
+  "humor",
+  "power_move",
+  "face_slap",
+  "combat",
+  "chase",
+  "tension_build",
+  "climax_impact",
+  "reveal",
+  "time_shift",
+  "montage",
+  "cliffhanger",
+  "other",
+] as const;
+export type ReferenceUnitType = (typeof REFERENCE_UNIT_TYPES)[number];
+
+/** unit 内的一个可观察动作节点；`at_pct` 是它在 unit 时长中的起点位置（0-100）。 */
+export interface DirectorBeat {
+  at_pct: number;
+  action: string;
+}
+
+export interface DirectorPerformance {
+  character: string;
+  note: string;
+}
+
+/** 导演说明的可写字段；未传 = 不改，空串 / 空数组 = 清空。 */
+export interface UnitDirectionPatch {
+  unit_type?: ReferenceUnitType;
+  brief?: string;
+  beats?: DirectorBeat[];
+  performance?: DirectorPerformance[];
+  must_not_show?: string;
+  end_frame?: string;
+  continuity_in?: string;
+  continuity_out?: string;
 }
 
 export type DubGender = "male" | "female";
@@ -137,6 +194,8 @@ export interface UnitDubLine {
   start_override: number | null;
   /** 开始时间的来源：人工填写 / 从成片检测 / 按语速顺序估算。 */
   start_source: "manual" | "detected" | "estimated";
+  /** 前一条配音还没念完，导致本行比成片里的实际开始时间晚了多少秒；没被推迟为 0。 */
+  delayed_seconds: number;
   duration_seconds: number;
   /** 时长是按语速估算的，尚未合成真实音频。 */
   estimated: boolean;

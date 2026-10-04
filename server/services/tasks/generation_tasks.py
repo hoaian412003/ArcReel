@@ -128,7 +128,12 @@ from server.services.currency.video_artifact_currency import (
     freeze_video_speech_facts,
 )
 from server.services.tasks.derivative_sheet_tasks import execute_character_derivative_task
-from server.services.tasks.dub_tasks import DUB_TASK_TYPE, execute_dub_tts_task
+from server.services.tasks.dub_tasks import (
+    DUB_AUTO_TASK_TYPE,
+    DUB_TASK_TYPE,
+    execute_dub_auto_task,
+    execute_dub_tts_task,
+)
 from server.services.tasks.formal_image_commit import (
     FormalImageCommitOutcome,
     FormalImagePlan,
@@ -1891,6 +1896,7 @@ _TASK_EXECUTORS = {
     "tts": execute_tts_task,
     "voice_sample": execute_character_voice_sample_task,
     DUB_TASK_TYPE: execute_dub_tts_task,
+    DUB_AUTO_TASK_TYPE: execute_dub_auto_task,
     "character": execute_character_task,
     "scene": execute_scene_task,
     "prop": execute_prop_task,

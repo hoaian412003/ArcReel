@@ -10,7 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from lib.generation.generation_result import GenerationAction, GenerationProblem, ProviderCheckpoint
 from lib.project.asset_types import ASSET_SPECS
 from lib.speech.narration_delivery import POST_PRODUCTION, USE_TTS, NarrationDelivery
-from lib.workflow.workflow_rules import WorkflowStepRule, workflow_rule
+from lib.workflow.voice_over import VoiceOverFacts
+from lib.workflow.workflow_rules import VOICE_OVER_STEP_ID, WorkflowStepRule, workflow_rule
 from lib.workflow.workflow_state import WorkflowActionType, WorkflowBlocker, WorkflowNextAction, WorkflowStatus
 
 PositiveStrictInt = Annotated[int, Field(strict=True, gt=0)]
@@ -120,8 +121,12 @@ class WorkflowPlan(BaseModel):
 _ARTIFACT_BY_STEP: dict[str, str] = {
     "asset_inventory": "asset_inventory",
     "asset_sheets": "asset_sheets",
+    "screenplay": "screenplay",
+    "screenplay_review": "screenplay",
     "script_plan_content": "script_plan",
     "script_plan_review": "script_plan",
+    "direct_episode": "script",
+    "direction_review": "script",
     "final_script": "script",
     "storyboard": "storyboards",
     "narration_delivery": "audio",
@@ -130,10 +135,12 @@ _ARTIFACT_BY_STEP: dict[str, str] = {
 
 _TASK_STEP: dict[str, str] = {
     "text_episode_plan": "episode_plan",
+    "text_screenplay": "screenplay",
     "text_drama_script_plan": "script_plan_content",
     "text_narration_script_plan": "script_plan_content",
     "text_reference_script_plan": "script_plan_content",
     "text_episode_script": "final_script",
+    "text_director_plan": "direct_episode",
     **dict.fromkeys(ASSET_SPECS, "asset_sheets"),
     "storyboard": "storyboard",
     "grid": "storyboard",
@@ -141,6 +148,9 @@ _TASK_STEP: dict[str, str] = {
     "video": "video",
     "reference_video": "video",
 }
+
+VOICE_OVER_TOOL = "generate_dub_voiceover"
+VOICE_OVER_STATUS_TOOL = "get_dub_status"
 
 
 def _baseline_step_state(
@@ -168,6 +178,26 @@ def _current_rule_index(status: WorkflowStatus, rules: tuple[WorkflowStepRule, .
         if rule.applicable and rule.checkpoint == status.state:
             return index
     raise ValueError(f"workflow state {status.state!r} is absent from its mode rule")
+
+
+def _apply_voice_over(step: WorkflowPlanStep, facts: VoiceOverFacts, *, after_video: bool) -> None:
+    """可选配音步骤：不要求完成，完成与否都不影响 export；动作由 ``artifacts`` 指向 Agent 工具。"""
+    step.required = False
+    if facts.measured:
+        step.artifacts = {
+            "current_ids": list(facts.complete_ids),
+            "stale_ids": [],
+            "missing_ids": list(facts.missing_ids),
+            "tool": VOICE_OVER_TOOL,
+            "status_tool": VOICE_OVER_STATUS_TOOL,
+        }
+    if not after_video or not facts.measured:
+        step.state = WorkflowStepState.PENDING
+    elif facts.active:
+        # 配音任务只让该步骤显示为 active，不接管整份计划的下一动作，也不挂到步骤的任务列表。
+        step.state = WorkflowStepState.ACTIVE
+    else:
+        step.state = WorkflowStepState.COMPLETED if facts.complete else WorkflowStepState.READY
 
 
 def _admission_problems(admission: dict[str, Any] | None) -> list[GenerationProblem]:
@@ -236,10 +266,15 @@ def build_workflow_plan(
     script_revision: str | None = None,
     task_observations: list[WorkflowTaskObservation] | None = None,
     admission: dict[str, Any] | None = None,
+    voice_over: VoiceOverFacts | None = None,
 ) -> WorkflowPlan:
-    """Project one immutable status snapshot and transient request observations."""
+    """Project one immutable status snapshot and transient request observations.
 
-    rule = workflow_rule(status.project.content_mode, status.project.generation_mode)
+    ``voice_over`` is given only for reference-video projects with Vietnamese voice-over on; it adds the
+    optional, non-blocking ``voice_over`` step between ``video`` and ``export``. Without it the plan is unchanged.
+    """
+
+    rule = workflow_rule(status.project.content_mode, status.project.generation_mode, voice_over=voice_over is not None)
     rules = rule.steps
     current_index = _current_rule_index(status, rules)
     structure_problems = list(structure_problems or [])
@@ -266,6 +301,8 @@ def build_workflow_plan(
         )
         if step_rule.id == "narration_delivery":
             step.required = status.state == "VIDEO" and status.next_action.type is WorkflowActionType.GENERATE_VIDEOS
+        if step_rule.id == VOICE_OVER_STEP_ID and voice_over is not None:
+            _apply_voice_over(step, voice_over, after_video=index < current_index)
         if step.artifacts.get("state") == "blocked" and step.state is not WorkflowStepState.SKIPPED:
             step.state = WorkflowStepState.BLOCKED
         steps.append(step)

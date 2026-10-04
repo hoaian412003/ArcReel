@@ -688,6 +688,40 @@ async def test_manual_upload_uses_explicit_unverified_raw_presentation_everywher
         assert json.loads(archive.read("presentation.json"))["provenance"] == "unavailable"
 
 
+async def test_manual_upload_skips_episodes_whose_script_file_is_missing(tmp_path: Path) -> None:
+    pm, project_path, settings = _setup_narrator_project(tmp_path)
+    versions_path = project_path / "versions" / "versions.json"
+    versions_value = json.loads(versions_path.read_text(encoding="utf-8"))
+    record = versions_value["videos"]["E1S01"]["versions"][0]
+    versions_value["videos"]["E1S01"]["versions"][0] = {
+        key: value
+        for key, value in record.items()
+        if key in {"version", "file", "prompt", "created_at", "_previous_current_version"}
+    } | {"source": "manual_upload"}
+    _write_json(versions_path, versions_value)
+    project_json_path = project_path / "project.json"
+    project_value = json.loads(project_json_path.read_text(encoding="utf-8"))
+    project_value["episodes"].append({"episode": 2, "title": "Pending", "script_file": "scripts/episode_2.json"})
+    _write_json(project_json_path, project_value)
+
+    async def probe(_path: Path) -> float | None:
+        return 6.25
+
+    read_model = PresentationReadModelService(
+        pm,
+        settings_resolver_factory=lambda _project_name, _project_path: _SettingsResolver(settings),
+        duration_probe=probe,
+    )
+    result = await read_model.materialize_unit(
+        project_name="demo",
+        resource_type="videos",
+        resource_id="E1S01",
+        variant="post_production",
+    )
+
+    assert result.episode == 1
+
+
 async def test_generated_video_without_typed_provenance_fails_closed(tmp_path: Path) -> None:
     pm, project_path, settings = _setup_narrator_project(tmp_path)
     versions_path = project_path / "versions" / "versions.json"

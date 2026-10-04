@@ -313,12 +313,9 @@ def _cred_to_response(cred: ProviderCredential) -> CredentialResponse:
 
 
 async def _invalidate_caches(request: Request) -> None:
-    from server.services.tasks.generation_context import invalidate_backend_cache
+    from server.queue_control import broadcast_config_changed
 
-    invalidate_backend_cache()
-    worker = getattr(request.app.state, "generation_worker", None)
-    if worker:
-        await worker.reload_limits()
+    await broadcast_config_changed(request)
 
 
 def _build_field(

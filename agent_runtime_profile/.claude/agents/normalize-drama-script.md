@@ -32,6 +32,14 @@ description: "剧情演绎单集规范化剧本子智能体。使用场景：(1)
 - 末镜停在情绪极致瞬间，shot_type 倾向 Close-up / Extreme Close-up，
   给观众留下回看的钩子。
 
+## 已通过的剧本（新一集）
+
+新一集在拆解之前已经走过编剧步骤：本集有已通过审阅的剧本（`drafts/episode_{N}/screenplay.json`）时，`mcp__arcreel__generate_script_plan` 会自动把它连同源文一并送给文本模型——拆解以剧本为依据（场次顺序、节奏、时长预算），`utterances` 里的台词与画外音逐字取自剧本，`source_text` 逐字取自源文，无需你传入剧本。
+
+- 剧本存在但还没通过审阅、或写于旧的源文时，工具拒绝并说明原因：原样回报主 Agent，不要自己改剧本、不要绕过。
+- 拆解成功后工具会自动完成内容确认（返回文本里有说明），你**不要**再调 `mcp__arcreel__confirm_script_review`；返回里写明「没有自动确认」时（该集已有正式脚本、需要用户同意覆盖），回报主 Agent 由它处理。没有剧本的存量集沿用原路径，仍须内容确认。
+- 违约报告可能出现与剧本对齐有关的条目：`scene_no_missing` / `scene_no_invalid` / `scene_no_regress`（单元没标或标错所属场次）、`scene_not_covered`（漏了剧本的某一场）、`utterance_not_in_screenplay`（台词不在剧本里）。按情况 C 修复草稿时，漏场要补拆单元，台词要改回剧本里的原句；晋升时不再复核剧本对齐（所属场次只在生成时可得），修复须自行对照剧本。
+
 ## 工作流程
 
 ### Step 0: 查视频模型能力与用户偏好

@@ -9,6 +9,7 @@ import {
   WORKSPACE_ROUTE_SCENES,
   WORKSPACE_ROUTE_PROPS,
   WORKSPACE_ROUTE_PRODUCTS,
+  WORKSPACE_ROUTE_FLOW,
   WORKSPACE_ROUTE_EPISODES,
   WORKSPACE_ROUTE_EPISODE_EDIT,
 } from "@/app-routes";
@@ -22,6 +23,7 @@ import { useConfigStatusStore } from "@/stores/config-status-store";
 import { useActiveResourceIds } from "@/stores/tasks-store";
 import { TimelineCanvas } from "./timeline/TimelineCanvas";
 import { OverviewCanvas } from "./OverviewCanvas";
+import { FlowBoard } from "./flow/FlowBoard";
 import { SourceFileViewer } from "./SourceFileViewer";
 import { SourceFilesPage } from "./SourceFilesPage";
 import { CharactersPage } from "./lorebook/CharactersPage";
@@ -628,6 +630,10 @@ export function StudioCanvasRouter() {
         />
       </Route>
 
+      <Route path={`/${WORKSPACE_ROUTE_FLOW}`}>
+        {demoMode ? <Redirect to="/" /> : <FlowBoard key={currentProjectName} projectName={currentProjectName} />}
+      </Route>
+
       <Route path={`/${WORKSPACE_ROUTE_LOREBOOK}`}>
         <Redirect to={`/${WORKSPACE_ROUTE_CHARACTERS}`} />
       </Route>
@@ -806,7 +812,7 @@ export function StudioCanvasRouter() {
                     onSaveTitle={(title) => handleUpdateEpisodeTitle(epNum, title)}
                     canEditTitle={Boolean(episode?.script_file)}
                     hasScript={Boolean(script)}
-                    showPreprocess={!isAd}
+                    showPreprocess={false}
                     freeDuration={isAd}
                     videoModelUnresolved={capabilities.videoModelUnresolved}
                   />
@@ -825,7 +831,6 @@ export function StudioCanvasRouter() {
                     durationOptions={durationOptions}
                     durationWarningReason={durationWarningReason}
                     durationEndpointFixed={durationEndpointFixed}
-                    videoModelUnresolved={capabilities.videoModelUnresolved}
                     lastFrame={capabilities.lastFrame}
                     capabilitiesLoading={capabilities.loading}
                     onUpdatePrompt={awaitedUpdatePrompt}
@@ -856,7 +861,6 @@ export function StudioCanvasRouter() {
                     durationOptions={durationOptions}
                     durationWarningReason={durationWarningReason}
                     durationEndpointFixed={durationEndpointFixed}
-                    videoModelUnresolved={capabilities.videoModelUnresolved}
                     lastFrame={capabilities.lastFrame}
                     capabilitiesLoading={capabilities.loading}
                     onUpdatePrompt={awaitedUpdatePrompt}

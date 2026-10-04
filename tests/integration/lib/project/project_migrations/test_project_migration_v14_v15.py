@@ -114,7 +114,8 @@ def test_whole_chain_leaves_every_episode_ready_for_the_next_step(
     service = WorkflowStateService(ProjectManager(tmp_path))
     materialized = service.get_status(project_dir.name, 2)
     assert materialized.next_action is not None
-    assert materialized.next_action.type.value == "author_prompts"
+    # 两条路线的待编写条目都先过导演步骤，导演审阅通过后才编写提示词。
+    assert materialized.next_action.type.value == "direct_episode"
     unit = "U" if variant == "reference_video" else "S"
     assert materialized.next_action.requested_ids == [f"E2{unit}01", f"E2{unit}02"]
     for episode in (1, 2, 3):
@@ -128,7 +129,7 @@ def test_whole_chain_leaves_every_episode_ready_for_the_next_step(
 
 
 def test_rerunning_the_script_plan_of_a_grandfathered_episode_only_asks_for_confirmation(tmp_path: Path) -> None:
-    """grandfather 集记下确认基线后，重跑脚本规划回到待确认，但正式脚本照常在用、不挡下游。"""
+    """grandfather 集记下确认基线后，重跑脚本规划回到待确认，但正式脚本照常在用、不挡下游（待编写条目先过导演步骤）。"""
 
     root = tmp_path / "projects"
     project_dir = write_legacy_script_plan_project(root, variant="narration", schema_version=7)
@@ -143,7 +144,7 @@ def test_rerunning_the_script_plan_of_a_grandfathered_episode_only_asks_for_conf
     status = WorkflowStateService(ProjectManager(tmp_path)).get_status(project_dir.name, 3)
     assert status.artifacts["script"]["state"] == "current"
     assert status.next_action is not None
-    assert status.next_action.type.value == "author_prompts"
+    assert status.next_action.type.value == "direct_episode"
 
 
 def test_script_registered_by_the_plan_based_basis_is_rebased_and_stays_current(tmp_path: Path) -> None:

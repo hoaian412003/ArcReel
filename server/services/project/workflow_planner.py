@@ -24,12 +24,14 @@ from lib.project.project_migration_failure import (
     MigrationFailureRecord,
     load_migration_failure,
 )
+from lib.script import direction_review
 from lib.script.grid.grid_manager import GridManager
 from lib.script.reference_video.request_projection import ReferenceRequestOptions
 from lib.script.script_batch_edit import script_revision
 from lib.script.script_skeleton import ensure_route_skeleton, resolve_kind_items
 from lib.speech.narration_delivery import USE_TTS
 from lib.speech.speech_composition import admit_script_unit
+from lib.workflow.voice_over import VoiceOverFacts, voice_over_applies
 from lib.workflow.workflow_plan import (
     WorkflowPlan,
     WorkflowPlanRequest,
@@ -49,6 +51,10 @@ from server.services.admission.video_batch_admission import (
     screen_script_entries,
     speech_admission_problems,
 )
+
+#: 越南语配音的任务类型：按视频单元的合成任务，以及按集写台词的文本任务。
+_DUB_UNIT_TASK_TYPES = ("dub_auto", "dub_tts")
+_DUB_LINES_TASK_TYPE = "text_reference_dub_lines"
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +129,49 @@ class WorkflowPlanner:
             script_revision=facts.revision if facts is not None else None,
             task_observations=tasks,
             admission=admission,
+            voice_over=await self._voice_over_facts(project_name, status, facts, user_id=user_id, queue=queue),
         )
+
+    async def get_episode_statuses(self, project_name: str) -> list[tuple[int, str, WorkflowStatus]]:
+        """每一集的制作状态 ``(集号, 标题, 状态)``，供 Flow 看板；各集共用一次项目级事实读取。"""
+        return await asyncio.to_thread(WorkflowStateService(self._pm).get_episode_statuses, project_name)
+
+    async def _voice_over_facts(
+        self,
+        project_name: str,
+        status: WorkflowStatus,
+        facts: _ScriptFacts | None,
+        *,
+        user_id: str,
+        queue: GenerationQueue,
+    ) -> VoiceOverFacts | None:
+        """启用越南语配音的参考生视频项目才有可选配音步骤；其余项目返回 ``None``，计划不变。"""
+        if status.project.generation_mode != "reference_video":
+            return None
+        project = facts.project if facts is not None else await asyncio.to_thread(self._pm.load_project, project_name)
+        if not voice_over_applies(project):
+            return None
+        if facts is None:
+            return VoiceOverFacts()
+        unit_ids = [str(unit["unit_id"]) for unit in facts.script.get("video_units") or [] if unit.get("unit_id")]
+        queries: list[tuple[str, list[str], str | None]] = [
+            (task_type, unit_ids, facts.script_file) for task_type in _DUB_UNIT_TASK_TYPES
+        ]
+        if status.target is not None:
+            queries.append((_DUB_LINES_TASK_TYPE, [f"episode-{status.target.episode}-dub-lines"], None))
+        active = False
+        for task_type, resource_ids, script_file in queries:
+            if resource_ids and await get_active_tasks_for_resources(
+                project_name=project_name,
+                task_type=task_type,
+                resource_ids=resource_ids,
+                script_file=script_file,
+                user_id=user_id,
+                queue=queue,
+            ):
+                active = True
+                break
+        return VoiceOverFacts.from_script(facts.script, active=active)
 
     async def _migration_problem(self, project_name: str, blocker: WorkflowBlocker) -> GenerationProblem:
         """Re-read the verdict for the structured locations the blocker cannot carry.
@@ -202,6 +250,11 @@ class WorkflowPlanner:
                     else f"text_{status.project.content_mode}_script_plan"
                 )
                 text_queries.append((script_plan_type, episode_ids))
+                text_queries.append(("text_screenplay", episode_ids))
+                if direction_review.applies_to_project(
+                    {"content_mode": status.project.content_mode, "generation_mode": status.project.generation_mode}
+                ):
+                    text_queries.append(("text_director_plan", episode_ids))
         for task_type, resource_ids in text_queries:
             rows.extend(
                 await get_active_tasks_for_resources(

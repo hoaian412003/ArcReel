@@ -317,3 +317,24 @@ class TestWorkdirResolution:
         from lib.speech.vieneu_service import REPO_ROOT, VieneuConfig
 
         assert VieneuConfig.from_settings({}).workdir == str(REPO_ROOT / "third_party" / "VieNeu-TTS")
+
+
+class TestServerQueueSettings:
+    """CPU 上服务一次只合成一路，其余请求在其自带的队列里等：缺省队列只有 1 个位置、等 10 秒就返回 429。"""
+
+    def test_the_managed_server_gets_a_queue_that_fits_a_whole_episode(self, monkeypatch):
+        monkeypatch.delenv("VIENEU_QUEUE", raising=False)
+        monkeypatch.delenv("VIENEU_QUEUE_TIMEOUT", raising=False)
+
+        env = vieneu_service._build_env(VieneuConfig())
+
+        assert int(env["VIENEU_QUEUE"]) >= 16
+        assert int(env["VIENEU_QUEUE_TIMEOUT"]) >= 600
+
+    def test_a_value_the_user_already_set_is_not_overridden(self, monkeypatch):
+        monkeypatch.setenv("VIENEU_QUEUE", "3")
+        monkeypatch.setenv("VIENEU_QUEUE_TIMEOUT", "30")
+
+        env = vieneu_service._build_env(VieneuConfig())
+
+        assert (env["VIENEU_QUEUE"], env["VIENEU_QUEUE_TIMEOUT"]) == ("3", "30")

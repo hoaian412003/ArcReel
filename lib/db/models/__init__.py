@@ -14,6 +14,7 @@ from lib.db.models.session import AgentSession
 from lib.db.models.session_event import AgentSessionEventLogEntry
 from lib.db.models.session_message_link import AgentSessionUserMessageLink
 from lib.db.models.task import BatchTask, GenerationBatch, Task, WorkerLease
+from lib.db.models.task_event import QueueAudit, TaskEvent
 from lib.db.models.user import User
 
 __all__ = [
@@ -34,8 +35,10 @@ __all__ = [
     "MarketSource",
     "ProviderConfig",
     "ProviderCredential",
+    "QueueAudit",
     "SystemSetting",
     "Task",
+    "TaskEvent",
     "User",
     "WorkerLease",
     "register_models",

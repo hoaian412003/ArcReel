@@ -16,6 +16,7 @@ from lib.edit_timeline.catalog import UnitInfo
 from lib.edit_timeline.errors import EditTimelineError
 from lib.edit_timeline.models import TRANSITION_SECONDS, Timeline
 from lib.infra.subprocess_deadline import run_with_deadline
+from lib.speech.dub_render import DEFAULT_ORIGINAL_VOLUME, MIX_LIMIT
 
 #: 转场词表 → ffmpeg xfade 效果。
 XFADE_EFFECTS: Mapping[str, str] = {"fade": "fade", "dissolve": "dissolve", "wipe": "wipeleft"}
@@ -24,6 +25,10 @@ _PROBE_DEADLINE_SECONDS = 30.0
 _RENDER_DEADLINE_SECONDS = 1800.0
 _SAMPLE_RATE = 44100
 _FPS = 24
+#: 配音头尾被剪断时的淡入淡出（秒），避免剪口处爆音。
+_DUB_EDGE_FADE_S = 0.03
+#: 配音短到这个长度以内就不放了（剪口只剩一点尾巴）。
+_DUB_MIN_LENGTH_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,30 @@ class MediaProbe:
 
 
 @dataclass(frozen=True)
+class DubSource:
+    """某个视频单元里一条已合成的配音：音频文件，以及它在该单元视频里的开始时间与时长（秒）。"""
+
+    path: Path
+    start_s: float
+    duration_s: float
+
+
+@dataclass(frozen=True)
+class DubPlacement:
+    """落在某个片段里的一段配音（已按片段的入出点裁好）。"""
+
+    path: Path
+    #: 配音在片段里开始的时刻（相对片段起点，秒）。
+    offset_in_clip_s: float
+    #: 配音音频头部要裁掉的秒数（配音开始早于片段入点时）。
+    trim_head_s: float
+    #: 实际放进来的长度。
+    length_s: float
+    fade_in: bool = False
+    fade_out: bool = False
+
+
+@dataclass(frozen=True)
 class ClipPlan:
     """一个即将渲染的片段：源文件、实际使用的区间与它后面的转场。"""
 
@@ -43,6 +72,7 @@ class ClipPlan:
     end_s: float
     has_audio: bool
     transition_to_next: str = "cut"
+    dub: tuple[DubPlacement, ...] = ()
 
     @property
     def length_s(self) -> float:
@@ -88,14 +118,46 @@ async def probe_media(path: Path) -> MediaProbe:
     )
 
 
+def place_dub(sources: Sequence[DubSource], start_s: float, end_s: float) -> tuple[DubPlacement, ...]:
+    """把一个单元的配音按片段区间 ``[start_s, end_s]`` 裁剪并换算成片段内的位置。
+
+    配音整段落在区间内就原样放；跨过入点 / 出点的只留区间内的那一截（剪口处做短淡入淡出）；
+    完全在区间外或只剩一点点的丢弃。文件不存在的配音也丢弃。
+    """
+    placements: list[DubPlacement] = []
+    for source in sources:
+        if not source.path.is_file():
+            continue
+        begin = max(source.start_s, start_s)
+        end = min(source.start_s + source.duration_s, end_s)
+        if end - begin <= _DUB_MIN_LENGTH_S:
+            continue
+        head = begin - source.start_s
+        placements.append(
+            DubPlacement(
+                path=source.path,
+                offset_in_clip_s=begin - start_s,
+                trim_head_s=head,
+                length_s=end - begin,
+                fade_in=head > 0,
+                fade_out=end < source.start_s + source.duration_s,
+            )
+        )
+    return tuple(placements)
+
+
 async def resolve_plans(
     timeline: Timeline,
     catalog: Sequence[UnitInfo],
     project_dir: Path,
     *,
     probe: Prober = probe_media,
+    dub_sources: Mapping[str, Sequence[DubSource]] | None = None,
 ) -> tuple[list[ClipPlan], MediaProbe | None]:
-    """把最新修订解析为可渲染的片段计划；返回计划与第一个片段的探测结果（用作输出画幅）。"""
+    """把最新修订解析为可渲染的片段计划；返回计划与第一个片段的探测结果（用作输出画幅）。
+
+    ``dub_sources`` 给出时（单元 ID → 该单元已合成的配音），每个片段带上落在它区间内的配音。
+    """
     by_id = {unit.unit_id: unit for unit in catalog}
     plans: list[ClipPlan] = []
     first: MediaProbe | None = None
@@ -116,8 +178,32 @@ async def resolve_plans(
         end = min(end, info.duration_s)
         if end - start <= 0.05:
             start, end = 0.0, info.duration_s
-        plans.append(ClipPlan(path, start, end, info.has_audio, clip.transition_to_next))
+        dub = place_dub((dub_sources or {}).get(clip.unit_id, ()), start, end)
+        plans.append(ClipPlan(path, start, end, info.has_audio, clip.transition_to_next, dub))
     return plans, first
+
+
+def transition_overlap(cur_len: float, next_len: float) -> float:
+    """非硬切转场让相邻两段重叠的秒数：画面与音频的转场、配音的定位都按这同一个值算。"""
+    return min(TRANSITION_SECONDS, cur_len / 2, next_len / 2)
+
+
+def clip_start_times(plans: Sequence[ClipPlan]) -> list[float]:
+    """每个片段在成片时间轴上的开始时刻（秒）：转场重叠会把后面的片段整体提前。"""
+    if not plans:
+        return []
+    starts = [0.0]
+    cur_len = plans[0].length_s
+    for i in range(1, len(plans)):
+        nxt = plans[i]
+        if XFADE_EFFECTS.get(plans[i - 1].transition_to_next) is None:
+            starts.append(cur_len)
+            cur_len += nxt.length_s
+        else:
+            overlap = transition_overlap(cur_len, nxt.length_s)
+            starts.append(cur_len - overlap)
+            cur_len += nxt.length_s - overlap
+    return starts
 
 
 def build_filter_graph(plans: Sequence[ClipPlan], *, width: int, height: int) -> tuple[str, str, str]:
@@ -155,7 +241,7 @@ def build_filter_graph(plans: Sequence[ClipPlan], *, width: int, height: int) ->
             parts.append(f"[{cur_v}][{cur_a}][v{i}][a{i}]concat=n=2:v=1:a=1[{out_v}][{out_a}]")
             cur_len += nxt.length_s
         else:
-            dur = min(TRANSITION_SECONDS, cur_len / 2, nxt.length_s / 2)
+            dur = transition_overlap(cur_len, nxt.length_s)
             parts.append(
                 f"[{cur_v}][v{i}]xfade=transition={effect}:duration={dur:.3f}:offset={cur_len - dur:.3f}[{out_v}]"
             )
@@ -165,11 +251,56 @@ def build_filter_graph(plans: Sequence[ClipPlan], *, width: int, height: int) ->
     return ";".join(parts), cur_v, cur_a
 
 
+def dub_placements(plans: Sequence[ClipPlan]) -> list[tuple[DubPlacement, float]]:
+    """所有配音及其在成片时间轴上的开始时刻（片段起点 + 片段内位置），顺序即额外输入的顺序。"""
+    placed: list[tuple[DubPlacement, float]] = []
+    for plan, clip_start in zip(plans, clip_start_times(plans), strict=True):
+        placed.extend((dub, clip_start + dub.offset_in_clip_s) for dub in plan.dub)
+    return placed
+
+
+def build_dub_mix(
+    placed: Sequence[tuple[DubPlacement, float]],
+    base_audio_label: str,
+    first_input_index: int,
+    *,
+    original_volume: float = DEFAULT_ORIGINAL_VOLUME,
+) -> tuple[list[str], str]:
+    """把配音混进成片音轨：原声压到 ``original_volume``，配音按时刻叠加（满音量），末尾限幅防破音。
+
+    返回 ``(滤镜片段, 混音后的音频标签)``。配音输入从 ``first_input_index`` 起依次编号。
+    """
+    parts = [f"[{base_audio_label}]volume={original_volume:g}[orig]"]
+    labels = ["[orig]"]
+    for k, (dub, start) in enumerate(placed):
+        chain = [
+            f"atrim=start={dub.trim_head_s:.3f}:end={dub.trim_head_s + dub.length_s:.3f}",
+            "asetpts=PTS-STARTPTS",
+        ]
+        if dub.fade_in:
+            chain.append(f"afade=t=in:d={_DUB_EDGE_FADE_S}")
+        if dub.fade_out:
+            chain.append(f"afade=t=out:st={max(dub.length_s - _DUB_EDGE_FADE_S, 0):.3f}:d={_DUB_EDGE_FADE_S}")
+        delay_ms = max(0, round(start * 1000))
+        chain += [f"aresample={_SAMPLE_RATE}", "aformat=channel_layouts=stereo", f"adelay={delay_ms}|{delay_ms}"]
+        parts.append(f"[{first_input_index + k}:a]{','.join(chain)}[dub{k}]")
+        labels.append(f"[dub{k}]")
+    parts.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0[dubmix]")
+    parts.append(f"[dubmix]alimiter=limit={MIX_LIMIT}[afinal]")
+    return parts, "afinal"
+
+
 def build_ffmpeg_args(plans: Sequence[ClipPlan], output: Path, *, width: int, height: int) -> list[str]:
     graph, v_label, a_label = build_filter_graph(plans, width=width, height=height)
+    placed = dub_placements(plans)
+    if placed:
+        mix_parts, a_label = build_dub_mix(placed, a_label, len(plans))
+        graph = ";".join([graph, *mix_parts])
     args = ["ffmpeg", "-y", "-v", "error"]
     for plan in plans:
         args += ["-i", str(plan.path)]
+    for dub, _ in placed:
+        args += ["-i", str(dub.path)]
     args += [
         "-filter_complex",
         graph,
@@ -201,11 +332,15 @@ async def render_timeline(
     output: Path,
     *,
     probe: Prober = probe_media,
+    dub_sources: Mapping[str, Sequence[DubSource]] | None = None,
 ) -> Path:
-    """渲染时间线最新修订到 ``output``（先写临时文件再原子替换）。"""
+    """渲染时间线最新修订到 ``output``（先写临时文件再原子替换）。
+
+    ``dub_sources`` 给出时把越南语配音混入成片（原声压低、配音叠加）。
+    """
     if not ffmpeg_tools_available():
         raise EditTimelineError("ffmpeg/ffprobe not available", key="edit_timeline_ffmpeg_missing")
-    plans, first = await resolve_plans(timeline, catalog, project_dir, probe=probe)
+    plans, first = await resolve_plans(timeline, catalog, project_dir, probe=probe, dub_sources=dub_sources)
     if not plans or first is None:
         raise EditTimelineError("timeline has no renderable clips", key="edit_timeline_empty")
     # libx264/yuv420p 要求偶数边长。

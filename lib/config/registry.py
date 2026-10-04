@@ -62,6 +62,8 @@ class ModelInfo:
     # 图像 / 视频两个 registry 条目）用此字段让两条目共用一个 API 模型名，而 registry 键名各自
     # 唯一——键名兼作 UI 标识与计费查表键，不能重复，故 API 模型名需与键名解耦。
     api_model_name: str | None = None
+    # 文本模型的单次输出上限（token）；None = 沿用全局 DEFAULT_MAX_OUTPUT_TOKENS。
+    max_output_tokens: int | None = None
 
 
 # 合法并发 lane 名，与 CapacityTable 的 image/video/audio 三条容量通道对齐。
@@ -701,6 +703,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 display_name="DeepSeek V4 Flash",
                 media_type="text",
                 capabilities=["text_generation"],
+                max_output_tokens=256000,
             ),
             "deepseek-v4-pro": ModelInfo(
                 display_name="DeepSeek V4 Pro",
@@ -1195,7 +1198,8 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 pricing=_free_audio_pricing("vieneu-tts-v3-turbo"),
             ),
         },
-        default_concurrency={"audio": 1},
+        # 同时最多 4 条配音任务在跑；服务端一次只合成一路，其余在其队列里排队（见 vieneu_service._build_env）
+        default_concurrency={"audio": 4},
     ),
     "minimax": ProviderMeta(
         display_name="MiniMax",

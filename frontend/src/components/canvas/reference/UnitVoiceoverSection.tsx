@@ -25,6 +25,9 @@ interface LineDraft {
   start?: string;
 }
 
+/** 比成片里的实际开始时间晚多久才在表格里提示。 */
+const DELAY_WARNING_SECONDS = 0.3;
+
 function formatSeconds(value: number): string {
   return (Math.round(value * 10) / 10).toFixed(1);
 }
@@ -262,6 +265,15 @@ export function UnitVoiceoverSection({ projectName, episode, unitId, refreshKey 
                     />
                     <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10.5px] text-[var(--color-text-4)]">
                       {line.speaker && <span translate="no">{line.speaker}</span>}
+                      {line.delayed_seconds >= DELAY_WARNING_SECONDS && (
+                        <span className="inline-flex items-center gap-0.5 text-amber-300">
+                          <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                          {t("dub_line_delayed", {
+                            seconds: formatSeconds(line.delayed_seconds),
+                            previous: line.index,
+                          })}
+                        </span>
+                      )}
                       {line.stale && (
                         <span className="inline-flex items-center gap-0.5 text-amber-300">
                           <AlertTriangle className="h-3 w-3" aria-hidden="true" />

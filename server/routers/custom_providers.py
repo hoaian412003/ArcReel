@@ -755,12 +755,9 @@ def _check_unique_defaults(models: list[ModelInput], specs: dict[str, EndpointSp
 
 async def _invalidate_caches(request: Request) -> None:
     """清空 backend 实例缓存 + 刷新 worker 限流配置。"""
-    from server.services.tasks.generation_context import invalidate_backend_cache
+    from server.queue_control import broadcast_config_changed
 
-    invalidate_backend_cache()
-    worker = getattr(request.app.state, "generation_worker", None)
-    if worker:
-        await worker.reload_limits()
+    await broadcast_config_changed(request)
 
 
 # ---------------------------------------------------------------------------

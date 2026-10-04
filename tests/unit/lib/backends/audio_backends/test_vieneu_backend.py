@@ -45,12 +45,13 @@ class TestRegistryWiring:
     def test_registered_in_audio_registry(self):
         assert "vieneu" in get_registered_backends()
 
-    def test_provider_meta_is_keyless_free_and_serial(self):
+    def test_provider_meta_is_keyless_free_and_runs_four_videos_at_a_time(self):
         meta = PROVIDER_REGISTRY["vieneu"]
         assert meta.required_keys == []
         assert meta.secret_keys == []
         assert "base_url" in meta.optional_keys
-        assert meta.default_concurrency == {"audio": 1}
+        # 配音每个视频一个任务，同时最多 4 个在跑；服务端一次只合成一路，其余在其队列里排队
+        assert meta.default_concurrency == {"audio": 4}
         assert meta.media_types == ["audio"]
         model = meta.models[DEFAULT_MODEL]
         assert model.default is True
@@ -170,3 +171,85 @@ class TestVoices:
         with capture_http() as router:
             router.get("http://h/v1/voices").respond(500)
             assert await fetch_server_voices("http://h/v1") is None
+
+
+class _FakeClock:
+    """记录等了多久的假时钟：重试测试不真等。"""
+
+    def __init__(self) -> None:
+        self.sleeps: list[float] = []
+        self._now = 0.0
+
+    def monotonic(self) -> float:
+        return self._now
+
+    async def sleep(self, delay: float) -> None:
+        self.sleeps.append(delay)
+        self._now += delay
+
+
+def _busy() -> httpx.Response:
+    return httpx.Response(429, json={"error": {"message": "server busy: queue full", "type": "invalid_request_error"}})
+
+
+class TestBusyServer:
+    """服务端一次只合成一路，其余请求排队；队列满时返回 429。几个视频同时配音时应当等，而不是整条任务失败。"""
+
+    @staticmethod
+    def _backend(clock: _FakeClock, *, backoff: tuple[int, ...] = (2, 3, 5)) -> VieneuAudioBackend:
+        return VieneuAudioBackend(
+            base_url="http://vieneu:8000/v1", busy_backoff_seconds=backoff, clock=clock, jitter=lambda lo, hi: 0.0
+        )
+
+    @staticmethod
+    def _request(tmp_path: Path) -> AudioSynthesisRequest:
+        return AudioSynthesisRequest(text="Xin chào", output_path=tmp_path / "o.wav", voice="Mai Anh")
+
+    async def test_waits_and_tries_again_while_the_server_says_busy(self, tmp_path: Path):
+        clock = _FakeClock()
+        with capture_http() as router:
+            route = router.post("http://vieneu:8000/v1/audio/speech")
+            route.side_effect = [_busy(), _busy(), httpx.Response(200, content=b"RIFFaudio")]
+            result = await self._backend(clock).synthesize(self._request(tmp_path))
+
+        assert route.call_count == 3
+        assert (tmp_path / "o.wav").read_bytes() == b"RIFFaudio"
+        assert result.provider == "vieneu"
+        assert clock.sleeps == [2.0, 3.0]
+
+    async def test_gives_up_once_the_waiting_budget_is_spent(self, tmp_path: Path):
+        from openai import RateLimitError
+
+        clock = _FakeClock()
+        with capture_http() as router:
+            route = router.post("http://vieneu:8000/v1/audio/speech")
+            route.side_effect = lambda request: _busy()
+            with pytest.raises(RateLimitError):
+                await self._backend(clock, backoff=(1, 1)).synthesize(self._request(tmp_path))
+
+        assert route.call_count == 3  # 首次 + 两次重试
+        assert clock.sleeps == [1.0, 1.0]
+
+    async def test_other_transient_errors_get_only_a_few_quick_retries(self, tmp_path: Path):
+        clock = _FakeClock()
+        with capture_http() as router:
+            route = router.post("http://vieneu:8000/v1/audio/speech")
+            route.side_effect = lambda request: httpx.Response(500, json={"error": {"message": "boom"}})
+            with pytest.raises(Exception, match="boom"):
+                await self._backend(clock, backoff=(1,) * 20).synthesize(self._request(tmp_path))
+
+        assert route.call_count == 4  # 首次 + 3 次快速重试，不会跟着排队等 20 次
+        assert len(clock.sleeps) == 3
+
+    async def test_a_client_error_is_not_retried(self, tmp_path: Path):
+        clock = _FakeClock()
+        with capture_http() as router:
+            route = router.post("http://vieneu:8000/v1/audio/speech")
+            route.side_effect = lambda request: httpx.Response(
+                400, json={"error": {"message": "bad voice", "type": "invalid_request_error"}}
+            )
+            with pytest.raises(Exception, match="bad voice"):
+                await self._backend(clock).synthesize(self._request(tmp_path))
+
+        assert route.call_count == 1
+        assert clock.sleeps == []

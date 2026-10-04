@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import cast
+from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -121,6 +122,67 @@ def _admitted_drama_script_plan() -> dict:
     plan = _drama_script_plan()
     plan["scenes"][0]["utterances"] = [{"kind": "dialogue", "speaker": "阿离", "text": "你终于回来了。"}]
     return plan
+
+
+class TestGenerateScriptPlan:
+    def _url(self) -> str:
+        return "/api/v1/projects/demo/episodes/1/script-plan/generate"
+
+    def test_queues_the_drama_script_plan_task(self, tmp_path, monkeypatch):
+        client, _pm = _client(monkeypatch, tmp_path)
+        enqueue = AsyncMock(return_value={"task_id": "task-1", "deduped": False})
+        monkeypatch.setattr(router_mod, "enqueue_task_only", enqueue)
+        with client:
+            resp = client.post(self._url())
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"task_id": "task-1", "deduped": False}
+        kwargs = enqueue.await_args.kwargs
+        assert kwargs["task_type"] == "text_drama_script_plan"
+        assert kwargs["media_type"] == "text"
+        assert kwargs["resource_id"] == "episode-1"
+        assert kwargs["payload"]["episode"] == 1
+
+    def test_reference_video_project_uses_the_reference_task(self, tmp_path, monkeypatch, video_request_facts):
+        client, _pm = _client(monkeypatch, tmp_path, generation_mode="reference_video")
+        enqueue = AsyncMock(return_value={"task_id": "task-2"})
+        monkeypatch.setattr(router_mod, "enqueue_task_only", enqueue)
+        with client:
+            resp = client.post(self._url())
+
+        assert resp.status_code == 200, resp.text
+        assert enqueue.await_args.kwargs["task_type"] == "text_reference_script_plan"
+
+    def test_refuses_when_a_script_plan_already_exists(self, tmp_path, monkeypatch):
+        client, pm = _client(monkeypatch, tmp_path)
+        enqueue = AsyncMock(return_value={"task_id": "t"})
+        monkeypatch.setattr(router_mod, "enqueue_task_only", enqueue)
+        _write_script_plan(pm, _admitted_drama_script_plan())
+        with client:
+            resp = client.post(self._url())
+
+        assert resp.status_code == 409
+        enqueue.assert_not_awaited()
+
+    def test_ad_project_has_no_script_plan(self, tmp_path, monkeypatch):
+        client, _pm = _client(monkeypatch, tmp_path, content_mode="ad")
+        enqueue = AsyncMock(return_value={"task_id": "t"})
+        monkeypatch.setattr(router_mod, "enqueue_task_only", enqueue)
+        with client:
+            resp = client.post(self._url())
+
+        assert resp.status_code == 409
+        enqueue.assert_not_awaited()
+
+    def test_worker_offline_is_503(self, tmp_path, monkeypatch):
+        from lib.generation.generation_queue_client import WorkerOfflineError
+
+        client, _pm = _client(monkeypatch, tmp_path)
+        monkeypatch.setattr(router_mod, "enqueue_task_only", AsyncMock(side_effect=WorkerOfflineError()))
+        with client:
+            resp = client.post(self._url())
+
+        assert resp.status_code == 503
 
 
 class TestScriptReviewRouter:

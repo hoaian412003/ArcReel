@@ -10,6 +10,7 @@ from lib.speech.asr_runner import (
     REPO_ROOT,
     AsrConfig,
     AsrError,
+    asr_subprocess_env,
     build_command,
     parse_output,
     resolve_workdir,
@@ -130,3 +131,18 @@ class TestTranscribe:
             raise AssertionError("must not spawn")
 
         assert await transcribe_files([], config=_config(tmp_path), run=run) == {}
+
+
+class TestSubprocessEnv:
+    def test_uv_variables_that_block_the_tool_from_setting_itself_up_are_dropped(self):
+        env = asr_subprocess_env(
+            {"PATH": "/usr/bin", "UV_NO_SYNC": "1", "UV_FROZEN": "1", "VIRTUAL_ENV": "/app/.venv", "HOME": "/root"}
+        )
+
+        assert env == {"PATH": "/usr/bin", "HOME": "/root"}
+
+    def test_other_variables_are_kept(self):
+        assert asr_subprocess_env({"HF_HOME": "/cache", "UV_CACHE_DIR": "/c"}) == {
+            "HF_HOME": "/cache",
+            "UV_CACHE_DIR": "/c",
+        }

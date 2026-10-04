@@ -1,0 +1,137 @@
+# 本地开发栈：从源码构建，PostgreSQL + 独立队列服务 + Prometheus/Grafana 监控。
+# 凭据仅用于本机，勿用于任何可从外部访问的环境。
+# 启动：docker compose -f deploy/local/docker-compose.yml up -d --build
+name: arcreel-local
+
+x-arcreel-env: &arcreel-env
+  DATABASE_URL: postgresql+asyncpg://arcreel:123123123@postgres:5432/arcreel
+  TZ: ${TZ:-Asia/Ho_Chi_Minh}
+  UV_NO_SYNC: "1"
+  QUEUE_WORKER_MODE: external
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: arcreel
+      POSTGRES_PASSWORD: "123123123"
+      POSTGRES_DB: arcreel
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arcreel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Web 后端：只入队、读状态、转发事件；重启或发版不影响在跑的任务。
+  arcreel:
+    build:
+      context: ../..
+    image: arcreel-local:latest
+    ports:
+      - "127.0.0.1:1241:1241"
+    env_file: ../../.env
+    environment: *arcreel-env
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ../../projects:/app/projects
+      - claude_data:/root/.claude
+      # 手动「检测开始时间」按钮在 Web 容器里跑，与队列容器共用同一份语音识别环境与模型
+      - asr_env:/app/tools/asr/.venv
+      - asr_models:/app/tools/asr/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 独立队列服务：执行、轮询、续跑、对账；与后端共享数据库与项目存储。
+  queue-worker:
+    image: arcreel-local:latest
+    command: ["uv", "run", "python", "-m", "server.queue_worker"]
+    env_file: ../../.env
+    environment: *arcreel-env
+    ports:
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - ../../projects:/app/projects
+      # 配音开始时间检测的语音识别环境与模型（约 2 GB），首次使用时创建 / 下载，之后复用
+      - asr_env:/app/tools/asr/.venv
+      - asr_models:/app/tools/asr/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      arcreel:
+        condition: service_healthy
+      vieneu:
+        condition: service_started
+    # 给在跑任务留出收尾时间；超时后放弃的任务由下次启动的孤儿扫描接续。
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # 本地越南语 TTS（VieNeu-TTS，CPU/ONNX）。首次启动会从 Hugging Face 下载模型，缓存在 vieneu_cache。
+  # ArcReel 的 vieneu_host 设置指向服务名 vieneu：管理器探到端口上已有服务就直接复用，不再自己拉起子进程。
+  vieneu:
+    build:
+      context: ../../third_party/VieNeu-TTS
+      dockerfile: ../../deploy/local/vieneu.Dockerfile
+    image: arcreel-vieneu:latest
+    environment:
+      # CPU 上服务一次只合成一路，其余请求在它自带的队列里等：缺省只有 1 个位置、等 10 秒就返回 429，
+      # 多个视频同时配音（队列并发 4）会大面积失败。放宽成排得下整集、等得到合成完。
+      VIENEU_QUEUE: "64"
+      VIENEU_QUEUE_TIMEOUT: "1800"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - vieneu_cache:/home/app/.cache/huggingface
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - promdata:/prometheus
+    depends_on:
+      - queue-worker
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: "123123123"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  claude_data:
+  promdata:
+  grafanadata:
+  vieneu_cache:
+  asr_env:
+  asr_models:

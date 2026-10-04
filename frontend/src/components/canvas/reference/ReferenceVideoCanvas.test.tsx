@@ -239,8 +239,8 @@ describe("ReferenceVideoCanvas", () => {
     });
   });
 
-  // 解析预览与文稿共用编辑器列：切到解析视图时 textarea 让位给只读派生视图
-  it("switches the editor column between the script and its parse preview", async () => {
+  // 导演指南（含解析预览）与文稿共用编辑器列：切到该视图时文稿 textarea 让位
+  it("switches the editor column between the script and the direction guide", async () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
       units: [mkUnit("E1U1", "中景。")], unit_capabilities: {} });
     const previewSpy = vi.spyOn(API, "previewReferenceScript").mockResolvedValue({
@@ -249,15 +249,16 @@ describe("ReferenceVideoCanvas", () => {
     });
     render(<ReferenceVideoCanvas projectName="proj" episode={1} />);
 
-    await screen.findByRole("combobox");
-    fireEvent.click(await screen.findByRole("tab", { name: /Parse preview|解析预览/ }));
+    const editorName = /Unit prompt|Unit 提示词|Prompt đơn vị/;
+    await screen.findByRole("combobox", { name: editorName });
+    fireEvent.click(await screen.findByRole("tab", { name: /Direction Guide|导演指南/ }));
 
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: editorName })).not.toBeInTheDocument();
     await waitFor(() => expect(previewSpy).toHaveBeenCalledWith("proj", 1, "中景。", expect.anything()));
     expect(await screen.findByText("@[王五] 未在角色/场景/道具中登记")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: /^(Script|文稿)$/ }));
-    expect(await screen.findByRole("combobox")).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: editorName })).toBeInTheDocument();
   });
 
   // 两个 tabpanel 同时刻只挂载一个，共用静态 id 会让未选中 tab 的 aria-controls
@@ -272,7 +273,7 @@ describe("ReferenceVideoCanvas", () => {
     render(<ReferenceVideoCanvas projectName="proj" episode={1} />);
 
     const scriptTab = await screen.findByRole("tab", { name: /^(Script|文稿)$/ });
-    const parseTab = screen.getByRole("tab", { name: /Parse preview|解析预览/ });
+    const parseTab = screen.getByRole("tab", { name: /Direction Guide|导演指南/ });
     const scriptControls = scriptTab.getAttribute("aria-controls");
     const parseControls = parseTab.getAttribute("aria-controls");
     expect(scriptControls).not.toBe(parseControls);
@@ -286,8 +287,32 @@ describe("ReferenceVideoCanvas", () => {
     const parsePanel = await screen.findByRole("tabpanel");
     expect(parsePanel.id).toBe(parseControls);
     expect(parsePanel).toHaveAttribute("aria-labelledby", parseTab.id);
-    // 解析预览只读、无可聚焦后代：面板自身须能接焦点，否则键盘用户翻不到折线以下的内容
-    expect(parsePanel).toHaveAttribute("tabindex", "0");
+    // 导演指南里有可聚焦的导演说明字段：键盘 Tab 直接进入面板内容，面板自身不再取 tabindex
+    expect(parsePanel).not.toHaveAttribute("tabindex");
+    expect(parsePanel.querySelector("select, textarea, input")).not.toBeNull();
+  });
+
+  // 回归：导演说明与解析预览是同一父节点下的兄弟，key 不能相同，否则切换单元时旧的导演说明
+  // 不卸载、一层层叠在面板里，顶上永远是第一个单元的说明。
+  it("shows the selected unit's director notes when switching units in the direction guide", async () => {
+    const units = [
+      { ...mkUnit("E1U1", "中景。"), brief: "第一个单元的说明", unit_type: "establishing" as const },
+      { ...mkUnit("E1U2", "近景。"), brief: "第二个单元的说明", unit_type: "tension_build" as const },
+    ];
+    vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({ units, unit_capabilities: {} });
+    vi.spyOn(API, "previewReferenceScript").mockResolvedValue({ utterances: [], warnings: [] });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<ReferenceVideoCanvas projectName="proj" episode={1} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Direction Guide|导演指南/ }));
+    expect(await screen.findByDisplayValue("第一个单元的说明")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("unit-row-E1U2"));
+
+    expect(await screen.findByDisplayValue("第二个单元的说明")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("第一个单元的说明")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: /Director.s notes|导演说明|Ghi chú đạo diễn/ })).toHaveLength(1);
+    expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
   });
 
   // `out["__proto__"] = kind` 在普通对象上走继承的 setter、不落自有属性，
@@ -310,7 +335,7 @@ describe("ReferenceVideoCanvas", () => {
     render(<ReferenceVideoCanvas projectName="proj" episode={1} />);
 
     await screen.findByRole("combobox");
-    fireEvent.click(await screen.findByRole("tab", { name: /Parse preview|解析预览/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: /Direction Guide|导演指南/ }));
 
     // 只看解析预览面板内的高亮，避开单元列表卡片里的同名文本
     const panel = await screen.findByRole("tabpanel");

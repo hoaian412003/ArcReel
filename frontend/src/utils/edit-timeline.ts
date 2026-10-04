@@ -135,3 +135,56 @@ export function locateTime(
   const length = clipLength(clips[index], units.get(clips[index].unit_id));
   return { index, offset: Math.min(Math.max(0, t - starts[index]), length) };
 }
+
+/** 时间线上的一段配音：位置按预览用的顺序时间轴（转场重叠只在成片里出现）。 */
+export interface DubBlock {
+  key: string;
+  clipId: string;
+  unitId: string;
+  index: number;
+  text: string;
+  audioUrl: string;
+  /** 在整条时间线上的开始时刻与时长（秒）。 */
+  start: number;
+  duration: number;
+  /** 在片段内的开始时刻（相对片段起点，秒）。 */
+  offsetInClip: number;
+  /** 落在片段区间内的这一截，在源视频里的起止时刻（秒）。 */
+  sourceStart: number;
+  sourceEnd: number;
+  /** 配音音频文件里要从哪一秒开始播（配音开始早于片段入点时 > 0）。 */
+  fileOffset: number;
+}
+
+/** 配音落在片段入出点之内的部分太短就不放了，与渲染一致。 */
+const MIN_DUB_BLOCK_S = 0.05;
+
+/** 把每个片段区间内的配音换算成时间线上的块；跨过入点 / 出点的只留区间内的那一截。 */
+export function dubBlocks(clips: EditClip[], units: Map<string, EditUnit>, starts: number[]): DubBlock[] {
+  const blocks: DubBlock[] = [];
+  clips.forEach((clip, i) => {
+    const unit = units.get(clip.unit_id);
+    if (!unit?.dub_lines?.length) return;
+    const [rangeStart, rangeEnd] = effectiveRange(clip, unit);
+    for (const line of unit.dub_lines) {
+      const begin = Math.max(line.start_s, rangeStart);
+      const end = Math.min(line.start_s + line.duration_s, rangeEnd);
+      if (end - begin <= MIN_DUB_BLOCK_S) continue;
+      blocks.push({
+        key: `${clip.clip_id}:${line.index}`,
+        clipId: clip.clip_id,
+        unitId: clip.unit_id,
+        index: line.index,
+        text: line.text_vi,
+        audioUrl: line.audio_url,
+        start: starts[i] + (begin - rangeStart),
+        duration: end - begin,
+        offsetInClip: begin - rangeStart,
+        sourceStart: begin,
+        sourceEnd: end,
+        fileOffset: begin - line.start_s,
+      });
+    }
+  });
+  return blocks;
+}

@@ -164,6 +164,8 @@ FAILURE_CODE_KEYS: dict[str, str] = {
     "artifact_download_failed": "task_fail_artifact_download_failed",
     "restart_lost_checkpoint_no_job_id": "task_fail_restart_lost_checkpoint_no_job_id",
     "execution_identity_unrecoverable": "task_fail_execution_identity_unrecoverable",
+    "provider_sync_lost": "task_fail_provider_sync_lost",
+    "manually_marked_failed": "task_fail_manually_marked_failed",
     # ScriptEditError.key 本身就是 errors.py 的 key（见 lib/script/script_editor.py），无需前缀间接层。
     "script_edit_error": "script_edit_error",
     "script_edit_items_not_list": "script_edit_items_not_list",

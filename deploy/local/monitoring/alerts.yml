@@ -1,0 +1,33 @@
+groups:
+  - name: arcreel-queue
+    rules:
+      - alert: QueueWorkerDown
+        expr: up{job="arcreel-queue"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: 队列服务不可达，排队任务不会被执行
+      - alert: QueueWorkerNoLease
+        expr: arcreel_queue_worker_has_lease == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: 队列服务在线但未持有租约，没有 worker 在认领任务
+      - alert: QueueBacklogAging
+        expr: max(arcreel_queue_oldest_queued_age_seconds) > 1800
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 最早的排队任务已等待超过 30 分钟
+      - alert: StaleRunningTasks
+        expr: arcreel_queue_stale_running > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 有执行中的任务长时间没有供应商状态更新，可能已失联
+      - alert: HighProviderFailureRate
+        expr: sum(arcreel_api_calls_failed_24h) / clamp_min(sum(arcreel_api_calls_24h), 1) > 0.3
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: 过去 24 小时供应商调用失败率超过 30%

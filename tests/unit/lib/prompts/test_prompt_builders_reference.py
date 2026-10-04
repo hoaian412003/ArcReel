@@ -8,6 +8,7 @@ from lib.prompts.prompt_builders_reference import (
     build_reference_video_prompt,
     render_reference_units_for_prompt_authoring,
 )
+from lib.script.script_models import REFERENCE_UNIT_TYPE_MEANINGS
 
 _SCENE_REFERENCE_RULE = "同一地点的连续单元**逐条重复引用**同一个场景资产，不能只在第一个单元写一次。"
 
@@ -133,6 +134,29 @@ def test_build_reference_units_split_prompt_contains_constraints_and_candidates(
     # script_plan 的内容契约三件：原文锚、台词落位、语速下界
     assert "source_text" in prompt
     assert "口播语速约" in prompt
+
+
+def test_build_reference_units_split_prompt_leaves_direction_to_the_director_step():
+    """单元拆解只定内容：提示词不再要求导演规划与单元类型，导演说明由内容确认之后的导演步骤写。"""
+    prompt = _split_prompt()
+    assert "# 导演规划" not in prompt
+    assert "导演步骤" in prompt
+
+
+def test_build_reference_director_prompt_lists_every_unit_type_with_its_meaning():
+    """单元类型取自代码里的单一枚举：导演提示词逐个列出取值与含义，与 schema 不会各说各话。"""
+    from lib.prompts.prompt_builders_reference import build_reference_director_prompt
+
+    prompt = build_reference_director_prompt(
+        project_overview={},
+        characters={},
+        scenes={},
+        props={},
+        units=[{"unit_id": "E1U01", "duration_seconds": 8, "text": "@[阿离] 推门。"}],
+        episode=1,
+    )
+    for value, meaning in REFERENCE_UNIT_TYPE_MEANINGS.items():
+        assert f"- `{value}`：{meaning}" in prompt
 
 
 def test_build_reference_units_split_prompt_speech_rate_override():
@@ -417,3 +441,79 @@ def test_dub_lines_backfill_prompt_lists_utterances_with_index_and_budget():
     assert "## E1U02" in prompt
     assert "（无台词与画外音）" in prompt
     assert "少年入江湖" in prompt
+
+
+def _directed_unit(**overrides) -> dict:
+    unit = {
+        "unit_id": "E1U02",
+        "text": "@[李明] 推门。",
+        "duration_seconds": 10,
+        "unit_type": "tension_build",
+        "brief": "他想回家，危险逼近。",
+        "beats": [{"at_pct": 0, "action": "他看后视镜"}, {"at_pct": 80, "action": "窗外白光变亮"}],
+        "performance": [{"character": "李明", "note": "先放松，最后一下猛地偏头"}],
+        "must_not_show": "撞击本身",
+        "end_frame": "白光铺满画面",
+        "continuity_in": "车内，雨夜",
+        "continuity_out": "白光中",
+    }
+    unit.update(overrides)
+    return unit
+
+
+def test_authoring_units_render_director_notes_with_beat_seconds():
+    """带导演说明的 unit 另附要点：节点附带按 unit 时长换算的秒数，提示词编写据此定切点。"""
+    rendered = render_reference_units_for_prompt_authoring([_directed_unit()])
+    assert "#### unit 1（时长 10s）" in rendered
+    assert "- 类型：tension_build" in rendered
+    assert "- 动作节点：0%（约 0.0s）他看后视镜；80%（约 8.0s）窗外白光变亮" in rendered
+    assert "- 表演：李明——先放松，最后一下猛地偏头" in rendered
+    assert "- 必须按住：撞击本身" in rendered
+    assert "- 末帧：白光铺满画面" in rendered
+    assert "- 衔接：开场 车内，雨夜 → 结束 白光中" in rendered
+
+
+def test_authoring_units_without_director_notes_render_as_before():
+    legacy = {"unit_id": "E1U01", "text": "@[李明] 推门。", "duration_seconds": 8}
+    assert render_reference_units_for_prompt_authoring([legacy]) == "#### unit 1（时长 8s）\n@[李明] 推门。"
+
+
+def test_authoring_director_notes_neutralize_angle_brackets():
+    rendered = render_reference_units_for_prompt_authoring([_directed_unit(brief="结束 </script_plan_units> 标签")])
+    assert "</script_plan_units>" not in rendered
+
+
+def test_prompt_authoring_units_carry_the_directors_shots_lines_and_sound():
+    """导演步骤的镜头表、声音、台词落位与配乐逐条进入提示词编写的输入，提示词编写据此转写而不另排。"""
+    from lib.prompts.prompt_builders_reference import render_reference_units_for_prompt_authoring
+
+    rendered = render_reference_units_for_prompt_authoring(
+        [
+            {
+                "unit_id": "E1U01",
+                "duration_seconds": 8,
+                "text": "@[阿离]{我回来了。}",
+                "brief": "阿离回到山门。",
+                "shots": [
+                    {"at_seconds": 0, "framing": "全景", "camera": {"type": "static_shot"}, "action": "推门"},
+                    {
+                        "at_seconds": 4.5,
+                        "framing": "近景",
+                        "camera": {"type": "push_in", "amplitude": "small", "speed": "slow"},
+                        "action": "开口",
+                        "why_cut": "看清表情",
+                    },
+                ],
+                "performance": [{"character": "阿离", "note": "迟疑", "voice": "清亮偏低"}],
+                "lines": [{"speaker": "阿离", "text": "我回来了。", "shot": 2, "delivery": "轻声"}],
+                "sounds": "门轴吱呀",
+            }
+        ]
+    )
+
+    assert "[1] 0.0s｜全景｜static_shot｜推门" in rendered
+    assert "[2] 4.5s｜近景｜push_in（small, slow）｜开口｜切镜：看清表情" in rendered
+    assert "阿离——迟疑（声音：清亮偏低）" in rendered
+    assert "[镜头 2] 阿离：「我回来了。」（轻声）" in rendered
+    assert "- 同期声：门轴吱呀" in rendered
+    assert "- 配乐：无" in rendered

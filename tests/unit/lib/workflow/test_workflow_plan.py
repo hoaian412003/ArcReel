@@ -101,6 +101,43 @@ def test_rules_exhaust_the_six_content_and_generation_mode_combinations() -> Non
 
 
 @pytest.mark.parametrize(("content_mode", "generation_mode"), sorted(WORKFLOW_RULES))
+def test_director_steps_sit_between_content_review_and_final_script_and_apply_to_narration_and_drama(
+    content_mode: str, generation_mode: str
+) -> None:
+    rule = workflow_rule(content_mode, generation_mode)
+    step_ids = [step.id for step in rule.steps]
+    assert (
+        step_ids.index("script_plan_review")
+        < step_ids.index("direct_episode")
+        < step_ids.index("direction_review")
+        < step_ids.index("final_script")
+    )
+    applicable = {step.id: step.applicable for step in rule.steps}
+    expected = content_mode in {"narration", "drama"}
+    assert applicable["direct_episode"] is expected
+    assert applicable["direction_review"] is expected
+
+
+@pytest.mark.parametrize(
+    ("state", "action", "expected_step"),
+    [
+        ("DIRECTOR_PLAN", "direct_episode", "direct_episode"),
+        ("DIRECTOR_REVIEW", "review_direction", "direction_review"),
+    ],
+)
+def test_director_states_project_onto_their_own_step(state: str, action: str, expected_step: str) -> None:
+    plan = build_workflow_plan(_status("drama", "storyboard", state=state, action=action))
+
+    assert _step(plan, "script_plan_review").state is WorkflowStepState.COMPLETED
+    current = _step(plan, expected_step)
+    assert current.state is WorkflowStepState.READY
+    assert current.action is not None
+    assert current.action.type.value == action
+    assert _step(plan, "final_script").state is WorkflowStepState.PENDING
+    assert plan.next_action.type.value == action
+
+
+@pytest.mark.parametrize(("content_mode", "generation_mode"), sorted(WORKFLOW_RULES))
 @pytest.mark.parametrize("narration_delivery", [POST_PRODUCTION, USE_TTS])
 def test_every_route_keeps_each_transient_narration_delivery_choice(
     content_mode: str,

@@ -12,6 +12,7 @@ from lib.script.reference_video.draft_validation import (
     dialogue_speakers,
     normative_lines,
     validate_dialogue_load,
+    validate_source_coverage,
     validate_source_text_anchor,
     validate_unit_text,
 )
@@ -342,3 +343,53 @@ class TestNeutralLayerReexport:
         assert draft_validation.collect_violations is draft_violation.collect_violations
         assert draft_validation.render_violation_report is draft_violation.render_violation_report
         assert draft_validation.violation_items is draft_violation.violation_items
+
+
+@pytest.mark.parametrize(
+    ("novel", "anchor"),
+    [
+        ('他说："走吧。"然后转身。', "他说：“走吧。”然后转身。"),
+        ("他说：“走吧。”然后转身。", '他说："走吧。"然后转身。'),
+        ("It's late, 'he said'.", "It’s late, ‘he said’."),
+    ],
+)
+def test_source_anchor_ignores_quote_typography(novel: str, anchor: str):
+    """直引号与弯引号互换是排印差异，不是改写。"""
+    assert validate_source_text_anchor("unit E1U01", anchor, novel) is None
+
+
+def test_source_anchor_still_rejects_corner_brackets_for_quotes():
+    """「」是另一种标点，不随引号折叠：把引号改成直角引号仍判改写。"""
+    with pytest.raises(DraftViolation) as exc:
+        validate_source_text_anchor("unit E1U01", "他说：「走吧。」然后转身。", '他说："走吧。"然后转身。')
+    assert exc.value.code == "source_text_not_verbatim"
+
+
+_LONG_NOVEL = "".join(f"第{i}段，李明在酒馆里做了第{i}件事。" for i in range(1, 101))
+
+
+def _paragraphs(*numbers: int) -> list[str]:
+    return [f"第{i}段，李明在酒馆里做了第{i}件事。" for i in numbers]
+
+
+def test_source_coverage_accepts_short_anchors_with_small_gaps():
+    """原文锚可截断、可跳过转述段落：只摘一部分、留下小空白的正常拆分不判漏拆。"""
+    assert validate_source_coverage(_paragraphs(*range(1, 101, 3)), _LONG_NOVEL) is None
+
+
+def test_source_coverage_rejects_a_plan_that_stops_early():
+    """模型提前收尾：每个锚都是合法子串，但结尾大片源文没有任何 unit 覆盖。"""
+    with pytest.raises(DraftViolation) as exc:
+        validate_source_coverage(_paragraphs(1, 2, 3), _LONG_NOVEL)
+    assert exc.value.code == "source_coverage_incomplete"
+    assert "结尾" in str(exc.value)
+
+
+def test_source_coverage_rejects_a_skipped_middle_section():
+    with pytest.raises(DraftViolation, match="中间"):
+        validate_source_coverage(_paragraphs(*range(1, 30), *range(70, 101)), _LONG_NOVEL)
+
+
+def test_source_coverage_ignores_gaps_in_a_short_source():
+    """源文很短时比例失真：几十个字的空白不判漏拆。"""
+    assert validate_source_coverage(["李明推门。"], "李明推门。他走进酒馆，坐下，要了一壶酒。") is None

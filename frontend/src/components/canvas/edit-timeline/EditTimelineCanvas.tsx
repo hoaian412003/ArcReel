@@ -5,10 +5,12 @@ import { AlertTriangle, ArrowLeft, ChevronLeft, ChevronRight, Pause, Play, Sciss
 import { API, ApiRequestError } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { errMsg } from "@/utils/async";
+import { useDubPreviewAudio } from "./use-dub-preview-audio";
 import {
   addUnitClip,
   clipLength,
   clipStarts,
+  dubBlocks,
   effectiveRange,
   isTrimStale,
   locateTime,
@@ -34,6 +36,8 @@ interface EditTimelineCanvasProps {
 const TRANSITIONS: EditTransition[] = ["cut", "fade", "dissolve", "wipe"];
 const MIN_CLIP_PX = 56;
 const PX_PER_SECOND = 24;
+/** 配音块在主轨底部留出的一条通道高度（像素）。 */
+const DUB_LANE_PX = 18;
 
 function formatClock(seconds: number): string {
   const s = Math.max(0, seconds);
@@ -50,6 +54,7 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<EditTimelineDetail | null>(null);
   const [draft, setDraft] = useState<EditClip[]>([]);
+  const [draftVoiceOver, setDraftVoiceOver] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [playIndex, setPlayIndex] = useState(0);
   const [globalTime, setGlobalTime] = useState(0);
@@ -65,8 +70,14 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
   const units = useMemo(() => new Map((detail?.units ?? []).map((u) => [u.unit_id, u])), [detail]);
   const latestClips = detail?.timeline.revisions.at(-1)?.clips;
   const latestRevision = detail?.timeline.revisions.at(-1)?.revision ?? 0;
-  const dirty = latestClips !== undefined && JSON.stringify(latestClips) !== JSON.stringify(draft);
+  const latestVoiceOver = detail?.timeline.revisions.at(-1)?.voice_over ?? false;
+  const voiceOverAvailable = detail?.voice_over_available ?? false;
+  const originalVolume = detail?.original_volume ?? 0.3;
+  const dirty =
+    latestClips !== undefined &&
+    (JSON.stringify(latestClips) !== JSON.stringify(draft) || latestVoiceOver !== draftVoiceOver);
   const starts = useMemo(() => clipStarts(draft, units), [draft, units]);
+  const dub = useMemo(() => dubBlocks(draft, units, starts), [draft, units, starts]);
   const total = useMemo(() => totalLength(draft, units), [draft, units]);
   const selectedClip = draft.find((c) => c.clip_id === selectedClipId) ?? null;
   const selectedUnit = selectedClip ? units.get(selectedClip.unit_id) : undefined;
@@ -74,6 +85,7 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
   const applyDetail = useCallback((next: EditTimelineDetail) => {
     setDetail(next);
     setDraft(next.timeline.revisions.at(-1)?.clips ?? []);
+    setDraftVoiceOver(next.timeline.revisions.at(-1)?.voice_over ?? false);
     setSelectedId(next.timeline.timeline_id);
   }, []);
 
@@ -130,6 +142,16 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
   const nextClip = draft[playIndex + 1];
   const nextUnit = nextClip ? units.get(nextClip.unit_id) : undefined;
   const playRange = playClip ? effectiveRange(playClip, playUnit) : null;
+
+  // 预览里的配音：只放当前片段的，跟着视频时钟走；开着配音时原声压低
+  const clipDub = useMemo(() => dub.filter((block) => block.clipId === playClip?.clip_id), [dub, playClip?.clip_id]);
+  const registerDubAudio = useDubPreviewAudio(videoRef, clipDub, {
+    enabled: draftVoiceOver,
+    originalVolume,
+    playing,
+    // 成片里只要有配音，所有片段的原声都压低；预览与它一致
+    lowerOriginal: dub.length > 0,
+  });
 
   useEffect(() => {
     const video = videoRef.current;
@@ -268,6 +290,7 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
           parent_revision: latestRevision,
           clips: draft,
           summary: "edit",
+          voice_over: draftVoiceOver,
         });
         applyDetail(next);
         pushToast(t("saved", { revision: next.timeline.revisions.at(-1)?.revision }), "success");
@@ -490,6 +513,17 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
           {nextUnit?.video_url && nextUnit.video_url !== playUnit?.video_url && (
             <video src={nextUnit.video_url} preload="auto" muted hidden aria-hidden="true" />
           )}
+          {draftVoiceOver &&
+            clipDub.map((block) => (
+              // eslint-disable-next-line jsx-a11y/media-has-caption -- 配音音轨无画面，台词见主轨下方的配音通道
+              <audio
+                key={block.key}
+                ref={(el) => registerDubAudio(block.key, el)}
+                src={block.audioUrl}
+                preload="auto"
+                hidden
+              />
+            ))}
           <p className="mt-1 text-xs text-gray-500">{t("preview_note")}</p>
         </section>
 
@@ -524,11 +558,28 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
           <h3 className="text-sm font-medium text-gray-300">{t("track")}</h3>
           <span className="num text-xs text-gray-500">{totalLength(draft, units).toFixed(1)}s</span>
           {dirty && <span className="text-xs text-amber-400">{t("unsaved")}</span>}
+          {voiceOverAvailable && (
+            <label
+              className="inline-flex items-center gap-1.5 text-xs text-gray-300"
+              title={t("voice_over_hint", { percent: Math.round(originalVolume * 100) })}
+            >
+              <input
+                type="checkbox"
+                checked={draftVoiceOver}
+                onChange={(e) => setDraftVoiceOver(e.target.checked)}
+                className="h-3.5 w-3.5 accent-teal-400"
+              />
+              {t("voice_over")}
+            </label>
+          )}
           <div className="ml-auto flex gap-2">
             <button
               className="btn-ghost text-sm"
               disabled={!dirty}
-              onClick={() => latestClips && setDraft(latestClips)}
+              onClick={() => {
+                if (latestClips) setDraft(latestClips);
+                setDraftVoiceOver(latestVoiceOver);
+              }}
             >
               {t("revert")}
             </button>
@@ -539,6 +590,7 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
         </div>
         <div
           className="relative flex min-h-[84px] items-stretch gap-1 overflow-x-auto rounded border border-gray-800 bg-gray-900/60 p-2"
+          style={voiceOverAvailable ? { paddingBottom: 8 + DUB_LANE_PX } : undefined}
         >
           {draft.length === 0 && <p className="self-center px-2 text-sm text-gray-500">{t("no_clips")}</p>}
           {playheadX !== null && (
@@ -548,6 +600,34 @@ export function EditTimelineCanvas({ projectName, episode }: EditTimelineCanvasP
               style={{ left: playheadX }}
             />
           )}
+          {voiceOverAvailable &&
+            dub.map((block) => {
+              const index = draft.findIndex((c) => c.clip_id === block.clipId);
+              let left = 8;
+              for (let i = 0; i < index; i++) left += clipWidth(draft[i]) + 4;
+              const clipLen = clipLength(draft[index], units.get(draft[index].unit_id));
+              const width = clipWidth(draft[index]);
+              const scale = clipLen > 0 ? width / clipLen : 0;
+              return (
+                <div
+                  key={block.key}
+                  data-testid="dub-block"
+                  title={block.text}
+                  aria-label={t("voice_over_line", { unit: block.unitId, text: block.text })}
+                  className={`pointer-events-auto absolute truncate rounded-sm px-1 text-[10px] leading-[14px] ${
+                    draftVoiceOver ? "bg-teal-500/70 text-teal-50" : "bg-gray-600/50 text-gray-300"
+                  }`}
+                  style={{
+                    left: left + block.offsetInClip * scale,
+                    width: Math.max(4, block.duration * scale),
+                    bottom: 6,
+                    height: 14,
+                  }}
+                >
+                  {block.text}
+                </div>
+              );
+            })}
           {draft.map((clip) => {
             const unit = units.get(clip.unit_id);
             const width = clipWidth(clip);

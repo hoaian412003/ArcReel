@@ -35,10 +35,10 @@ Read 只补充创作输入与商品 soft gate 信息。每次动作完成后刷�
 
 1. **确认项目状态**：按计划确认 `content_mode=ad` 与项目级 `generation_mode`；Read `project.json` 补充 `title`、`target_duration`、`brief` 与 `products`。生成模式创建后不可更改。
 2. **创作输入**：带货项目未登记商品或缺原图时，引导用户在 WebUI 上传；原图是保真锚点。用 `mcp__arcreel__patch_project` 写商品描述、品牌与 `brief`。通用短片不索要商品。
-3. **起草卖点**：商品的 `selling_points` 为空时，根据 brief、描述与原图起草，与用户确认后用 `patch_project` 写回。
+3. **起草卖点**：商品的 `selling_points` 为空时，根据 brief、描述与原图起草，直接用 `patch_project` 写回，不等待用户确认。
 4. **资产定义与资产图**：定义角色、场景、道具后，对每个类型取 `artifacts.asset_sheets[type].missing_ids` 与 `requested_ids` 的交集作为该类型的 `names`，调用 `mcp__arcreel__generate_assets({"type": type, "names": [该类型 names]})`。商品 sheet 在商品资产页生成。
 5. **一键生成剧本**：调用 `mcp__arcreel__generate_episode_script({"episode": 1})`。广告不走 script_plan；分镜图生视频直接产出 `shots[]`，参考生视频直接产出自包含 `video_units[]`。总时长偏离 `target_duration` 时提醒用户，不阻塞保存。
-6. **sheet 过目（软门禁）**：商品有 `product_sheet` 时，请用户在首次分镜或参考生视频生成前确认它与真品一致；只有原图时直接继续。
+6. **sheet**：商品有 `product_sheet` 时直接使用，不设用户过目停顿。
 7. **编排与生成**：
 
    - `repair_video_units`：调用 `mcp__arcreel__get_episode_script({"script": target.script_filename})` 读取正文与 revision，只处理 `requested_ids` 对应的视频单元；再用一次 `mcp__arcreel__patch_episode_script({"script": target.script_filename, "base_revision": revision, "operations": [{"op": "update", "id": unit_id, "fields": {"text": "...", "duration_seconds": ...}}]})` 写回全部视频单元的完整规划（每个视频单元一条有序 update）；由工具重算 `needs_replan`，不要直接编辑标记。每个视频单元保持单一发声归属，商品/角色/场景/道具都用 `@[名称]`。修复后立即用 `generate_videos` 的 `selected` scope 与 `force: true` 点名重做这些视频单元，再刷新状态。
@@ -72,6 +72,14 @@ Read 只补充创作输入与商品 soft gate 信息。每次动作完成后刷�
    决定，预览、下载与剪映草稿消费同一份——**不要自行估算字幕时间轴、不要静音 供应商原音、
    也不要替用户判断 TTS 是否必需**。stale 产物照常可导出，导出不清空也不覆盖旧付费媒体。
    广告不走 in-app `compose-video`。
+
+## 可选：越南语配音（`voice_over`）
+
+仅参考生视频项目、且 `project.json` 启用了 `dub_target_language: "vi"` 时才有。计划在 `video` 与 `export` 之间多出可选步骤 `voice_over`（`required: false`），**永不阻断导出**，详见 workflow-plan 参考「可选步骤：越南语配音」。
+
+- 视频生成完成后，向用户提出并执行：`mcp__arcreel__generate_dub_voiceover({"script": target.script_filename})`（可选 `unit_ids`、`skip_timing`）。它与界面「自动配音」同一入口，入队后立即返回 `task_ids`，**不是生成批次**，不要用 `get_generation_batch`。
+- 之后按间隔调 `mcp__arcreel__get_dub_status({"script": target.script_filename})`，直到 `active_tasks.running` 为 `false`；逐单元读 `state`（`no_video` / `no_lines` / `needs_timing` / `needs_audio` / `ready`），`summary.complete` 为 `true` 即配音齐备。`overflow_seconds` > 0（配音超出单元时长）或 `delayed_lines` > 0 要如实告诉用户，由用户决定是否改台词。
+- 用户要开启配音：`mcp__arcreel__patch_project({"settings": {"dub_target_language": "vi"}})`，可同时设 `narrator_gender`、`dub_voice_male`、`dub_voice_female`。工具返回 `dub_not_enabled` / `dub_not_applicable` / `dub_vieneu_disabled` 时按提示处理，不要自行开启。
 
 ## 通用短片（无商品）
 

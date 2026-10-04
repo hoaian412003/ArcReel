@@ -156,6 +156,8 @@ from server.draft_workflow import (
     PromoteDraftRequest,
 )
 from server.services.admission.prompt_preview import ItemPromptPreview, ScriptItemNotFound, preview_item_prompts
+from server.services.project.direction_review import DirectionReviewError, DirectionReviewService
+from server.services.project.screenplay_review import ScreenplayReviewError, ScreenplayReviewService
 from server.services.project.workflow_planner import WorkflowPlanner
 from server.services.tasks.video_caps import (
     annotate_reference_unit_tiers,
@@ -169,6 +171,7 @@ from server.text_generation import (
     TextGenerationError,
     TextGenerationRequest,
     TextGenerationResult,
+    director_preflight,
     generate_drama_script_plan,
     generate_narration_script_plan,
     generate_reference_dub_lines_task,
@@ -179,7 +182,13 @@ from server.text_generation import (
     confirm_script_review as confirm_script_review_handler,
 )
 from server.text_generation import (
+    generate_director_plan as generate_director_plan_handler,
+)
+from server.text_generation import (
     generate_episode_script as generate_episode_script_handler,
+)
+from server.text_generation import (
+    generate_screenplay as generate_screenplay_handler,
 )
 
 
@@ -546,12 +555,33 @@ TEXT_EPISODE_SCRIPT_TASK_TYPE = _TEXT_EPISODE_SCRIPT
 _TEXT_DRAMA_SCRIPT_PLAN = "text_drama_script_plan"
 _TEXT_NARRATION_SCRIPT_PLAN = "text_narration_script_plan"
 _TEXT_REFERENCE_SCRIPT_PLAN = "text_reference_script_plan"
+_TEXT_DIRECTOR_PLAN = "text_director_plan"
+_TEXT_SCREENPLAY = "text_screenplay"
+
+
+def script_plan_task_type(project: dict[str, Any]) -> str | None:
+    """该项目的 script_plan 文本任务类型；没有 script_plan 的项目（广告 / 短片）为 None。"""
+    if project.get("content_mode", "narration") == "ad":
+        return None
+    if is_reference_video_project(project):
+        return _TEXT_REFERENCE_SCRIPT_PLAN
+    if project.get("content_mode", "narration") == "narration":
+        return _TEXT_NARRATION_SCRIPT_PLAN
+    return _TEXT_DRAMA_SCRIPT_PLAN
+
+
 #: WebUI 的「生成 / 补全越南语配音台词」文本任务类型。
 TEXT_REFERENCE_DUB_LINES_TASK_TYPE = "text_reference_dub_lines"
 _TEXT_EPISODE_PLAN = "text_episode_plan"
 #: 嵌入式宿主在本进程内提交、并在本进程内等待的文本任务：worker 沿用提交方的数据根与服务。
 #: 只在内存里，不进任务载荷；没有登记的任务（MCP 提交、重启后的存量任务）按当前配置解析。
-_TEXT_TASK_SERVICES: dict[str, tuple[ProjectScope, Services]] = {}
+_TEXT_TASK_SERVICES: dict[tuple[str, str, str], tuple[ProjectScope, Services]] = {}
+
+
+def _text_task_key(project_name: str, task_type: str, unit_id: str) -> tuple[str, str, str]:
+    """内存登记的键：入队之前就已知。登记必须先于入队——worker 一旦认领就会取用它，入队返回之后再登记会让快的
+    worker 抢先落到按当前配置解析的路径上。同一项目、任务类型与资源同一时刻只有一个活动任务（入队按它去重），键因此唯一。"""
+    return (project_name, task_type, unit_id)
 
 
 def _queued_generation_problem(problem: ToolProblem) -> GenerationProblem:
@@ -601,22 +631,32 @@ async def _submit_text_task(
         source=caller.source,
         user_id=caller.user_id,
     )
+    registration_key = _text_task_key(scope.project_name, task_type, unit_id)
+    registration = (scope, services)
+    registered_services = caller.source == "embedded"
     try:
-        enqueue = await enqueue_task_only(
-            project_name=scope.project_name,
-            task_type=task_type,
-            media_type="text",
-            resource_id=unit_id,
-            payload=payload,
-            source=caller.source,
-            user_id=caller.user_id,
-            batch_id=batch_id,
-            batch_unit_id=unit_id,
-            queue=services.queue,
-        )
-        registered_services = caller.source == "embedded" and not enqueue.get("deduped")
         if registered_services:
-            _TEXT_TASK_SERVICES[enqueue["task_id"]] = (scope, services)
+            _TEXT_TASK_SERVICES[registration_key] = registration
+        try:
+            enqueue = await enqueue_task_only(
+                project_name=scope.project_name,
+                task_type=task_type,
+                media_type="text",
+                resource_id=unit_id,
+                payload=payload,
+                source=caller.source,
+                user_id=caller.user_id,
+                batch_id=batch_id,
+                batch_unit_id=unit_id,
+                queue=services.queue,
+            )
+        except BaseException:
+            if registered_services and _TEXT_TASK_SERVICES.get(registration_key) is registration:
+                _TEXT_TASK_SERVICES.pop(registration_key, None)
+            raise
+        if registered_services and enqueue.get("deduped"):
+            # 并入了已有的活动任务：它的登记归最初提交的那一方，这里不覆盖也不负责清理。
+            registered_services = False
         try:
             batch = await services.queue.get_generation_batch(
                 project_name=scope.project_name, batch_id=batch_id, user_id=caller.user_id
@@ -625,8 +665,8 @@ async def _submit_text_task(
                 return ToolOutcome(value=batch)
             task = await wait_for_task(enqueue["task_id"], queue=services.queue)
         finally:
-            if registered_services:
-                _TEXT_TASK_SERVICES.pop(enqueue["task_id"], None)
+            if registered_services and _TEXT_TASK_SERVICES.get(registration_key) is registration:
+                _TEXT_TASK_SERVICES.pop(registration_key, None)
         if task["status"] == "cancelled":
             problem = problem_from_task_failure(task.get("error_message"), cancelled=True)
             return ToolOutcome(problem=ToolProblem(**problem.model_dump(mode="json")))
@@ -800,6 +840,262 @@ async def generate_script_plan(
         caller=_caller,
         services=services,
     )
+
+
+class GenerateDirectorPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    instructions: _TextInstructions | SkipJsonSchema[None] = None
+    entry_ids: list[Annotated[str, Field(min_length=1)]] | SkipJsonSchema[None] = Field(
+        default=None,
+        description="只修订这些条目（分镜 id）的导演说明，须该集已有完整导演结果；省略时整集导演",
+    )
+    dry_run: bool = Field(default=False, description=_DRY_RUN_DESCRIPTION)
+
+    def text_request(self) -> TextGenerationRequest:
+        return TextGenerationRequest(
+            episode=self.episode,
+            instructions=self.instructions,
+            entry_ids=tuple(self.entry_ids or ()),
+            dry_run=self.dry_run,
+        )
+
+
+async def generate_director_plan(
+    request: ToolRequest[GenerateDirectorPlanRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[Any]:
+    text_request = request.value.text_request()
+    if text_request.dry_run:
+        return await _execute_text_handler(
+            "generate_director_plan", generate_director_plan_handler, text_request, scope, services
+        )
+    try:
+        await asyncio.to_thread(director_preflight, services.projects, scope.project_name, text_request)
+    except TextGenerationError as exc:
+        return ToolOutcome(problem=ToolProblem("generation_refused", str(exc)))
+    except Exception as exc:
+        return ToolOutcome(problem=ToolProblem("internal_error", f"generate_director_plan 失败: {exc}"))
+    return await _submit_text_task(
+        task_type=_TEXT_DIRECTOR_PLAN,
+        operation="generate_director_plan",
+        unit_id=f"episode-{text_request.episode}",
+        payload=text_request.to_payload(),
+        scope=scope,
+        caller=_caller,
+        services=services,
+    )
+
+
+class WriteScreenplayRequest(GenerateScriptPlanRequest):
+    """编剧步骤：参数与脚本规划一致（集号、可选源文、附加指令、dry_run）。"""
+
+
+async def write_screenplay(
+    request: ToolRequest[WriteScreenplayRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[Any]:
+    text_request = request.value.text_request()
+    try:
+        project = await asyncio.to_thread(services.projects.load_project, scope.project_name)
+        if project.get("content_mode", "narration") == "ad":
+            raise TextGenerationError("广告/短片项目没有剧本规划，不走编剧步骤，请直接调用 generate_episode_script")
+    except TextGenerationError as exc:
+        return ToolOutcome(problem=ToolProblem("generation_refused", str(exc)))
+    except Exception as exc:
+        return ToolOutcome(problem=ToolProblem("internal_error", f"write_screenplay 失败: {exc}"))
+    if text_request.dry_run:
+        return await _execute_text_handler(
+            "write_screenplay", generate_screenplay_handler, text_request, scope, services
+        )
+    return await _submit_text_task(
+        task_type=_TEXT_SCREENPLAY,
+        operation="write_screenplay",
+        unit_id=f"episode-{text_request.episode}",
+        payload=text_request.to_payload(),
+        scope=scope,
+        caller=_caller,
+        services=services,
+    )
+
+
+class ScreenplayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+
+
+class ScreenplayEditOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    op: Literal["update", "insert", "delete", "set_meta"] = Field(
+        description="update 改某场的部分字段；insert 在 index 前插入整场（等于场数即追加）；delete 删除某场；set_meta 改标题 / 看点"
+    )
+    index: int | SkipJsonSchema[None] = Field(default=None, ge=0, description="场次序号，从 0 起；set_meta 不需要")
+    fields: dict[str, Any] | SkipJsonSchema[None] = Field(
+        default=None,
+        description="update：heading / summary / estimated_seconds / text 中要改的字段；set_meta：title / logline",
+    )
+    scene: dict[str, Any] | SkipJsonSchema[None] = Field(
+        default=None, description="insert：完整的一场 {heading, summary, estimated_seconds, text}"
+    )
+
+
+class PatchScreenplayRequest(ScreenplayRequest):
+    base_fingerprint: str = Field(
+        min_length=1, description="读取剧本时得到的 fingerprint；内容已变则拒绝，防止覆盖他人修改"
+    )
+    operations: list[ScreenplayEditOperation] = Field(
+        min_length=1, description="按顺序应用的修改；任一条非法则整批不落盘"
+    )
+
+
+class ApproveScreenplayRequest(ScreenplayRequest):
+    fingerprint: str = Field(min_length=1, description="用户审阅过的那一版剧本的 fingerprint；内容已变则拒绝")
+
+
+class ScreenplayState(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    episode: int
+    status: Literal["none", "pending_review", "approved"]
+    fingerprint: str | None = None
+    title: str | None = None
+    logline: str | None = None
+    total_seconds: int = 0
+    scene_count: int = 0
+    scene_seconds: list[int] = []
+    scenes: list[dict[str, Any]] = []
+    markdown: str | None = None
+    approved_at: str | None = None
+
+
+def _screenplay_problem(exc: ScreenplayReviewError) -> ToolProblem:
+    return ToolProblem(f"screenplay_{exc.code}", exc.message or exc.code)
+
+
+async def get_screenplay(
+    request: ToolRequest[ScreenplayRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[ScreenplayState]:
+    try:
+        state = await ScreenplayReviewService(services.projects).get_state(scope.project_name, request.value.episode)
+    except ScreenplayReviewError as exc:
+        return ToolOutcome(problem=_screenplay_problem(exc))
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("get_screenplay", exc))
+    return ToolOutcome(value=ScreenplayState.model_validate(state))
+
+
+async def patch_screenplay(
+    request: ToolRequest[PatchScreenplayRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[ScreenplayState]:
+    value = request.value
+    try:
+        state = await ScreenplayReviewService(services.projects).edit(
+            scope.project_name,
+            value.episode,
+            [operation.model_dump(exclude_none=True) for operation in value.operations],
+            expected_fingerprint=value.base_fingerprint,
+        )
+    except ScreenplayReviewError as exc:
+        return ToolOutcome(problem=_screenplay_problem(exc))
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("patch_screenplay", exc))
+    return ToolOutcome(value=ScreenplayState.model_validate(state))
+
+
+async def approve_screenplay(
+    request: ToolRequest[ApproveScreenplayRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[ScreenplayState]:
+    value = request.value
+    try:
+        state = await ScreenplayReviewService(services.projects).approve(
+            scope.project_name, value.episode, expected_fingerprint=value.fingerprint
+        )
+    except ScreenplayReviewError as exc:
+        return ToolOutcome(problem=_screenplay_problem(exc))
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("approve_screenplay", exc))
+    return ToolOutcome(value=ScreenplayState.model_validate(state))
+
+
+class DirectionReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+
+
+class DecideDirectionReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    decision: Literal["approve", "changes", "redo"] = Field(
+        description="用户的决定：approve 通过；changes 要求修改（附说明或点名条目）；redo 整集重做"
+    )
+    note: str | SkipJsonSchema[None] = Field(default=None, description="用户的修改意见原文；approve 时忽略")
+    entry_ids: list[Annotated[str, Field(min_length=1)]] | SkipJsonSchema[None] = Field(
+        default=None, description="changes 时用户点名要改的条目 id；省略表示不限定条目"
+    )
+
+
+class DirectionReviewState(BaseModel):
+    episode: int
+    status: Literal["not_applicable", "no_direction", "pending_review", "approved", "changes_requested"]
+    fingerprint: str | None
+    decided_at: str | None
+    note: str | None
+    report: dict[str, Any] | None
+
+
+def _direction_problem(exc: DirectionReviewError) -> ToolProblem:
+    return ToolProblem(f"direction_review_{exc.code}", exc.message or exc.code)
+
+
+async def get_direction_report(
+    request: ToolRequest[DirectionReportRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[DirectionReviewState]:
+    try:
+        state = await DirectionReviewService(services.projects).get_state(scope.project_name, request.value.episode)
+    except DirectionReviewError as exc:
+        return ToolOutcome(problem=_direction_problem(exc))
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("get_direction_report", exc))
+    return ToolOutcome(value=DirectionReviewState.model_validate(state))
+
+
+async def decide_direction_review(
+    request: ToolRequest[DecideDirectionReviewRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[DirectionReviewState]:
+    value = request.value
+    try:
+        state = await DirectionReviewService(services.projects).decide(
+            scope.project_name, value.episode, value.decision, note=value.note, entry_ids=value.entry_ids
+        )
+    except DirectionReviewError as exc:
+        return ToolOutcome(problem=_direction_problem(exc))
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("decide_direction_review", exc))
+    return ToolOutcome(value=DirectionReviewState.model_validate(state))
 
 
 class ConfirmScriptReviewRequest(BaseModel):
@@ -2187,7 +2483,9 @@ async def execute_queued_text_task(
 ) -> dict[str, Any]:
     """Execute one durable text task through the same host-independent handlers."""
     payload = task.get("payload") or {}
-    registered = _TEXT_TASK_SERVICES.pop(str(task["task_id"]), None)
+    registered = _TEXT_TASK_SERVICES.pop(
+        _text_task_key(str(task["project_name"]), str(task["task_type"]), str(task.get("resource_id"))), None
+    )
     if registered is not None:
         scope, services = registered
     else:
@@ -2215,6 +2513,8 @@ async def execute_queued_text_task(
             _TEXT_DRAMA_SCRIPT_PLAN: ("generate_script_plan", generate_drama_script_plan),
             _TEXT_NARRATION_SCRIPT_PLAN: ("generate_script_plan", generate_narration_script_plan),
             _TEXT_REFERENCE_SCRIPT_PLAN: ("generate_script_plan", generate_reference_script_plan),
+            _TEXT_DIRECTOR_PLAN: ("generate_director_plan", generate_director_plan_handler),
+            _TEXT_SCREENPLAY: ("write_screenplay", generate_screenplay_handler),
             TEXT_REFERENCE_DUB_LINES_TASK_TYPE: ("generate_dub_lines", generate_reference_dub_lines_task),
         }
         try:
@@ -2718,15 +3018,20 @@ __all__ = [
     "EPISODE_META_FIELDS",
     "PROJECT_OVERVIEW_FIELDS",
     "PROJECT_SETTINGS",
+    "ApproveScreenplayRequest",
     "CallerContext",
     "CompleteAssetInventoryRequest",
     "CompleteScriptPlanRebuildRequest",
     "ConfirmScriptReviewRequest",
     "CreateProjectToolRequest",
+    "DecideDirectionReviewRequest",
+    "DirectionReportRequest",
+    "DirectionReviewState",
     "DiscardDraftRequest",
     "DraftLocator",
     "EpisodeScriptContent",
     "EpisodeScriptRequest",
+    "GenerateDirectorPlanRequest",
     "GenerateEpisodeScriptRequest",
     "GenerateScriptPlanRequest",
     "GenerationBatchToolRequest",
@@ -2735,6 +3040,7 @@ __all__ = [
     "PatchEpisodeMetaRequest",
     "PatchEpisodeScriptRequest",
     "PatchProjectRequest",
+    "PatchScreenplayRequest",
     "PlanEpisodesRequest",
     "ProjectContent",
     "ProjectFileContent",
@@ -2746,6 +3052,8 @@ __all__ = [
     "PromptPreviewRequest",
     "RenameAssetRequest",
     "ResetEpisodePlanningRequest",
+    "ScreenplayRequest",
+    "ScreenplayState",
     "ScriptPatchResult",
     "ScriptPlanContent",
     "ScriptPlanContentRequest",
@@ -2762,18 +3070,24 @@ __all__ = [
     "ToolProblem",
     "ToolRequest",
     "UploadSourceRequest",
+    "WriteScreenplayRequest",
+    "approve_screenplay",
     "cancel_generation_batch",
     "complete_asset_inventory",
     "complete_script_plan_rebuild",
     "confirm_script_review",
     "create_project",
+    "decide_direction_review",
     "discard_draft",
+    "generate_director_plan",
     "generate_episode_script",
     "generate_script_plan",
+    "get_direction_report",
     "get_episode_script",
     "get_generation_batch",
     "get_project_content",
     "get_prompt_preview",
+    "get_screenplay",
     "get_script_plan_content",
     "get_source_text",
     "get_video_capabilities",
@@ -2786,6 +3100,7 @@ __all__ = [
     "patch_episode_meta",
     "patch_episode_script",
     "patch_project",
+    "patch_screenplay",
     "plan_episodes",
     "promote_draft",
     "read_project_file",
@@ -2793,4 +3108,5 @@ __all__ = [
     "reset_episode_planning",
     "retry_project_migration",
     "upload_source",
+    "write_screenplay",
 ]

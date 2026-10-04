@@ -6,10 +6,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from lib.backends.audio_backends.base import VoiceOption
 from lib.backends.audio_backends.vieneu import fetch_server_voices, static_voice_catalog
 from lib.config.service import ConfigService
+from lib.db import get_async_session
 from lib.infra.api_errors import UnprocessableError
 from lib.speech import vieneu_service as svc_mod
 from lib.speech.vieneu_service import VieneuConfig, VieneuServiceError, VieneuStatus, get_vieneu_manager
@@ -155,6 +157,7 @@ async def get_vieneu_settings(svc: ConfigService = Depends(get_config_service)) 
 async def patch_vieneu_settings(
     patch: VieneuSettingsPatch,
     svc: ConfigService = Depends(get_config_service),
+    session: AsyncSession = Depends(get_async_session),
 ) -> VieneuSettings:
     """更新 vieneu_* 系统设置；下次启动服务时生效（运行中的进程不受影响）。"""
     import shlex
@@ -169,5 +172,7 @@ async def patch_vieneu_settings(
     for field_name, value in values.items():
         stored = str(value).lower() if isinstance(value, bool) else str(value)
         await svc.set_setting(_SETTING_KEYS[field_name], stored)
+    # set_setting 只 flush；请求结束时会话直接关闭，不提交就等于没存。
+    await session.commit()
     all_settings = await svc.get_all_settings()
     return _settings_from(VieneuConfig.from_settings(all_settings), all_settings.get(svc_mod.SETTING_COMMAND, ""))

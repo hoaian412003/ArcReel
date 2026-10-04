@@ -215,13 +215,10 @@ async def force_cancel_all(project_name: str, request: Request):
     queue = get_task_queue()
     result = await queue.cancel_all_queued(project_name)
     running_ids = await queue.list_running_task_ids(project_name)
-    worker = getattr(request.app.state, "generation_worker", None)
     if running_ids:
-        if worker is not None:
-            await worker.force_cancel_running(set(running_ids))
-        else:
-            for task_id in running_ids:
-                await queue.mark_task_interrupted(task_id)
+        from server.queue_control import broadcast_force_cancel
+
+        await broadcast_force_cancel(request, queue, set(running_ids))
     return {**result, "force_cancelled_running_count": len(running_ids)}
 
 

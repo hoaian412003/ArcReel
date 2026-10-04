@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Sparkles, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { EpisodeHeader } from "../timeline/EpisodeHeader";
-import { ScriptReviewGate } from "../timeline/ScriptReviewGate";
 import { ShotSplitView } from "../timeline/ShotSplitView";
 import { GridPreviewView } from "./GridPreviewView";
 import { useAppStore } from "@/stores/app-store";
@@ -21,7 +20,7 @@ import type {
 } from "@/types";
 
 type Segment = NarrationSegment | DramaScene;
-type GridTab = "preprocessing" | "grid_preview" | "units";
+type GridTab = "grid_preview" | "units";
 
 interface GridImageToVideoCanvasProps {
   projectName: string;
@@ -33,7 +32,6 @@ interface GridImageToVideoCanvasProps {
   projectData: ProjectData | null;
   durationOptions?: number[];
   durationEndpointFixed?: boolean;
-  videoModelUnresolved?: boolean;
   lastFrame?: boolean | null;
   capabilitiesLoading?: boolean;
   /** 已保存时长越界的成因判定；缺省时 ShotDetail 退回不区分成因的通用警告文案。 */
@@ -73,7 +71,6 @@ export function GridImageToVideoCanvas({
   projectData,
   durationOptions,
   durationEndpointFixed,
-  videoModelUnresolved,
   lastFrame,
   capabilitiesLoading,
   durationWarningReason,
@@ -97,8 +94,7 @@ export function GridImageToVideoCanvas({
     contentMode === "narration" ? "narration" : contentMode === "ad" ? null : "drama";
 
   const hasScript = Boolean(episodeScript);
-  const showTabs = Boolean(hasDraft);
-  const defaultTab: GridTab = hasScript ? "units" : "preprocessing";
+  const defaultTab: GridTab = "units";
   const [activeTab, setActiveTab] = useState<GridTab>(defaultTab);
 
   useEffect(() => {
@@ -266,7 +262,6 @@ export function GridImageToVideoCanvas({
           background: "oklch(0.19 0.012 250 / 0.5)",
         }}
       >
-        {showTabs && renderTabButton("preprocessing", t("tab_script_plan"))}
         {renderTabButton("grid_preview", t("tab_grid_preview"))}
         {renderTabButton("units", t("tab_timeline"), !hasScript)}
         <span className="flex-1" />
@@ -318,18 +313,7 @@ export function GridImageToVideoCanvas({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {activeTab === "preprocessing" && hasDraft && editorContentMode ? (
-          <div className="h-full overflow-y-auto p-4">
-            <ScriptReviewGate
-              key={`${projectName}:${episode}`}
-              projectName={projectName}
-              episode={episode}
-              contentMode={editorContentMode}
-              videoModelUnresolved={videoModelUnresolved}
-              onOpenTimeline={hasScript ? () => setActiveTab("units") : undefined}
-            />
-          </div>
-        ) : activeTab === "grid_preview" && editorContentMode ? (
+        {activeTab === "grid_preview" && editorContentMode ? (
           <GridPreviewView
             projectName={projectName}
             episode={episode}

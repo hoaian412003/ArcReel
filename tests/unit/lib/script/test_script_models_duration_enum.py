@@ -7,7 +7,7 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from lib.script.script_models import build_episode_script_model
+from lib.script.script_models import REFERENCE_UNIT_DIRECTION_FIELDS, build_episode_script_model
 
 
 def _duration_enum(model: type[BaseModel]) -> list[int] | None:
@@ -196,11 +196,31 @@ class TestReferenceUnitsScriptPlanModel:
         schema = self._model().model_json_schema()
         unit_def = next(d for d in schema.get("$defs", {}).values() if "text" in d.get("properties", {}))
         assert unit_def["properties"]["duration_seconds"]["enum"] == [4, 6, 8]
-        # 机械可派生的字段一律不进 LLM 输出 schema
-        assert set(unit_def["properties"]) == {"duration_seconds", "source_text", "text", "dub_lines"}
+        # 机械可派生的字段一律不进 LLM 输出 schema；scene_no 是对齐已通过剧本的判定锚，不落盘（model_dump 排除）
+        assert set(unit_def["properties"]) == {
+            "duration_seconds",
+            "source_text",
+            "text",
+            "dub_lines",
+            "scene_no",
+            *REFERENCE_UNIT_DIRECTION_FIELDS,
+        }
         # 配音行只让 LLM 写序号 / 说话人 / 性别 / 越南语译文，原文锚与时间覆盖由服务端管理
         dub_def = schema["$defs"]["DubLineDraft"]
         assert set(dub_def["properties"]) == {"index", "speaker", "gender", "text_vi"}
+
+    def test_director_plan_is_generated_before_units(self):
+        """模型按字段顺序生成：集级导演规划排在 units 之前，先定规划再拆分。"""
+        assert list(self._model().model_json_schema()["properties"]) == ["director_plan", "units"]
+
+    def test_model_facing_schema_requires_every_director_field(self):
+        """发给模型的 schema 把导演说明列进 required：带缺省的字段模型会直接略过。"""
+        from lib.script.script_models import build_reference_units_script_plan_model
+
+        schema = build_reference_units_script_plan_model([4, 6, 8], require_director=True).model_json_schema()
+        assert "director_plan" in schema["required"]
+        unit_def = next(d for d in schema["$defs"].values() if "text" in d.get("properties", {}))
+        assert set(REFERENCE_UNIT_DIRECTION_FIELDS) <= set(unit_def["required"])
 
     def test_dub_lines_optional_and_validated(self):
         draft = self._model().model_validate({"units": [self._unit()]})

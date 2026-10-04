@@ -44,7 +44,7 @@ from lib.project.project_migration_failure import (
 )
 from lib.project.project_migration_report import MigrationReport, load_migration_report
 from lib.project.source_revision import SourceRevisionResult, SourceScope, compute_source_revision
-from lib.script import script_review
+from lib.script import direction_review, screenplay, script_review
 from lib.script.script_models import PENDING_AUTHORING_FIELD, get_generated_assets, script_duration_total
 from lib.script.script_skeleton import SKELETONS, STORYBOARD_ITEM_ID_PATTERN, ensure_route_skeleton, resolve_kind_items
 from lib.workflow.workflow_rules import workflow_rule
@@ -56,8 +56,12 @@ WorkflowStateName = Literal[
     "SELLING_POINTS",
     "ASSET_INVENTORY",
     "EPISODE_PLAN",
+    "SCREENPLAY",
+    "SCREENPLAY_REVIEW",
     "SCRIPT_PLAN_CONTENT",
     "SCRIPT_PLAN_REVIEW",
+    "DIRECTOR_PLAN",
+    "DIRECTOR_REVIEW",
     "FINAL_SCRIPT",
     "ASSET_SHEETS",
     "STORYBOARD",
@@ -116,8 +120,12 @@ class WorkflowActionType(StrEnum):
     ANALYZE_ASSETS = "analyze_assets"
     PLAN_EPISODES = "plan_episodes"
     RESET_EPISODE_PLANNING = "reset_episode_planning"
+    WRITE_SCREENPLAY = "write_screenplay"
+    REVIEW_SCREENPLAY = "review_screenplay"
     PREPARE_SCRIPT_PLAN = "prepare_script_plan"
     CONFIRM_SCRIPT_PLAN = "confirm_script_plan"
+    DIRECT_EPISODE = "direct_episode"
+    REVIEW_DIRECTION = "review_direction"
     GENERATE_SCRIPT = "generate_script"
     AUTHOR_PROMPTS = "author_prompts"
     GENERATE_ASSET_SHEETS = "generate_asset_sheets"
@@ -177,7 +185,7 @@ class WorkflowStatus(BaseModel):
     """上一次跑完的项目迁移登记与跳过了什么；只作说明，不影响状态与阻断。"""
 
 
-#: 11 值制作状态在广度视图（项目列表、卡片、全局头）上的归并显示。
+#: 13 值制作状态在广度视图（项目列表、卡片、全局头）上的归并显示。
 ProjectPhase = Literal["preparation", "script", "production", "completed"]
 
 #: 每集脚本的产物态派生值：正式脚本可用即 generated，只有 script_plan 即 segmented。
@@ -244,7 +252,7 @@ class ProjectSummary(BaseModel):
 
     代价是两处判定不进入本投影，它们都只能由源文得出：资产清单是否跟得上源文改动，
     以及源文是否已全部排布成集。因此本投影可能把「产物齐备但源文尚未排布完」的项目显示为
-    「完成」，而工作台按 11 值状态仍报 EPISODE_PLAN。产物口径本身两处一致：可用与 stale
+    「完成」，而工作台按 13 值状态仍报 EPISODE_PLAN。产物口径本身两处一致：可用与 stale
     都取自同一份产物清单。
 
     产物判定有两种口径（``ProjectSummaryCurrency``）：``verified`` 逐件与规范状态比对，能
@@ -389,7 +397,7 @@ def _episode_production_status(
 
 
 def _sheet_bearing_counts(assets: Mapping[str, ArtifactCount]) -> list[ArtifactCount]:
-    """商品没有资产图产物：与 11 值状态的 ASSET_SHEETS 判据同口径地把它排除。"""
+    """商品没有资产图产物：与 13 值状态的 ASSET_SHEETS 判据同口径地把它排除。"""
 
     return [count for asset_type, count in assets.items() if asset_type != "product"]
 
@@ -885,6 +893,31 @@ class WorkflowStateService:
         status.migration_report = load_migration_report(project_path)
         return status
 
+    def get_episode_statuses(self, project_name: str) -> list[tuple[int, str, WorkflowStatus]]:
+        """每一集各自的制作状态，按集号排序：``(集号, 标题, 状态)``。
+
+        各集共用同一份项目级事实（源文修订号、资产清单、产物基线），只读一遍；单集状态与
+        ``get_status(project_name, episode)`` 逐集调用的结果一致。升级失败的项目对每集报同一份迁移阻断状态。
+        广告只有第 1 集。
+        """
+        project = self.pm.load_project(project_name)
+        project_path = self.pm.get_project_path(project_name)
+        failure = load_migration_verdict(project_path)
+        if failure is not None:
+            blocked = self._migration_blocked_status(project, failure)
+            return [(number, str(entry.get("title") or ""), blocked) for number, entry in self._episodes(project, [])]
+        project = register_orphan_episode_entries(project_path, project)
+        shared = self._shared_facts(project_path, project)
+        report = load_migration_report(project_path)
+        titles = {number: str(entry.get("title") or "") for number, entry in shared.episodes}
+        numbers = [1] if project.get("content_mode") == "ad" else [number for number, _entry in shared.episodes]
+        statuses: list[tuple[int, str, WorkflowStatus]] = []
+        for number in numbers:
+            status = self._get_status(project_name, project, project_path, number, shared)
+            status.migration_report = report
+            statuses.append((number, titles.get(number, ""), status))
+        return statuses
+
     def get_project_summary(
         self,
         project_name: str,
@@ -1061,7 +1094,7 @@ class WorkflowStateService:
         """由 script_plan 与正式脚本的产物态派生该集的脚本进度。
 
         账本标 stale 的集（重新规划后原文范围已失效）回到 none：它的下游要重做，
-        与 11 值状态把这类集打回 SCRIPT_PLAN_CONTENT 同口径。
+        与 13 值状态把这类集打回 SCRIPT_PLAN_CONTENT 同口径。
         """
 
         if entry.get("ledger_status") == "stale":
@@ -1091,10 +1124,10 @@ class WorkflowStateService:
         assets: Mapping[str, ArtifactCount],
         episodes: list[EpisodeSummary],
     ) -> ProjectPhase:
-        """把 11 值制作状态的归并显示投到项目粒度：取最不推进的一集所在阶段。
+        """把 13 值制作状态的归并显示投到项目粒度：取最不推进的一集所在阶段。
 
         ``PROJECT_INPUT / SELLING_POINTS / ASSET_INVENTORY / EPISODE_PLAN`` → preparation，
-        ``SCRIPT_PLAN_* / FINAL_SCRIPT`` → script，``ASSET_SHEETS / STORYBOARD / VIDEO`` → production，
+        ``SCREENPLAY* / SCRIPT_PLAN_* / DIRECTOR_* / FINAL_SCRIPT`` → script，``ASSET_SHEETS / STORYBOARD / VIDEO`` → production，
         ``EXPORT_READY`` → completed。
         """
 
@@ -1290,7 +1323,8 @@ class WorkflowStateService:
             "audio": _empty_collection(),
         }
         gates: dict[str, dict[str, Any]] = {
-            "script_plan_review": {"state": "not_applicable" if mode == "ad" else "pending", "revision": None}
+            "script_plan_review": {"state": "not_applicable" if mode == "ad" else "pending", "revision": None},
+            "direction_review": {"state": "not_applicable", "revision": None},
         }
         episodes = shared.episodes
         selected = self._target(str(mode), episodes, episode)
@@ -1399,6 +1433,17 @@ class WorkflowStateService:
                         baseline_is_recorded and live_revision == stale_revision and rebuilt_revision != live_revision
                     ):
                         artifacts["script_plan"] = {"state": "stale"}
+                        # 存量集的重建沿用原路径；该集已经开始走编剧流程（有剧本文件）时才让剧本把关。
+                        screenplay_step = (
+                            self._screenplay_step(project_path, target, gates, artifacts, blockers)
+                            if screenplay.screenplay_path(project_path, target.episode).exists()
+                            else None
+                        )
+                        if screenplay_step is not None:
+                            state, next_action = screenplay_step
+                            return self._response(
+                                project, source, target, state, blockers, gates, artifacts, next_action
+                            )
                         state = "SCRIPT_PLAN_CONTENT"
                         next_action = _action(
                             WorkflowActionType.PREPARE_SCRIPT_PLAN,
@@ -1483,6 +1528,12 @@ class WorkflowStateService:
                         "state"
                     ] == "missing" and self._script_usable_without_plan(currency, target, selected)
                     if artifacts["script_plan"]["state"] == "missing" and not planless_script:
+                        screenplay_step = self._screenplay_step(project_path, target, gates, artifacts, blockers)
+                        if screenplay_step is not None:
+                            state, next_action = screenplay_step
+                            return self._response(
+                                project, source, target, state, blockers, gates, artifacts, next_action
+                            )
                         state = "SCRIPT_PLAN_CONTENT"
                         next_action = _action(
                             WorkflowActionType.PREPARE_SCRIPT_PLAN,
@@ -1514,10 +1565,16 @@ class WorkflowStateService:
                                 project, source, target, state, blockers, gates, artifacts, next_action
                             )
 
-                script_artifact, items, kind, _script = self._load_script_artifacts(
+                script_artifact, items, kind, script = self._load_script_artifacts(
                     project_path, project_name, project, target, blockers, currency
                 )
                 artifacts["script"] = script_artifact
+                pending_authoring_ids = _pending_authoring_entry_ids(items, kind)
+                direction_step = (
+                    self._direction_step(project, target.episode, script, kind, pending_authoring_ids, gates)
+                    if not blockers and script_artifact["state"] != "missing"
+                    else None
+                )
                 if blockers:
                     state = "FINAL_SCRIPT"
                     next_action = _action(WorkflowActionType.NONE, "script is blocked")
@@ -1537,7 +1594,10 @@ class WorkflowStateService:
                         "target episode has no current final script",
                         args={"episode": target.episode},
                     )
-                elif pending_authoring_ids := _pending_authoring_entry_ids(items, kind):
+                elif direction_step is not None:
+                    # 待编写条目要先过导演步骤：导演规划缺失 / 被要求修改，或导演结果待人工审阅。
+                    state, next_action = direction_step
+                elif pending_authoring_ids:
                     # 存在待编写条目：剧本阶段未完成，先补提示词，不报生成分镜图。
                     state = "FINAL_SCRIPT"
                     next_action = _action(
@@ -1673,6 +1733,119 @@ class WorkflowStateService:
                             next_action = _action(WorkflowActionType.EXPORT, "all required artifacts are usable")
 
         return self._response(project, source, target, state, blockers, gates, artifacts, next_action)
+
+    @staticmethod
+    def _screenplay_step(
+        project_path: Path,
+        target: WorkflowTarget,
+        gates: dict[str, dict[str, Any]],
+        artifacts: dict[str, dict[str, Any]],
+        blockers: list[WorkflowBlocker],
+    ) -> tuple[WorkflowStateName, WorkflowNextAction] | None:
+        """编剧步骤：还没有脚本规划的集，先写剧本并过人工审阅，通过后才拆解单元（``prepare_script_plan``）。
+
+        同时把剧本状态写进 ``artifacts["screenplay"]`` 与 ``gates["screenplay_review"]``。剧本写于旧的源文（分集重划）
+        按缺失处理，重新编剧。返回 ``None`` 表示剧本已通过审阅，不拦截，继续走单元拆解。
+        """
+        path = screenplay.screenplay_path(project_path, target.episode)
+        try:
+            data = screenplay.load_screenplay(project_path, target.episode)
+        except screenplay.ScreenplayError as exc:
+            artifacts["screenplay"] = {"state": "blocked", "path": str(path.relative_to(project_path))}
+            blockers.append(WorkflowBlocker(code=exc.code, path=str(path.relative_to(project_path)), reason=str(exc)))
+            return "SCREENPLAY", _action(WorkflowActionType.NONE, "the screenplay file is unreadable")
+        stale = False
+        if data is not None:
+            try:
+                source_text = (project_path / target.source).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                source_text = None
+            stale = source_text is not None and not screenplay.matches_source(data, source_text)
+        if data is None or stale:
+            artifacts["screenplay"] = {
+                "state": "stale" if stale else "missing",
+                "path": str(path.relative_to(project_path)),
+                "revision": None,
+            }
+            gates["screenplay_review"] = {"state": "pending", "revision": None}
+            return "SCREENPLAY", _action(
+                WorkflowActionType.WRITE_SCREENPLAY,
+                "the screenplay was written from an older source text" if stale else "target episode has no screenplay",
+                args={"episode": target.episode},
+            )
+        summary = screenplay.screenplay_summary(data)
+        artifacts["screenplay"] = {
+            "state": "current",
+            "path": str(path.relative_to(project_path)),
+            "revision": summary["fingerprint"],
+            "scene_count": summary["scene_count"],
+            "total_seconds": summary["total_seconds"],
+        }
+        approved = summary["status"] == "approved"
+        gates["screenplay_review"] = {
+            "state": "approved" if approved else "pending",
+            "revision": summary["fingerprint"],
+        }
+        if approved:
+            return None
+        return "SCREENPLAY_REVIEW", _action(
+            WorkflowActionType.REVIEW_SCREENPLAY,
+            "the screenplay awaits review",
+            args={"episode": target.episode, "fingerprint": summary["fingerprint"]},
+            requires_confirmation=True,
+        )
+
+    @staticmethod
+    def _direction_step(
+        project: dict[str, Any],
+        episode: int,
+        script: dict[str, Any],
+        kind: str | None,
+        pending_authoring_ids: list[str],
+        gates: dict[str, dict[str, Any]],
+    ) -> tuple[WorkflowStateName, WorkflowNextAction] | None:
+        """导演步骤：旁白 / 剧情分镜路线、该集仍有待编写条目时，提示词编写之前先导演并过人工审阅。
+
+        同时把导演审阅状态写进 ``gates["direction_review"]``。条目已全部编写的集不适用（存量不被新步骤
+        阻塞）；返回 ``None`` 表示导演步骤不拦截，继续走提示词编写及之后的步骤。
+        """
+        review_kind = direction_review.entry_kind(project)
+        if review_kind is None or kind != review_kind:
+            return None
+        status = direction_review.review_status(project, script, episode)
+        revision = direction_review.direction_fingerprint(script, review_kind)
+        gates["direction_review"] = {
+            "state": {
+                "not_applicable": "not_applicable",
+                "no_direction": "pending",
+                "pending_review": "pending",
+                "changes_requested": "changes_requested",
+                "approved": "approved",
+            }[status],
+            "revision": revision,
+        }
+        if not pending_authoring_ids or status in {"not_applicable", "approved"}:
+            return None
+        if status == "pending_review":
+            return "DIRECTOR_REVIEW", _action(
+                WorkflowActionType.REVIEW_DIRECTION,
+                "director output awaits review",
+                args={"episode": episode, "fingerprint": revision},
+                requires_confirmation=True,
+            )
+        stored = direction_review.stored_review(project, episode)
+        args: dict[str, Any] = {"episode": episode}
+        ids: list[str] = []
+        if status == "changes_requested":
+            ids = [entry_id for entry_id in stored.get("entry_ids") or [] if isinstance(entry_id, str)]
+            args["note"] = stored.get("note")
+            if ids:
+                args["entry_ids"] = ids
+            reason = "the reviewer requested changes to the director output"
+        else:
+            ids = direction_review.undirected_entry_ids(script, review_kind)
+            reason = "the episode has no director output yet"
+        return "DIRECTOR_PLAN", _action(WorkflowActionType.DIRECT_EPISODE, reason, args=args, ids=ids)
 
     @staticmethod
     def _script_usable_without_plan(

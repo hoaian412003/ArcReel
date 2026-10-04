@@ -1,5 +1,7 @@
 """内容确认领域错误 → HTTP 响应的共享映射。
 
+导演审阅的领域错误（``DirectionReviewError``）同走这里的映射，见 ``direction_review_error``。
+
 内容确认的领域错误从两个 router 冒出来：``script_review``（内容确认自身的读写端点）与
 ``files``（通用草稿端点对参考生视频 script_plan 改道 ``ScriptReviewService``）。映射放在两者之外的
 共享模块，两个 router 各自从这里取，同一个错误码在不同端点上不会给出不同的状态码或文案。
@@ -9,8 +11,9 @@ from typing import NoReturn
 
 from fastapi import HTTPException
 
-from lib.infra.api_errors import ConflictError, UnprocessableError
+from lib.infra.api_errors import ConflictError, NotFoundError, UnprocessableError
 from server.i18n import Translator
+from server.services.project.direction_review import DirectionReviewError
 from server.services.project.script_review import ScriptReviewError
 
 # gate 领域错误码 → HTTP 状态。invalid_content / episode_not_found 带参数另行注入。
@@ -60,3 +63,22 @@ def raise_review_error(exc: ScriptReviewError, episode: int, _t: Translator) -> 
     else:
         detail = _t(_ERROR_I18N.get(exc.code, "internal_server_error"))
     raise HTTPException(status_code=status, detail=detail)
+
+
+# 导演审阅领域错误码 → (HTTP 异常类型, i18n key)。
+_DIRECTION_ERRORS: dict[str, tuple[type[ConflictError] | type[UnprocessableError], str]] = {
+    "not_applicable": (ConflictError, "direction_review_not_applicable"),
+    "no_direction": (ConflictError, "direction_review_no_direction"),
+    "not_reviewable": (ConflictError, "direction_review_not_reviewable"),
+    "authored": (ConflictError, "direction_review_authored"),
+    "invalid_decision": (UnprocessableError, "direction_review_invalid_decision"),
+    "unknown_entries": (UnprocessableError, "direction_review_unknown_entries"),
+}
+
+
+def direction_review_error(exc: DirectionReviewError, episode: int) -> NoReturn:
+    """把 ``DirectionReviewError`` 抛成对应的 ``ApiError``；未登记的错误码落 400 的内部错误。"""
+    if exc.code == "episode_not_found":
+        raise NotFoundError("episode_not_found", episode=episode)
+    error_type, key = _DIRECTION_ERRORS.get(exc.code, (UnprocessableError, "direction_review_invalid_decision"))
+    raise error_type(key)

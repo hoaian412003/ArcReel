@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from lib.backends.providers import CallPurpose, require_provider_pair
@@ -17,6 +18,7 @@ from lib.backends.text_backends.base import (
 )
 from lib.backends.text_backends.factory import create_text_backend_for_task
 from lib.billing.ledger import Ledger
+from lib.config.registry import PROVIDER_REGISTRY
 from lib.db.base import DEFAULT_USER_ID
 
 if TYPE_CHECKING:
@@ -66,12 +68,21 @@ class TextGenerator:
         backend, provider_id = await create_text_backend_for_task(task_type, project_name)
         return cls(backend, Ledger(), provider_id, purpose=purpose, user_id=user_id)
 
+    def _apply_model_output_limit(self, request: TextGenerationRequest) -> TextGenerationRequest:
+        """registry 为当前模型声明了输出上限时，替换调用方传入的通用上限。"""
+        provider = PROVIDER_REGISTRY.get(self._provider_id)
+        info = provider.models.get(self.backend.model) if provider else None
+        if info is None or info.max_output_tokens is None or request.max_output_tokens is None:
+            return request
+        return replace(request, max_output_tokens=info.max_output_tokens)
+
     async def generate(
         self,
         request: TextGenerationRequest,
         project_name: str | None = None,
     ) -> TextGenerationResult:
         """生成文本并自动记录用量。"""
+        request = self._apply_model_output_limit(request)
         async with self.ledger.record(
             project_name=project_name or "",
             call_type="text",

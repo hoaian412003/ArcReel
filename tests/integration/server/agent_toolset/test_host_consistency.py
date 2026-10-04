@@ -40,6 +40,7 @@ from server.agent_toolset.declaration import (
     UnscopedToolDeclaration,
     tool_description,
 )
+from server.agent_toolset.dub_voiceover import GENERATE_DUB_VOICEOVER, GET_DUB_STATUS
 from server.agent_toolset.embedded import embedded_server
 from server.agent_toolset.envelope import json_value
 from server.agent_toolset.generation_batches import CANCEL_GENERATION_BATCH, GET_GENERATION_BATCH
@@ -48,10 +49,16 @@ from server.agent_toolset.orientation import GET_PROMPT_PREVIEW, GET_VIDEO_CAPAB
 from server.agent_toolset.project_entry import CREATE_PROJECT
 from server.agent_toolset.remote import LONG_TASK_NOTE, remote_tool
 from server.agent_toolset.script_authoring import (
+    APPROVE_SCREENPLAY,
     CONFIRM_SCRIPT_REVIEW,
+    DECIDE_DIRECTION_REVIEW,
+    GENERATE_DIRECTOR_PLAN,
     GENERATE_EPISODE_SCRIPT,
+    GET_DIRECTION_REPORT,
+    GET_SCREENPLAY,
     OPEN_DRAFT,
     PATCH_DRAFT,
+    PATCH_SCREENPLAY,
     PROMOTE_DRAFT,
 )
 from server.agent_toolset.script_editing import PATCH_EPISODE_SCRIPT
@@ -98,9 +105,22 @@ SAMPLE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "generate_storyboards": {"script": "episode_1.json"},
     "edit_images": {"resource_type": "character", "edits": [{"id": "张三", "instruction": "把头发改成红色"}]},
     "generate_narration_audio": {"script": "episode_1.json", "segment_ids": ["E1S01"]},
+    "generate_dub_voiceover": {"script": "episode_1.json", "unit_ids": ["E1U1"], "skip_timing": True},
+    "get_dub_status": {"script": "episode_1.json"},
     "generate_episode_script": {"episode": 1, "dry_run": True},
+    "write_screenplay": {"episode": 1, "dry_run": True},
+    "get_screenplay": {"episode": 1},
+    "patch_screenplay": {
+        "episode": 1,
+        "base_fingerprint": "x",
+        "operations": [{"op": "set_meta", "fields": {"title": "t"}}],
+    },
+    "approve_screenplay": {"episode": 1, "fingerprint": "x"},
     "generate_script_plan": {"episode": 1, "dry_run": True},
     "confirm_script_review": {"episode": 1},
+    "generate_director_plan": {"episode": 1, "dry_run": True},
+    "get_direction_report": {"episode": 1},
+    "decide_direction_review": {"episode": 1, "decision": "approve"},
     "open_draft": {"episode": 1, "doc_type": "drama_script_plan"},
     "patch_draft": {
         "episode": 1,
@@ -517,6 +537,17 @@ _PROBLEM_ON_SAMPLE = frozenset(
         SPLIT_GRIDS.name,
         COMPLETE_ASSET_INVENTORY.name,
         COMPLETE_SCRIPT_PLAN_REBUILD.name,
+        # 测试项目没有登记分集条目，也没有待编写条目：导演审阅找不到分集、导演步骤拒绝导演。
+        GENERATE_DIRECTOR_PLAN.name,
+        GET_DIRECTION_REPORT.name,
+        DECIDE_DIRECTION_REVIEW.name,
+        # 测试项目没有登记分集条目：剧本审阅找不到分集。
+        GET_SCREENPLAY.name,
+        PATCH_SCREENPLAY.name,
+        APPROVE_SCREENPLAY.name,
+        # 测试项目不是参考生视频，也未启用配音。
+        GENERATE_DUB_VOICEOVER.name,
+        GET_DUB_STATUS.name,
     }
 )
 

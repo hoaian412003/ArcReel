@@ -4,6 +4,7 @@ import {
   addUnitClip,
   clipLength,
   clipStarts,
+  dubBlocks,
   locateTime,
   effectiveRange,
   isTrimStale,
@@ -63,5 +64,67 @@ describe("edit-timeline utils", () => {
     expect(locateTime(clips, units, 3)).toEqual({ index: 1, offset: 0 });
     expect(locateTime(clips, units, 99)).toEqual({ index: 1, offset: 8 });
     expect(locateTime([], units, 5)).toEqual({ index: 0, offset: 0 });
+  });
+});
+
+describe("dubBlocks", () => {
+  const dubbed: EditUnit = {
+    ...unit,
+    dub_lines: [
+      { index: 0, text_vi: "Xin chào", start_s: 1, duration_s: 1.5, audio_url: "/a0.wav" },
+      { index: 1, text_vi: "Tạm biệt", start_s: 6, duration_s: 1, audio_url: "/a1.wav" },
+    ],
+  };
+  const units = new Map([["U1", dubbed]]);
+
+  it("places every line of a whole-unit clip at its own time", () => {
+    const clips = [clip()];
+
+    const blocks = dubBlocks(clips, units, clipStarts(clips, units));
+
+    expect(blocks.map((b) => [b.index, b.start, b.duration, b.offsetInClip])).toEqual([
+      [0, 1, 1.5, 1],
+      [1, 6, 1, 6],
+    ]);
+  });
+
+  it("shifts lines by where the clip starts on the timeline and by its in-point", () => {
+    // 第二个片段取单元 5–8 秒，排在一个 4 秒的片段之后
+    const clips = [clip({ clip_id: "a", in_s: 0, out_s: 4, trimmed_against_version: 2 }), clip({ clip_id: "b", in_s: 5, out_s: 8, trimmed_against_version: 2 })];
+
+    const blocks = dubBlocks(clips, units, clipStarts(clips, units));
+
+    const second = blocks.find((b) => b.clipId === "b");
+    expect(second).toMatchObject({ index: 1, start: 4 + 1, offsetInClip: 1, sourceStart: 6, sourceEnd: 7 });
+  });
+
+  it("keeps only the part of a line that lies inside the trimmed range", () => {
+    // 单元 1–2.5 秒的台词，片段只用 2.0–8 秒：只剩后 0.5 秒，音频要从文件的 1.0 秒处开始播
+    const clips = [clip({ in_s: 2, out_s: 8, trimmed_against_version: 2 })];
+
+    const [block] = dubBlocks(clips, units, clipStarts(clips, units));
+
+    expect(block).toMatchObject({ index: 0, start: 0, duration: 0.5, sourceStart: 2, sourceEnd: 2.5, fileOffset: 1 });
+  });
+
+  it("drops lines outside the clip or reduced to a sliver", () => {
+    const clips = [clip({ in_s: 2.46, out_s: 5.9, trimmed_against_version: 2 })];
+
+    expect(dubBlocks(clips, units, clipStarts(clips, units))).toEqual([]);
+  });
+
+  it("ignores units without voice-over", () => {
+    const plain = new Map([["U1", unit]]);
+    const clips = [clip()];
+
+    expect(dubBlocks(clips, plain, clipStarts(clips, plain))).toEqual([]);
+  });
+
+  it("uses the whole unit when the trim is stale, like the renderer", () => {
+    const clips = [clip({ in_s: 6.5, out_s: 7, trimmed_against_version: 1 })];
+
+    const blocks = dubBlocks(clips, units, clipStarts(clips, units));
+
+    expect(blocks.map((b) => b.index)).toEqual([0, 1]);
   });
 });

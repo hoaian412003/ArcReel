@@ -52,6 +52,7 @@ from server.dependencies import require_project_migration_ok, require_valid_proj
 from server.error_handlers import register_error_handlers
 from server.remote_mcp import remote_mcp_host
 from server.routers import (
+    admin_queue,
     agent_config,
     agent_memory,
     api_keys,
@@ -61,10 +62,12 @@ from server.routers import (
     cost_estimation,
     custom_endpoints,
     custom_providers,
+    direction_review,
     dub,
     edit_timelines,
     end_frames,
     files,
+    flow_board,
     generate,
     grids,
     market,
@@ -78,6 +81,7 @@ from server.routers import (
     providers,
     reference_videos,
     scenes,
+    screenplay,
     script_review,
     shot_uploads,
     system,
@@ -462,11 +466,21 @@ async def lifespan(app: FastAPI):
     await assistant.assistant_service.startup(in_docker=is_docker, sandbox_enabled=sandbox_enabled)
     assistant.assistant_service.session_manager.start_patrol()
 
-    logger.info("启动 GenerationWorker...")
-    worker = create_generation_worker()
-    app.state.generation_worker = worker
-    await worker.start()
-    logger.info("GenerationWorker 已启动")
+    queue_bus_listener = None
+    if os.environ.get("QUEUE_WORKER_MODE", "embedded").strip().lower() == "external":
+        # 队列服务独立进程运行：后端只订阅它转发来的项目事件，不自带 worker。
+        from lib.infra.pg_bus import CHANNEL_PROJECT, PgListener
+        from server.project_event_bridge import handle_project_event
+
+        logger.info("QUEUE_WORKER_MODE=external：由独立队列服务执行任务，跳过内嵌 GenerationWorker")
+        queue_bus_listener = PgListener({CHANNEL_PROJECT: handle_project_event})
+        await queue_bus_listener.start()
+    else:
+        logger.info("启动 GenerationWorker...")
+        worker = create_generation_worker()
+        app.state.generation_worker = worker
+        await worker.start()
+        logger.info("GenerationWorker 已启动")
 
     logger.info("启动 ProjectEventService...")
     project_event_service = ProjectEventService(PROJECT_ROOT, data_root=layout.root)
@@ -483,6 +497,8 @@ async def lifespan(app: FastAPI):
         logger.info("正在停止 ProjectEventService...")
         await project_event_service.shutdown()
         logger.info("ProjectEventService 已停止")
+    if queue_bus_listener is not None:
+        await queue_bus_listener.stop()
     worker = getattr(app.state, "generation_worker", None)
     if worker:
         logger.info("正在停止 GenerationWorker...")
@@ -618,6 +634,11 @@ app.include_router(
     tags=["内容确认"],
 )
 app.include_router(
+    direction_review.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["导演审阅"]
+)
+app.include_router(screenplay.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["编剧剧本"])
+app.include_router(flow_board.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Flow 看板"])
+app.include_router(
     shot_uploads.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
@@ -642,6 +663,7 @@ app.include_router(
     project_events.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["项目变更流"]
 )
 app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["任务队列"])
+app.include_router(admin_queue.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["队列监控"])
 app.include_router(providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["供应商管理"])
 app.include_router(dub.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["越南语配音"])
 app.include_router(vieneu.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["VieNeu 本地语音"])

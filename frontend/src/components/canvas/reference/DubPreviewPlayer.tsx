@@ -31,7 +31,7 @@ export function DubPreviewPlayer({
   videoUrl,
   posterUrl,
   clips,
-  originalVolume = 0.5,
+  originalVolume = 0.3,
   className,
 }: DubPreviewPlayerProps) {
   const { t } = useTranslation("dashboard");

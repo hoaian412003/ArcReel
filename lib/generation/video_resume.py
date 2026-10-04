@@ -15,6 +15,7 @@ from lib.billing.ledger import Ledger
 from lib.generation.media_generator import cleanup_staged_video_output
 from lib.generation.task_failure import encode_failure
 from lib.generation.task_failure_encoding import encode_task_failure_message
+from lib.generation.task_timeline import bind_task, unbind_task
 from lib.infra.shutdown_abandon import is_abandoning
 from lib.project.project_manager import get_project_manager
 from lib.script.reference_video.execution_checkpoint import (
@@ -85,6 +86,14 @@ class VideoResumeRunner:
         self._provider_projection = provider_projection
 
     async def run(self, task: dict[str, Any]) -> None:
+        """绑定任务时间线上下文后执行续跑，使续跑中的轮询同样刷新 ``last_synced_at``。"""
+        token = bind_task(task["task_id"])
+        try:
+            await self._run(task)
+        finally:
+            unbind_task(token)
+
+    async def _run(self, task: dict[str, Any]) -> None:
         """重启自愈入口：直接调续跑执行器，绕过常规执行流水线。
 
         两种视频生成模式都在 worker 开始时按最新状态物化，并在 provider 提交前写入不可变

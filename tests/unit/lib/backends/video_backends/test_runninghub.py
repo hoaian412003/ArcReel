@@ -80,3 +80,49 @@ async def test_generate_uploads_ordered_images_and_runs_ai_app(monkeypatch, tmp_
     assert result.task_id == "task-1"
     assert result.provenance == {"runninghub_webapp_id": "2104162779616120834"}
     assert result.provider_coins == 94
+
+
+@pytest.mark.asyncio
+async def test_each_poll_response_reports_a_provider_sync(monkeypatch, tmp_path):
+    from lib.infra.poll_sync_hook import set_sync_hook
+
+    frame = tmp_path / "frame.png"
+    frame.write_bytes(b"frame")
+
+    synced: list[tuple[str, str | None]] = []
+
+    async def record(*, label: str = "", status: str | None = None) -> None:
+        synced.append((label, status))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/task/openapi/upload":
+            return httpx.Response(200, json={"code": 0, "data": {"fileName": "up.png"}})
+        if request.url.path == "/task/openapi/ai-app/run":
+            return httpx.Response(200, json={"code": 0, "data": {"taskId": "task-1"}})
+        if request.url.path == "/openapi/v2/query":
+            return httpx.Response(200, json={"status": "SUCCESS", "results": [{"url": "https://cdn.example/a.mp4"}]})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    @asynccontextmanager
+    async def fake_http_client(**_kwargs):
+        yield client
+
+    async def fake_download(url, output_path, *, label):
+        return None
+
+    monkeypatch.setattr("lib.backends.video_backends.runninghub.artifact_http_client", fake_http_client)
+    monkeypatch.setattr("lib.backends.video_backends.runninghub.download_resumable_video", fake_download)
+    set_sync_hook(record)
+    try:
+        await RunningHubVideoBackend(api_key="rh-key").generate(
+            VideoGenerationRequest(
+                prompt="p", output_path=tmp_path / "o.mp4", duration_seconds=12, reference_images=[frame]
+            )
+        )
+    finally:
+        set_sync_hook(None)
+        await client.aclose()
+
+    assert synced == [("RunningHub", "SUCCESS")]

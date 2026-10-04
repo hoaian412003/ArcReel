@@ -17,6 +17,7 @@ from lib.speech.asr_runner import AsrError
 from server.auth import CurrentUserInfo, get_current_user
 from server.error_handlers import register_error_handlers
 from server.routers import dub as dub_router
+from server.services import dub_pipeline, dub_service
 from tests.auth_deps import AUTH_DEPENDENCIES
 
 UNIT_TEXT = "@[张三]{你好} {再见}"
@@ -84,6 +85,7 @@ def _client(
     queue = MagicMock()
     queue.enqueue_task = AsyncMock(side_effect=lambda **kw: {"task_id": f"t-{kw['resource_id']}"})
     monkeypatch.setattr(dub_router, "get_generation_queue", lambda: queue)
+    monkeypatch.setattr(dub_service, "get_generation_queue", lambda: queue)
     monkeypatch.setattr(dub_router, "load_vieneu_config", AsyncMock(return_value=MagicMock(enabled=vieneu_enabled)))
 
     app = FastAPI()
@@ -99,7 +101,7 @@ def test_timeline_lays_lines_out_sequentially_with_estimated_durations(tmp_path:
     body = client.get("/api/v1/projects/demo/dub/episodes/1/units/E1U1").json()
 
     assert body["video_path"] == "reference_videos/E1U1.mp4"
-    assert body["original_volume"] == 0.5
+    assert body["original_volume"] == 0.3
     first, second = body["lines"]
     assert first["start_seconds"] == 0
     assert second["start_seconds"] > first["duration_seconds"]
@@ -234,7 +236,7 @@ def _with_video(tmp_path: Path, unit: dict[str, Any]) -> dict[str, Any]:
 
 def _fake_asr(monkeypatch: pytest.MonkeyPatch, result: Any) -> AsyncMock:
     fake = AsyncMock(side_effect=result if isinstance(result, Exception) else None, return_value=result)
-    monkeypatch.setattr(dub_router, "transcribe_files", fake)
+    monkeypatch.setattr(dub_pipeline, "transcribe_files", fake)
     return fake
 
 
@@ -311,3 +313,101 @@ def test_detect_timing_validates_the_selection(tmp_path: Path, monkeypatch: pyte
         client.post("/api/v1/projects/demo/dub/episodes/1/detect-timing", json={"unit_ids": ["NOPE"]}).status_code
         == 404
     )
+
+
+def test_timeline_reports_which_line_is_pushed_late_by_the_one_before(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    unit = _unit()
+    unit["dub_lines"][0].update(
+        audio_path="audio/a0.wav", audio_duration_seconds=2.8, audio_text="Xin chào", detected_start_seconds=1.0
+    )
+    unit["dub_lines"][1].update(detected_start_seconds=3.0)
+    client, _ = _client(tmp_path, monkeypatch, units=[unit])
+
+    first, second = client.get("/api/v1/projects/demo/dub/episodes/1/units/E1U1").json()["lines"]
+
+    assert first["delayed_seconds"] == 0
+    assert second["start_seconds"] == pytest.approx(4.0)
+    assert second["delayed_seconds"] == pytest.approx(1.0)
+
+
+def _unit_with_video(unit_id: str, **overrides: Any) -> dict[str, Any]:
+    return _unit(unit_id=unit_id, generated_assets={"video_clip": f"reference_videos/{unit_id}.mp4"}, **overrides)
+
+
+def test_auto_dub_queues_one_task_per_video_that_exists_and_reports_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    no_video = {"unit_id": "E1U3", "text": "x", "duration_seconds": 4}
+    client, queue = _client(
+        tmp_path, monkeypatch, units=[_unit_with_video("E1U1"), _unit_with_video("E1U2", dub_lines=[]), no_video]
+    )
+
+    resp = client.post("/api/v1/projects/demo/dub/episodes/1/auto", json={})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # 没有台词的视频也入队：任务自己会先写台词
+    assert body["unit_ids"] == ["E1U1", "E1U2"]
+    assert body["skipped"] == [{"unit_id": "E1U3", "reason": "no_video"}]
+    assert queue.enqueue_task.await_count == 2
+    kwargs = queue.enqueue_task.await_args_list[0].kwargs
+    assert kwargs["task_type"] == "dub_auto"
+    assert kwargs["media_type"] == "audio"
+    assert kwargs["provider_id"] == "vieneu"
+    assert kwargs["payload"]["audio_provider"] == "vieneu"
+    assert kwargs["payload"]["skip_timing"] is False
+    assert kwargs["payload"]["episode"] == 1
+
+
+def test_auto_dub_only_the_requested_videos_and_can_skip_timing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    client, queue = _client(tmp_path, monkeypatch, units=[_unit_with_video("E1U1"), _unit_with_video("E1U2")])
+
+    resp = client.post("/api/v1/projects/demo/dub/episodes/1/auto", json={"unit_ids": ["E1U2"], "skip_timing": True})
+
+    assert resp.json()["unit_ids"] == ["E1U2"]
+    assert queue.enqueue_task.await_count == 1
+    assert queue.enqueue_task.await_args.kwargs["payload"]["skip_timing"] is True
+
+
+def test_auto_dub_needs_at_least_one_video_and_a_valid_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    client, queue = _client(tmp_path, monkeypatch, units=[_unit(generated_assets={})])
+
+    assert client.post("/api/v1/projects/demo/dub/episodes/1/auto", json={}).status_code == 400
+    assert client.post("/api/v1/projects/demo/dub/episodes/1/auto", json={"unit_ids": []}).status_code == 400
+    assert client.post("/api/v1/projects/demo/dub/episodes/1/auto", json={"unit_ids": ["NOPE"]}).status_code == 404
+    queue.enqueue_task.assert_not_awaited()
+
+
+def test_auto_dub_is_refused_when_vieneu_is_switched_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    client, queue = _client(tmp_path, monkeypatch, vieneu_enabled=False, units=[_unit_with_video("E1U1")])
+
+    resp = client.post("/api/v1/projects/demo/dub/episodes/1/auto", json={})
+
+    assert resp.status_code == 409
+    queue.enqueue_task.assert_not_awaited()
+
+
+def test_auto_dub_skips_videos_that_have_nothing_to_say_instead_of_failing_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    silent = _unit_with_video("E1U2", text="只有画面，没有台词", dub_lines=[])
+    client, queue = _client(tmp_path, monkeypatch, units=[_unit_with_video("E1U1"), silent])
+
+    resp = client.post("/api/v1/projects/demo/dub/episodes/1/auto", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["unit_ids"] == ["E1U1"]
+    assert resp.json()["skipped"] == [{"unit_id": "E1U2", "reason": "no_speech"}]
+    assert queue.enqueue_task.await_count == 1
+
+
+def test_auto_dub_with_only_silent_videos_says_there_is_nothing_to_voice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    silent = _unit_with_video("E1U1", text="只有画面，没有台词", dub_lines=[])
+    client, queue = _client(tmp_path, monkeypatch, units=[silent])
+
+    resp = client.post("/api/v1/projects/demo/dub/episodes/1/auto", json={})
+
+    assert resp.status_code == 400
+    queue.enqueue_task.assert_not_awaited()

@@ -14,7 +14,7 @@ ArcReel 整条 pipeline 中最值得重点优化的一环。
 ## 前置条件
 
 1. 项目目录下存在 `project.json`（含 style / overview / characters / scenes / props）
-2. **正式脚本 `scripts/episode_N.json` 已存在**（drama / narration / reference_video）：内容确认即把脚本规划整集转为正式脚本，全部条目带待编写标记。确认有两条等价路径：用户在 Web 端点击确认，或在对话中明确同意后由主 Agent 调用 `mcp__arcreel__confirm_script_review({"episode": N})`。本工具只读正式脚本、不读脚本规划：脚本规划缺失或重跑后尚未确认都不影响编写。
+2. **正式脚本 `scripts/episode_N.json` 已存在**（drama / narration / reference_video）：内容确认即把脚本规划整集转为正式脚本，全部条目带待编写标记。确认由主 Agent 在对话中取得用户明确同意后调用： `mcp__arcreel__confirm_script_review({"episode": N})`。本工具只读正式脚本、不读脚本规划：脚本规划缺失或重跑后尚未确认都不影响编写。
    - **ad（广告/短片）**：尚无正式脚本时本工具按 `project.json` 的 `brief` + `products`（含 selling_points）+ `target_duration` 整份生成（后端按审定的带货八段框架配比表构建 prompt，`products` 为空自动分流通用短片）；已有正式脚本时与其他路线一样只编写待编写条目。
 3. **约束失败产出保留为待修复草稿，不丢弃重抽**：参考生视频提示词编写的产出违反内容约束时，正式文件不写，产出连同逐条违约报告落到 `*.invalid.json`。用 `open_draft` 读取草稿及 revision，按 `violations[]` 修复完整 `content`，再用 `patch_draft` 提交；随后以相同 `episode` 与 `doc_type: reference_prompt_authoring` 调 `promote_draft`，仍违约则继续 open → patch → promote，无轮次上限。
 
@@ -42,6 +42,8 @@ mcp__arcreel__generate_episode_script({"episode": N})
 ```
 
 - 已有视觉层、无待编写标记的条目保持原样，其中包括用户手写的提示词。
+- 旁白 / 剧情项目的待编写条目要先过导演审阅（`direct_episode` → `review_direction`），计划才会路由到 `author_prompts`。分镜图生视频路线按条目的导演说明（`direction`：镜头角度 / 景别 / 运动与意图、逐角色表演、衔接）写画面构图、动作与运镜；参考生视频路线按单元的镜头表、表演与声音、台词落位、同期声与配乐写提示词。
+- H3 Ref2VA 提示词档只写 H3 六段载荷，单元正文（内容确认定稿的那一版）原样保留，不再扩写。
 - **`entry_ids` 是显式重写**：它覆盖所列条目已有的视觉层（参考生视频改写单元正文），只在用户明确要求
   重写这几条时传入；内容字段（台词、旁白正文、对应原文）与备注、已生成产物照常保留。
 - 没有待编写条目时工具不调用模型、不改剧本，回执会说明。整集重做走重跑脚本规划并重新确认；

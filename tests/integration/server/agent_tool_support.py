@@ -504,16 +504,25 @@ def use_reference_route(fake_ctx: ToolHarness) -> None:
     fake_ctx.pm.project_payload["generation_mode"] = "reference_video"
 
 
-def rv_generator_returning(units: list[dict], captured: dict[str, Any] | None = None):
-    """构造返回指定扁平 units JSON 的假 TextGenerator.create（可选捕获 task_type / project_name）。"""
+def rv_generator_returning(
+    units: list[dict], captured: dict[str, Any] | None = None, *, with_director_plan: bool = False
+):
+    """构造返回指定扁平 units JSON 的假 TextGenerator.create（可选捕获 task_type / project_name）。
+
+    单元拆解不产出导演说明；``with_director_plan=True`` 模拟模型多写了一份集级导演规划（顶层多余字段被忽略）。
+    """
 
     class _FakeGenerator:
         async def generate(self, _request, project_name=None):
             if captured is not None:
                 captured["generate_project_name"] = project_name
 
+            payload: dict[str, Any] = {"units": units}
+            if with_director_plan:
+                payload["director_plan"] = rv_director_plan(len(units))
+
             class _R:
-                text = json.dumps({"units": units}, ensure_ascii=False)
+                text = json.dumps(payload, ensure_ascii=False)
 
             return _R()
 
@@ -565,9 +574,44 @@ def rv_character_sheet(fake_ctx: ToolHarness, name: str, *, claimed: bool) -> No
         activate_artifact_target_state(fake_ctx.project_path, bump_schema=False)
 
 
+def rv_director_plan(unit_count: int) -> dict:
+    """集级导演规划的合法产出：两拍弧线覆盖全部 unit。"""
+    return {
+        "episode_intent": "让观众先喜欢上他，再察觉他的轻率",
+        "arc": [
+            {"beat": "从容的开场", "units": [1]},
+            {"beat": "局面转折", "units": list(range(2, unit_count + 1)) or [1]},
+        ],
+        "tone": "从轻松到紧绷",
+        "motifs": ["雨", "灯光"],
+    }
+
+
+def _rv_direction() -> dict:
+    """unit 级导演说明的合法产出（通过 ``validate_unit_direction``）。"""
+    return {
+        "unit_type": "establishing",
+        "brief": "张三在村口等人，神情放松，观众先熟悉这个地方和他的耐心。",
+        "beats": [
+            {"at_pct": 0, "action": "张三靠着树干，望向路口"},
+            {"at_pct": 60, "action": "他换了个站姿，抬手看表"},
+        ],
+        "performance": [{"character": "张三", "note": "耐心，动作缓慢"}],
+        "must_not_show": "",
+        "end_frame": "张三望向路口，远处有人影",
+        "continuity_in": "村口，清晨，无风",
+        "continuity_out": "村口，清晨，路口有人走近",
+    }
+
+
 def rv_unit(text: str, *, duration: int = 8, source_text: str = _RV_NOVEL) -> dict:
-    """script_plan 的 LLM 产出形状：一层扁平（时长 + 原文锚 + 引用语法正文）。"""
+    """单元拆解的 LLM 产出形状：一层扁平（时长 + 原文锚 + 引用语法正文），不含导演说明。"""
     return {"duration_seconds": duration, "source_text": source_text, "text": text}
+
+
+def rv_directed_unit(text: str, *, duration: int = 8, source_text: str = _RV_NOVEL) -> dict:
+    """存量 script_plan 的单元形状：带拆解时一并写下的导演说明（草稿重判与收编仍认它）。"""
+    return {**_rv_direction(), **rv_unit(text, duration=duration, source_text=source_text)}
 
 
 def derived_reference_names(fake_ctx: ToolHarness, text: str) -> list[str]:

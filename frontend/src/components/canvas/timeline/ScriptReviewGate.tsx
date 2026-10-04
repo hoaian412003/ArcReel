@@ -11,6 +11,7 @@ import type {
   Utterance,
 } from "@/types";
 import { useAppStore } from "@/stores/app-store";
+import { useProjectsStore } from "@/stores/projects-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { useScriptReviewDraft } from "@/hooks/useScriptReviewDraft";
 import { voidPromise } from "@/utils/async";
@@ -28,6 +29,7 @@ import {
   GHOST_BTN_LG_CLS,
 } from "@/components/ui/darkroom-tokens";
 import { sumItemDuration } from "@/utils/script-shape";
+import { GenerateScriptPlanEmpty } from "./GenerateScriptPlanEmpty";
 import { UtteranceListEditor } from "./UtteranceListEditor";
 
 interface ScriptReviewGateProps {
@@ -53,46 +55,6 @@ function selectReviewContent(state: ScriptReviewState): ReviewDraft | null {
   return (state.content ?? null) as ReviewDraft | null;
 }
 
-/** Read-only 资产引用 pills（出场角色 / 场景 / 道具），由 script_plan 登记、gate 不改。 */
-function MetaChips({ items }: { items: string[] }) {
-  if (!items.length) return null;
-  return (
-    <div className="flex flex-wrap gap-1">
-      {items.map((name) => (
-        <span
-          key={name}
-          className="rounded border border-hairline bg-bg-grad-a/50 px-1.5 py-0.5 text-[10.5px] text-text-3"
-        >
-          {name}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function SceneHeader({
-  id,
-  durationSeconds,
-  segmentBreak,
-}: {
-  id: string;
-  durationSeconds: number;
-  segmentBreak: boolean;
-}) {
-  const { t } = useTranslation("dashboard");
-  return (
-    <div className="flex items-center gap-2">
-      <span className="rounded bg-bg-grad-a/70 px-1.5 py-0.5 font-mono text-[11px] text-text-2">{id}</span>
-      <span className="text-[11px] text-text-4">{durationSeconds}s</span>
-      {segmentBreak && (
-        <span className="rounded border border-hairline px-1.5 py-0.5 text-[10px] text-text-4">
-          {t("review_segment_break")}
-        </span>
-      )}
-    </div>
-  );
-}
-
 /** 只读正文：保留换行，空值不渲染。 */
 function ReadOnlyText({ text, className = "" }: { text: string; className?: string }) {
   if (!text) return null;
@@ -115,12 +77,30 @@ function ReadOnlyUtterances({ utterances }: { utterances: Utterance[] }) {
   );
 }
 
+/** 一个场景一行：序号 + 画面描述，下方是台词。只露出审阅要看的两样内容。 */
+function SceneRow({
+  index,
+  children,
+}: {
+  index: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="flex gap-3 border-t border-hairline py-3 first:border-t-0">
+      <span className="w-5 shrink-0 pt-0.5 text-right font-mono text-[11px] text-text-4">{index + 1}</span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">{children}</div>
+    </li>
+  );
+}
+
 function DramaSceneCard({
+  index,
   scene,
   disabled,
   readOnly,
   onChange,
 }: {
+  index: number;
   scene: DramaSceneContent;
   disabled: boolean;
   readOnly: boolean;
@@ -128,15 +108,18 @@ function DramaSceneCard({
 }) {
   const { t } = useTranslation("dashboard");
   return (
-    <article className="rounded-[10px] border border-hairline p-3.5" style={CARD_STYLE}>
-      <div className="mb-3 flex items-start justify-between gap-2">
-        <SceneHeader id={scene.scene_id} durationSeconds={scene.duration_seconds} segmentBreak={scene.segment_break} />
-        <MetaChips items={scene.characters_in_scene} />
-      </div>
-
-      <label className="mb-1 block text-[10.5px]" style={SECTION_LABEL_STYLE}>
-        {t("review_utterances_label")}
-      </label>
+    <SceneRow index={index}>
+      {readOnly ? (
+        <ReadOnlyText text={scene.scene_description} className="text-text" />
+      ) : (
+        <AutoTextarea
+          value={scene.scene_description}
+          disabled={disabled}
+          onChange={(scene_description) => onChange({ scene_description })}
+          placeholder={t("review_scene_description_placeholder")}
+          aria-label={t("review_scene_description_label")}
+        />
+      )}
       {readOnly ? (
         <ReadOnlyUtterances utterances={scene.utterances} />
       ) : (
@@ -146,32 +129,18 @@ function DramaSceneCard({
           onChange={(utterances: Utterance[]) => onChange({ utterances })}
         />
       )}
-
-      <label className="mb-1 mt-3 block text-[10.5px]" style={SECTION_LABEL_STYLE}>
-        {t("review_source_text_label")}
-      </label>
-      {readOnly ? (
-        <ReadOnlyText text={scene.source_text} className="text-text-3" />
-      ) : (
-        <AutoTextarea
-          value={scene.source_text}
-          disabled={disabled}
-          onChange={(source_text) => onChange({ source_text })}
-          placeholder={t("review_source_text_placeholder")}
-          aria-label={t("review_source_text_label")}
-          className="text-text-3"
-        />
-      )}
-    </article>
+    </SceneRow>
   );
 }
 
 function NarrationSegmentCard({
+  index,
   segment,
   disabled,
   readOnly,
   onChange,
 }: {
+  index: number;
   segment: NarrationScriptPlanSegment;
   disabled: boolean;
   readOnly: boolean;
@@ -179,19 +148,7 @@ function NarrationSegmentCard({
 }) {
   const { t } = useTranslation("dashboard");
   return (
-    <article className="rounded-[10px] border border-hairline p-3.5" style={CARD_STYLE}>
-      <div className="mb-3 flex items-start justify-between gap-2">
-        <SceneHeader
-          id={segment.segment_id}
-          durationSeconds={segment.duration_seconds}
-          segmentBreak={segment.segment_break}
-        />
-        <MetaChips items={segment.characters_in_segment} />
-      </div>
-
-      <label className="mb-1 block text-[10.5px]" style={SECTION_LABEL_STYLE}>
-        {t("review_novel_text_label")}
-      </label>
+    <SceneRow index={index}>
       {readOnly ? (
         <ReadOnlyText text={segment.novel_text} className="text-text" />
       ) : (
@@ -203,7 +160,23 @@ function NarrationSegmentCard({
           disabled={disabled}
         />
       )}
-    </article>
+    </SceneRow>
+  );
+}
+
+/** 本集摘要：取分集规划写下的剧情要点，没有时整块不渲染。 */
+function EpisodeSummary({ episode }: { episode: number }) {
+  const { t } = useTranslation("dashboard");
+  const beats = useProjectsStore(
+    (s) => s.currentProjectData?.episodes.find((e) => e.episode === episode)?.outline?.story_beats,
+  );
+  const text = beats?.filter(Boolean).join(" ");
+  if (!text) return null;
+  return (
+    <section className="rounded-[10px] border border-hairline px-3.5 py-3" style={CARD_STYLE}>
+      <h3 className="mb-1 text-[12px] font-medium text-text-2">{t("review_summary_title", { episode })}</h3>
+      <p className="text-[12.5px] leading-relaxed text-text">{text}</p>
+    </section>
   );
 }
 
@@ -360,9 +333,7 @@ export function ScriptReviewGate({ projectName, episode, contentMode, videoModel
   const status = state?.status ?? "no_script_plan";
   const quarantine = state?.quarantine ?? null;
   if (status === "no_script_plan" || (draft == null && quarantine == null)) {
-    return (
-      <div className="flex h-64 items-center justify-center text-text-4">{t("dashboard:no_script_plan_content")}</div>
-    );
+    return <GenerateScriptPlanEmpty projectName={projectName} episode={episode} />;
   }
 
   // 待修复草稿在场：正式内容此刻仍是上一版，可编辑态会让用户改一份不会被消费的内容，且确认
@@ -482,6 +453,8 @@ export function ScriptReviewGate({ projectName, episode, contentMode, videoModel
         />
       )}
 
+      {!quarantined && <EpisodeSummary episode={episode} />}
+
       {/* 本集合计与项目目标的对比；未设目标时不渲染，超出只提示不阻断确认 */}
       {!quarantined && (
         <EpisodeDurationSummary
@@ -496,10 +469,12 @@ export function ScriptReviewGate({ projectName, episode, contentMode, videoModel
       {quarantined ? (
         <QuarantinePanel quarantine={quarantine} onRequestFix={handleRequestFix} />
       ) : (
-        <div className="flex flex-col gap-2.5">
+        <section className="rounded-[10px] border border-hairline px-3.5" style={CARD_STYLE}>
+          <ul>
           {contentMode === "drama" && draft != null && "scenes" in draft
             ? draft.scenes.map((scene, i) => (
                 <DramaSceneCard
+                  index={i}
                   key={scene.scene_id || i}
                   scene={scene}
                   disabled={busy}
@@ -511,6 +486,7 @@ export function ScriptReviewGate({ projectName, episode, contentMode, videoModel
           {contentMode === "narration" && draft != null && "segments" in draft
             ? draft.segments.map((segment, i) => (
                 <NarrationSegmentCard
+                  index={i}
                   key={segment.segment_id || i}
                   segment={segment}
                   disabled={busy}
@@ -519,7 +495,8 @@ export function ScriptReviewGate({ projectName, episode, contentMode, videoModel
                 />
               ))
             : null}
-        </div>
+          </ul>
+        </section>
       )}
     </div>
   );

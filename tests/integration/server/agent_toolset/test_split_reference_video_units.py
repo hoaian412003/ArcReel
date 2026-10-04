@@ -19,8 +19,10 @@ from tests.integration.server.agent_tool_support import (
     run_declared_tool,
     run_rv_split,
     rv_character_sheet,
+    rv_directed_unit,
     rv_generator_returning,
     rv_project,
+    rv_quarantine_path,
     rv_script_plan_path,
     rv_source,
     rv_unit,
@@ -308,6 +310,42 @@ async def test_split_reference_video_units_happy_derives_structure(
     assert captured["task_type"] is mod.TextTaskType.SCRIPT
     assert captured["create_project_name"] == "demo"
     assert captured["generate_project_name"] == "demo"
+
+
+async def test_split_leaves_direction_to_the_director_step(
+    fake_ctx: ToolHarness, monkeypatch, video_request_facts
+) -> None:
+    """单元拆解只定内容：落盘的 script_plan 不带集级导演规划，也不带 unit 级导演说明。"""
+    from server import text_generation as mod
+
+    rv_source(fake_ctx)
+    units = [rv_unit("@[张三] 起身"), rv_unit("@[张三] 出门")]
+    # 模型在顶层多写了一份导演规划：顶层多余字段被忽略，不进 script_plan。
+    monkeypatch.setattr(mod.TextGenerator, "create", rv_generator_returning(units, with_director_plan=True))
+
+    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1})
+
+    assert out.problem is None, out
+    saved = json.loads(rv_script_plan_path(fake_ctx).read_text(encoding="utf-8"))
+    assert "director_plan" not in saved or saved["director_plan"] is None
+    assert all("brief" not in unit and "beats" not in unit for unit in saved["units"])
+
+
+async def test_split_rejects_unit_level_director_fields(
+    fake_ctx: ToolHarness, monkeypatch, video_request_facts
+) -> None:
+    """导演说明不属于拆解的产出：单元里带导演字段时过不了产出结构校验，什么都不落盘。"""
+    from server import text_generation as mod
+
+    rv_source(fake_ctx)
+    monkeypatch.setattr(mod.TextGenerator, "create", rv_generator_returning([rv_directed_unit("@[张三] 起身")]))
+
+    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1})
+
+    assert out.problem is not None
+    assert "结构校验失败" in said(out)
+    assert not rv_script_plan_path(fake_ctx).exists()
+    assert not rv_quarantine_path(fake_ctx).exists()
 
 
 async def test_split_reference_video_units_numbers_unit_ids_by_order(

@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import shutil
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -80,9 +81,23 @@ async def load_config_from_db() -> AsrConfig:
 Runner = Callable[[Sequence[str], float], Awaitable[tuple[int, bytes, bytes]]]
 
 
+#: 这些 uv 环境变量会阻止识别工具自己的环境在首次使用时创建 / 同步（部署里常为主应用设成不同步），
+#: 对识别子进程必须去掉；VIRTUAL_ENV 指向主应用的环境，也不该带进去。
+_UV_ENV_TO_DROP = ("UV_NO_SYNC", "UV_FROZEN", "UV_LOCKED", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")
+
+
+def asr_subprocess_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """识别子进程的环境变量：继承当前环境，去掉会阻止识别工具环境自行同步的 uv 变量。"""
+    env = dict(os.environ if base is None else base)
+    for key in _UV_ENV_TO_DROP:
+        env.pop(key, None)
+    return env
+
+
 async def _run_subprocess(args: Sequence[str], deadline_seconds: float) -> tuple[int, bytes, bytes]:
     proc = await asyncio.create_subprocess_exec(
         *args,
+        env=asr_subprocess_env(),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -194,6 +209,7 @@ __all__ = [
     "AsrConfig",
     "AsrError",
     "AsrSegment",
+    "asr_subprocess_env",
     "build_command",
     "load_config_from_db",
     "parse_output",

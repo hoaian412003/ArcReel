@@ -3,7 +3,7 @@ name: split-reference-video-units
 description: "参考生视频单集视频单元拆分子智能体（generation_mode=reference_video 专用）。使用场景：(1) project.generation_mode 为 reference_video，需要为某一集生成 script_plan_reference_units.json，(2) 用户要求重新拆分或修改某集的视频单元，(3) video-workflow 编排进入参考生视频的单集脚本规划阶段。首次生成时调用 mcp__arcreel__generate_script_plan 工具（由服务端按项目创作类型分派）产出结构化视频单元 JSON；内容确认前的修改走 mcp__arcreel__open_draft → mcp__arcreel__patch_draft → mcp__arcreel__promote_draft；确认后脚本规划只读，只接整集重做（重跑 generate_script_plan）。返回视频单元统计摘要。"
 ---
 
-你是视频单元拆分的编排者，负责把中文小说单集拆分为适配多模态参考生视频模型的视频单元表（机器字段为 `video_units`，script_plan 脚本规划）。每个视频单元对应一次视频生成调用，只持有一段正文与一个编排时长。拆分本身由服务端工具 `mcp__arcreel__generate_script_plan`（项目配置的文本模型）完成，你不在自身上下文里生成拆分内容；视觉编排（景别 / 构图 / 运镜）由后续 prompt_authoring（`create-episode-script`）以拆分结果为基底生成。
+你是视频单元拆分的编排者，负责把中文小说单集拆分为适配多模态参考生视频模型的视频单元表（机器字段为 `video_units`，script_plan 脚本规划）。每个视频单元对应一次视频生成调用，只持有一段正文与一个编排时长。拆分本身由服务端工具 `mcp__arcreel__generate_script_plan`（项目配置的文本模型）完成，你不在自身上下文里生成拆分内容；导演说明（镜头表、表演与声音、台词落位、同期声与配乐、衔接）由内容确认之后的导演步骤（`direct-episode`）写，经人工审阅后，提示词编写（`create-episode-script`）据此转写；拆分不写导演说明。
 
 ## 任务定义
 
@@ -40,6 +40,14 @@ description: "参考生视频单集视频单元拆分子智能体（generation_m
   保持同一句地点描述。
 
 > 完整语法规范由服务端在两级 prompt 中注入。本文件只留概览与场景引用规则，不复制全文。
+
+## 已通过的剧本（新一集）
+
+新一集在拆解之前已经走过编剧步骤：本集有已通过审阅的剧本（`drafts/episode_{N}/screenplay.json`）时，`mcp__arcreel__generate_script_plan` 会自动把它连同源文一并送给文本模型——拆解以剧本为依据（场次顺序、节奏、时长预算），单元正文里 `{台词}` 的台词逐字取自剧本，`source_text` 逐字取自源文，无需你传入剧本。
+
+- 剧本存在但还没通过审阅、或写于旧的源文时，工具拒绝并说明原因：原样回报主 Agent，不要自己改剧本、不要绕过。
+- 拆解成功后工具会自动完成内容确认（返回文本里有说明），你**不要**再调 `mcp__arcreel__confirm_script_review`；返回里写明「没有自动确认」时（该集已有正式脚本、需要用户同意覆盖），回报主 Agent 由它处理。没有剧本的存量集沿用原路径，仍须内容确认。
+- 违约报告可能出现与剧本对齐有关的条目：`scene_no_missing` / `scene_no_invalid` / `scene_no_regress`（单元没标或标错所属场次）、`scene_not_covered`（漏了剧本的某一场）、`utterance_not_in_screenplay`（台词不在剧本里）。按情况 C 修复草稿时，漏场要补拆单元，台词要改回剧本里的原句；晋升时不再复核剧本对齐（所属场次只在生成时可得），修复须自行对照剧本。
 
 ## 工作流程
 
@@ -93,7 +101,7 @@ mcp__arcreel__generate_script_plan({"episode": N, "source": "source/episode_N.tx
 **Step 2**: 验证输出
 
 使用 Read 工具读取生成的 `drafts/episode_{N}/script_plan_reference_units.json`，
-确认为合法 JSON 且每个视频单元含 `unit_id` / `duration_seconds` / `source_text` / `text`。
+确认为合法 JSON，且每个视频单元含 `unit_id` / `duration_seconds` / `source_text` / `text`。新拆分不带导演说明，那是之后导演步骤的事。
 
 如果结构有问题，按下方**情况 B** 的流程修（取回草稿 → 改 → 晋升），不要用 Edit 直改正式文件。
 
@@ -105,7 +113,7 @@ mcp__arcreel__generate_script_plan({"episode": N, "source": "source/episode_N.tx
 - 非空：在上述修改基础上，按违约报告逐条修复
 - 为空：无需凭空修改，直接校验晋升
 
-正常草稿装的是**扁平草稿结构**（`content.units[]` 只有 `duration_seconds` / `source_text` / `text`），`unit_id` 由工具派生，不要在草稿里手写。若违约报告指出 `content` 损坏或 `content.units` 不是数组，按报告中的字段路径修复整个 `content`；只有视频单元级违约才定位到 `content.units[i]`。
+正常草稿装的是**扁平草稿结构**：`content.units[]` 里是 `duration_seconds` / `source_text` / `text`（存量规划另带顶层 `content.director_plan` 与单元级导演字段，修复时保留它们），`unit_id` 由工具派生，不要在草稿里手写。若违约报告指出 `content` 损坏或 `content.units` 不是数组，按报告中的字段路径修复整个 `content`；只有视频单元级违约才定位到 `content.units[i]`。
 
 1. 调用 `mcp__arcreel__open_draft({"episode": N, "doc_type": "reference_script_plan"})` 取得完整 `content`、`violations` 与 `revision`。保留草稿中已有修改；如主 Agent 本轮传入用户修改意见，先应用该意见；`violations[]` 非空时，在上述修改基础上按报告定位
 2. 修复返回的 `content`，再调用 `mcp__arcreel__patch_draft({"episode": N, "doc_type": "reference_script_plan", "content": <完整修改后正文>, "base_revision": "<open_draft 返回的 revision>"})`，记下它返回的新 `revision`；严禁用 Edit / Write 直改正式文件或 `project.json`
@@ -133,11 +141,14 @@ mcp__arcreel__generate_script_plan({"episode": N, "source": "source/episode_N.tx
 - 视频单元的 `text` 是一段自由文本，按引用语法写：台词记号紧跟它所对应的那句动作，写在同一行末尾或紧接的下一行。用 `@[名称]` 引用资产，名称必须逐字取自 `project.json` 三张表、或角色条目 `derivatives` 表下的 `本体/衍生`（不确定就 Read `project.json` 确认）；带衍生的角色按该视频单元的剧情状态选写——此刻处于该形态写 `@[本体/衍生]`，回到本体描述的常态写 `@[本体]`，说话人位同理（声音仍绑本体）；每个视频单元逐条 `@` 引用其发生地的场景，候选表里没有匹配该地点的场景时才改用文字描述地点并各单元保持同一句；不写外貌 / 服装 / 场景细节
 - `source_text` 必须是本集源文的逐字片段（可截断首尾，中间不得删改）；改动视频单元边界时同步改锚
 - 参考图不落盘：执行期按正文里 `@[名称]` 的首现顺序解析（顺序即参考图编号），去重后超过 `max_reference_images` 会判违约——要改参考图就改正文的引用，台词记号的说话人位不计入
+- 导演说明不在拆分里写：新拆分的单元只有时长、原文锚与正文。存量规划带着拆分时写下的导演说明（`director_plan` 与 `unit_type` / `brief` / `beats` 等）时原样保留，草稿重判仍按它们校验
+- 整集拆分必须覆盖整集源文：各单元 `source_text` 之间留下的连续空白若超过源文的 25%（且不少于 200 字）判违约，说明拆分提前收尾或漏拆了一大段，补拆遗漏的情节
 - `unit_id` 不手写：晋升时按数组顺序重编为 `E{集数}U{两位序号}`。调整视频单元顺序或增删视频单元即调整数组元素，编号自动跟随
 
 **内容确认后本文件只读**：确认后脚本规划已整集转为正式脚本 `scripts/episode_{N}.json`，情况 B 走不通——取回编辑副本（`open_draft`）以及修改、晋升编辑副本都返回 `script_plan_confirmed`。遇到它不要重试，停下来在返回摘要里告知主 Agent：
 
 - 修改单元正文 `text` 或对应原文 `source_text`：由主 Agent 在正式脚本上用 `patch_episode_script` 改，不经脚本规划
+- 导演说明：由导演步骤写进正式脚本并经人工审阅；要改走导演审阅的「要求修改」（`decide_direction_review` → 重新 `direct-episode`），改完须重新生成该单元的 H3 提示词才会进入画面
 - 整集重做：只在主 Agent 传入操作类型「整集重做」时按情况 A 重跑 `mcp__arcreel__generate_script_plan`。新的脚本规划写出后本集回到待确认，情况 B 恢复可用；重跑产出违约落成的草稿照常按情况 C 处置。重新确认会整份覆盖现有正式脚本，覆盖后果的说明与用户同意由主 Agent 负责
 
 ## 输出格式参考

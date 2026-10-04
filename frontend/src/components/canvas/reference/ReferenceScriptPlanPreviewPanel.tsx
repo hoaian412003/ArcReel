@@ -26,6 +26,7 @@ import { toScriptLines, type MentionLookup } from "@/hooks/useUnitPromptHighligh
 import { extractMentions } from "@/utils/reference-mentions";
 import { tierProblemText } from "./unit-tier-problem";
 import { ReferenceSplitAlert } from "./ReferenceSplitAlert";
+import { GenerateScriptPlanEmpty } from "../timeline/GenerateScriptPlanEmpty";
 
 interface ReferenceScriptPlanPreviewPanelProps {
   projectName: string;
@@ -486,9 +487,7 @@ export function ReferenceScriptPlanPreviewPanel({
   const status = state?.status ?? "no_script_plan";
   const quarantine = state?.quarantine ?? null;
   if (status === "no_script_plan" || (draft == null && quarantine == null)) {
-    return (
-      <div className="flex h-64 items-center justify-center text-text-4">{t("dashboard:no_script_plan_content")}</div>
-    );
+    return <GenerateScriptPlanEmpty projectName={projectName} episode={episode} />;
   }
 
   const quarantined = quarantine != null;

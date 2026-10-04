@@ -10,6 +10,7 @@ import { ProjectsPage } from "@/components/pages/ProjectsPage";
 import { SystemConfigPage } from "@/components/pages/SystemConfigPage";
 import { ProjectSettingsPage } from "@/components/pages/ProjectSettingsPage";
 import { AssetLibraryPage } from "@/components/pages/AssetLibraryPage";
+import { QueueMonitorPage } from "@/components/pages/QueueMonitorPage";
 import { LoginPage } from "@/components/pages/LoginPage";
 import { NotFoundPage } from "@/components/pages/NotFoundPage";
 import { ToastOverlay } from "@/components/layout/ToastOverlay";
@@ -30,6 +31,7 @@ import { errMsg } from "@/utils/async";
 import {
   ROUTE_APP,
   ROUTE_APP_ASSETS,
+  ROUTE_APP_QUEUE,
   ROUTE_APP_PROJECTS,
   ROUTE_APP_SETTINGS,
   WORKSPACE_ROUTE_SETTINGS,
@@ -229,6 +231,13 @@ export function AppRoutes() {
         <Route path={ROUTE_APP_ASSETS}>
           <AuthGuard>
             <AssetLibraryPage />
+          </AuthGuard>
+        </Route>
+
+        {/* Queue monitor / audit */}
+        <Route path={ROUTE_APP_QUEUE}>
+          <AuthGuard>
+            <QueueMonitorPage />
           </AuthGuard>
         </Route>
 

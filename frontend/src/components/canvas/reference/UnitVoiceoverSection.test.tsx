@@ -23,6 +23,7 @@ function dub(overrides: Partial<UnitDub> = {}): UnitDub {
         start_seconds: 0,
         start_override: null,
         start_source: "detected",
+        delayed_seconds: 0,
         duration_seconds: 1.5,
         estimated: false,
         audio_path: "audio/a0.wav",
@@ -37,6 +38,7 @@ function dub(overrides: Partial<UnitDub> = {}): UnitDub {
         start_seconds: 1.7,
         start_override: null,
         start_source: "estimated",
+        delayed_seconds: 0,
         duration_seconds: 1,
         estimated: true,
         audio_path: null,
@@ -139,6 +141,26 @@ describe("UnitVoiceoverSection", () => {
 
     await screen.findByDisplayValue("Xin chào");
     expect(screen.queryByRole("button", { name: /Detect start times|检测开始时间/ })).not.toBeInTheDocument();
+  });
+
+  it("says which line is pushed late by the one before it, and by how much", async () => {
+    const late = dub();
+    late.lines[1] = { ...late.lines[1], start_source: "detected", delayed_seconds: 1.04 };
+    vi.spyOn(API, "getUnitDub").mockResolvedValue(late);
+    mount();
+
+    await screen.findByDisplayValue("Tạm biệt");
+    expect(screen.getByText(/1\.0 s later than in the video: line 1|比成片晚 1\.0 秒：第 1 行/)).toBeInTheDocument();
+  });
+
+  it("stays quiet about tiny delays", async () => {
+    const barely = dub();
+    barely.lines[1] = { ...barely.lines[1], delayed_seconds: 0.1 };
+    vi.spyOn(API, "getUnitDub").mockResolvedValue(barely);
+    mount();
+
+    await screen.findByDisplayValue("Tạm biệt");
+    expect(screen.queryByText(/later than in the video|比成片晚/)).not.toBeInTheDocument();
   });
 
   it("warns when the voice-over runs past the unit", async () => {

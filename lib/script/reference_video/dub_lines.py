@@ -33,6 +33,11 @@ def dub_spoken_seconds(lines: Sequence[Any], language: str = "vi") -> float:
     return total
 
 
+def dub_audio_is_current(line: DubLine) -> bool:
+    """已登记的音频仍对应现行台词（音色是否变化由合成任务按现行音色判定）。"""
+    return bool(line.audio_path) and line.audio_text == line.text_vi
+
+
 def unit_utterances(unit_text: str) -> list[Utterance]:
     """unit 正文派生出的发声序列（与配音行 ``index`` 同一份派生）。"""
     return derive_utterances(unit_text)[0]

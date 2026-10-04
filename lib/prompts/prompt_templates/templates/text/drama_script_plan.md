@@ -34,6 +34,7 @@ slots:
   episode_target_duration: 单集目标时长秒数；未设置为空
   episode_outline: 本集大纲（title、story_beats、hook、next_episode_teaser）；未规划为空
   next_episode_outline: 下集大纲，形状同本集大纲；未规划为空
+  screenplay: 已确认剧本 {title, logline, scenes[{heading, summary, estimated_seconds, text}]}；没有已确认剧本时传 null
   instructions: 附加指令；未提供为空
 protected: false
 ---
@@ -65,6 +66,12 @@ protected: false
 <{{ source_kind }}>
 {{ novel_text }}
 </{{ source_kind }}>
+{% if screenplay %}
+
+{{ partial("shared/lists/screenplay_block") }}
+{{ partial("shared/screenplay/drama") }}
+{{ partial("shared/screenplay/common_rules") }}
+{% endif %}
 
 {% if episode_outline %}
 <episode_outline>

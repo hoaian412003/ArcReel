@@ -49,6 +49,7 @@ from server.tool_runtime import (
     plan_episodes,
 )
 from tests.fakes import refuse_resume_execution
+from tests.integration.server.agent_tool_support import rv_director_plan, rv_unit
 
 
 async def _start_text_worker(
@@ -528,7 +529,13 @@ async def test_cancel_during_started_episode_plan_commit_leaves_member_running_t
             "reference",
             "reference_video",
             QUARANTINE_KIND_SCRIPT_PLAN,
-            '{"units":[{"duration_seconds":4,"source_text":"张三走向村口。","text":"@[未登记角色] 出场"}]}',
+            json.dumps(
+                {
+                    "director_plan": rv_director_plan(1),
+                    "units": [rv_unit("@[未登记角色] 出场", duration=4, source_text="张三走向村口。")],
+                },
+                ensure_ascii=False,
+            ),
         ),
         (
             "narration",

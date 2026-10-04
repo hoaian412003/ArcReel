@@ -46,6 +46,15 @@ class DubSlot:
     estimated: bool
     #: 开始时间的来源：人工覆盖 / 从成片检测 / 顺序排布估算。
     source: StartSource = "estimated"
+    #: 被推迟之前想要的开始时间（成片里检测到的时间）；只有检测来源才有。
+    requested_start: float | None = None
+
+    @property
+    def delayed_seconds(self) -> float:
+        """因为前一条配音还没念完，比成片里的实际开始时间晚了多少秒；没有被推迟为 0。"""
+        if self.requested_start is None:
+            return 0.0
+        return max(0.0, self.start_seconds - self.requested_start)
 
     @property
     def end_seconds(self) -> float:
@@ -64,15 +73,24 @@ def schedule_dub_lines(lines: Sequence[DubTimingInput], *, speech_rate_override:
             if estimated
             else float(line.audio_duration or 0.0)
         )
+        requested: float | None = None
         if line.start_override is not None:
             start, source = line.start_override, "manual"
         elif line.detected_start is not None:
             # 检测到的时间不让相邻两条配音重叠：前一条还没念完就顺延到它结束之后
-            start, source = max(line.detected_start, cursor), "detected"
+            requested = line.detected_start
+            start, source = max(requested, cursor), "detected"
         else:
             start, source = cursor, "estimated"
         slots.append(
-            DubSlot(index=index, start_seconds=start, duration_seconds=duration, estimated=estimated, source=source)
+            DubSlot(
+                index=index,
+                start_seconds=start,
+                duration_seconds=duration,
+                estimated=estimated,
+                source=source,
+                requested_start=requested,
+            )
         )
         cursor = start + duration + DUB_LINE_GAP_SECONDS
     return slots

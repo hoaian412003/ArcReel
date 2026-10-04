@@ -35,8 +35,12 @@ export const WORKFLOW_ACTION_TYPES = [
   "analyze_assets",
   "plan_episodes",
   "reset_episode_planning",
+  "write_screenplay",
+  "review_screenplay",
   "prepare_script_plan",
   "confirm_script_plan",
+  "direct_episode",
+  "review_direction",
   "generate_script",
   "author_prompts",
   "generate_asset_sheets",
@@ -220,8 +224,12 @@ export type WorkflowStateName =
   | "SELLING_POINTS"
   | "ASSET_INVENTORY"
   | "EPISODE_PLAN"
+  | "SCREENPLAY"
+  | "SCREENPLAY_REVIEW"
   | "SCRIPT_PLAN_CONTENT"
   | "SCRIPT_PLAN_REVIEW"
+  | "DIRECTOR_PLAN"
+  | "DIRECTOR_REVIEW"
   | "FINAL_SCRIPT"
   | "ASSET_SHEETS"
   | "STORYBOARD"

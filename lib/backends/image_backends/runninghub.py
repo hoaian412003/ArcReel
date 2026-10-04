@@ -19,6 +19,7 @@ from lib.backends.image_backends.base import (
 )
 from lib.backends.providers import PROVIDER_RUNNINGHUB
 from lib.backends.runninghub_usage import RunningHubUsage, parse_runninghub_usage
+from lib.infra.poll_sync_hook import fire_provider_sync
 
 DEFAULT_BASE_URL = "https://www.runninghub.ai"
 _QUERY_URL = "https://www.runninghub.ai/openapi/v2/query"
@@ -214,6 +215,7 @@ class RunningHubImageBackend:
                     await self._record(request, "poll", payload)
                     status = str(payload.get("status", "")).upper() if isinstance(payload, dict) else ""
                     last_status = status or "unknown"
+                    await fire_provider_sync(label="RunningHub", status=last_status)
                     if status == "SUCCESS":
                         results = payload.get("results")
                         if isinstance(results, list):

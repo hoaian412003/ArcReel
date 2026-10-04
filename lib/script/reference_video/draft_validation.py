@@ -53,19 +53,40 @@ from lib.speech.speech_rate import estimate_spoken_seconds
 SPEECH_OVERFLOW_TOLERANCE = 0.20
 
 
-def _normalize_for_anchor(text: str) -> str:
-    """Unicode NFC 归一后把连续空白折叠为单个空格，只消除编码与空白差异，不删除空白本身。
+#: 引号的排印变体 → 直引号。模型复制原文时会把直引号 ``"`` 写成弯引号 ``“ ”``（或反过来），
+#: 这是排印形式差异，不是改写。只折叠引号，不碰「」『』等书名号 / 直角引号——那是另一种标点。
+_QUOTE_FOLDING = str.maketrans(
+    {
+        "\u201c": '"',  # “
+        "\u201d": '"',  # ”
+        "\u201e": '"',  # „
+        "\u201f": '"',  # ‟
+        "\u2033": '"',  # ″
+        "\uff02": '"',  # ＂
+        "\u2018": "'",  # ‘
+        "\u2019": "'",  # ’
+        "\u201a": "'",  # ‚
+        "\u201b": "'",  # ‛
+        "\u2032": "'",  # ′
+        "\uff07": "'",  # ＇
+    }
+)
 
-    与 narration 覆盖校验的 ``_normalize_for_coverage`` 同一口径：模型复制原文时换行与
-    缩进的还原不可靠，但删字改字必须被抓住。NFC 与 ``lib.episode.episode_ledger.normalize_source_text``
+
+def _normalize_for_anchor(text: str) -> str:
+    """Unicode NFC 归一、引号排印变体折叠为直引号，再把连续空白折叠为单个空格。
+
+    只消除编码、引号排印与空白差异，不删除空白本身：模型复制原文时换行与缩进的还原不可靠、
+    直引号与弯引号会互换，但删字改字必须被抓住。NFC 与 ``lib.episode.episode_ledger.normalize_source_text``
     定义的源文坐标系一致——带组合附加符的语种（如 vi）源文可能以 NFD 落盘、模型回写 NFC，
     纯编码形式差异不该被判成改写。
     """
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip()
+    folded = unicodedata.normalize("NFC", text).translate(_QUOTE_FOLDING)
+    return re.sub(r"\s+", " ", folded).strip()
 
 
 def is_verbatim_source_anchor(source_text: str, novel_text: str) -> bool:
-    """``source_text`` 在空白归一后是否为源文的逐字子串（空锚不算命中）。"""
+    """``source_text`` 在编码、引号排印与空白归一后是否为源文的逐字子串（空锚不算命中）。"""
     anchor = _normalize_for_anchor(source_text)
     return bool(anchor) and anchor in _normalize_for_anchor(novel_text)
 
@@ -91,6 +112,74 @@ def validate_source_text_anchor(label: str, source_text: str, novel_text: str) -
             code="source_text_not_verbatim",
             label=label,
         )
+
+
+#: 源文覆盖：单段未被任何原文锚覆盖的区间（开头、中间或结尾）占源文的比例上限。原文锚允许
+#: 截断首尾、允许对话提示语与转述段落不进任何锚，正常拆分的覆盖率因此可以很低；拆分提前收尾或整段
+#: 跳过才会留下大片连续空白，按「最长的一段空白」判，而不是按总覆盖率判。
+SOURCE_COVERAGE_MAX_GAP_RATIO = 0.25
+
+#: 空白区间判违约的最短字数（归一后）：源文很短时比例阈值失真，几十个字的空白不是漏拆。
+SOURCE_COVERAGE_MIN_GAP_CHARS = 200
+
+
+def _source_gaps(anchors: list[str], novel: str) -> list[tuple[str, int, int]]:
+    """按顺序定位原文锚后，返回未被覆盖的区间 ``(位置, 起点, 长度)``；位置为 head / middle / tail。
+
+    每个锚先在上一个锚之后找，找不到再全文找（顺序不对仍算覆盖，覆盖与顺序是两件事）；
+    完全找不到的锚跳过——它由 :func:`validate_source_text_anchor` 单独报。
+    """
+    covered = [False] * len(novel)
+    cursor = 0
+    for anchor in anchors:
+        if not anchor:
+            continue
+        start = novel.find(anchor, cursor)
+        if start < 0:
+            start = novel.find(anchor)
+        if start < 0:
+            continue
+        end = start + len(anchor)
+        covered[start:end] = [True] * len(anchor)
+        cursor = end
+    gaps: list[tuple[str, int, int]] = []
+    index = 0
+    while index < len(novel):
+        if covered[index]:
+            index += 1
+            continue
+        stop = index
+        while stop < len(novel) and not covered[stop]:
+            stop += 1
+        position = "head" if index == 0 else "tail" if stop == len(novel) else "middle"
+        gaps.append((position, index, stop - index))
+        index = stop
+    return gaps
+
+
+def validate_source_coverage(source_texts: list[str], novel_text: str) -> None:
+    """script_plan 的原文锚须覆盖整集源文：不允许大片连续空白（拆分提前收尾或整段漏拆）。
+
+    逐 unit 的原文锚校验只判「是不是原文的子串」，判不出「整集只拆了开头一段」——模型提前收尾时
+    每个锚都合法。本判定看最长的空白区间，阈值见 ``SOURCE_COVERAGE_MAX_GAP_RATIO``。
+    """
+    novel = _normalize_for_anchor(novel_text)
+    if not novel:
+        return
+    limit = max(SOURCE_COVERAGE_MIN_GAP_CHARS, int(len(novel) * SOURCE_COVERAGE_MAX_GAP_RATIO))
+    gaps = [gap for gap in _source_gaps([_normalize_for_anchor(t) for t in source_texts], novel) if gap[2] > limit]
+    if not gaps:
+        return
+    where = {"head": "开头", "middle": "中间", "tail": "结尾"}
+    details = "；".join(
+        f"{where[position]}有 {length} 字（占 {length / len(novel):.0%}）没有任何 unit 的 source_text 覆盖，"
+        f"起于：{novel[start : start + 30]!r}"
+        for position, start, length in gaps
+    )
+    raise DraftViolation(
+        f"script_plan 没有覆盖整集源文：{details}；请补拆遗漏的情节，确认拆分没有提前收尾",
+        code="source_coverage_incomplete",
+    )
 
 
 #: 全角花括号。语法只认半角，但中文输入法下模型很容易写出全角形；行里出现全角花括号时
@@ -353,6 +442,8 @@ def assert_dialogue_preserved(label: str, script_plan_text: str, prompt_authorin
 
 
 __all__ = [
+    "SOURCE_COVERAGE_MAX_GAP_RATIO",
+    "SOURCE_COVERAGE_MIN_GAP_CHARS",
     "SPEECH_OVERFLOW_TOLERANCE",
     "DraftViolation",
     "DraftViolations",
@@ -363,6 +454,7 @@ __all__ = [
     "normative_lines",
     "render_violation_report",
     "validate_dialogue_load",
+    "validate_source_coverage",
     "validate_source_text_anchor",
     "validate_unit_text",
     "violation_items",

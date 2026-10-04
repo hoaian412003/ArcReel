@@ -46,13 +46,15 @@ TEXT_TASK_TYPES = frozenset(
         "text_drama_script_plan",
         "text_narration_script_plan",
         "text_reference_script_plan",
+        "text_director_plan",
+        "text_screenplay",
     }
 )
 
 UNIT_TASK_TYPES = frozenset({"storyboard", "grid", "tts", "video", "reference_video"})
 
-#: 越南语配音的两类任务（撰写台词、合成音频）只出现在任务面板，不是工作流步骤挂载的任务。
-DUB_TASK_TYPES = frozenset({"dub_tts", "text_reference_dub_lines"})
+#: 越南语配音的三类任务（撰写台词、合成音频、整条自动配音）只出现在任务面板，不是工作流步骤挂载的任务。
+DUB_TASK_TYPES = frozenset({"dub_auto", "dub_tts", "text_reference_dub_lines"})
 
 FIXED_TASK_TYPES = (
     TEXT_TASK_TYPES | UNIT_TASK_TYPES | DUB_TASK_TYPES | {"image_edit", "voice_sample", DERIVATIVE_TASK_TYPE}

@@ -37,9 +37,7 @@ async def test_mixes_dub_over_video_with_original_audio(tmp_path: Path):
     dub = tmp_path / "dub.wav"
     _run("ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=800:duration=1", str(dub))
 
-    out = await render_dubbed_video(
-        video, [DubClip(dub, 1.0)], tmp_path / "out" / "dubbed.mp4", original_volume=0.5, video_has_audio=True
-    )
+    out = await render_dubbed_video(video, [DubClip(dub, 1.0)], tmp_path / "out" / "dubbed.mp4", video_has_audio=True)
 
     assert out.is_file()
     assert sorted(_streams(out)) == ["audio", "video"]

@@ -15,12 +15,14 @@ import { UnitRail } from "./UnitRail";
 import { UnitPreviewPanel } from "./UnitPreviewPanel";
 import { ReferenceVideoCard } from "./ReferenceVideoCard";
 import { ScriptPreviewPanel } from "./ScriptPreviewPanel";
+import { UnitDirectionSection } from "./UnitDirectionSection";
 import { deriveUnitStatus } from "./unit-status";
 import { tierProblemText } from "./unit-tier-problem";
 import { ReferenceSplitAlert } from "./ReferenceSplitAlert";
 import { EpisodeHeader } from "./EpisodeHeader";
 import { H3RegenerateAllButton } from "./H3PromptControls";
 import { ReferenceDurationConfirmDialog } from "./ReferenceDurationConfirmDialog";
+import { CreateVoiceoverButton } from "./CreateVoiceoverButton";
 import { ReferenceBatchAdmissionDialog } from "./ReferenceBatchAdmissionDialog";
 import { referenceBatchOutcome } from "./batch-outcome";
 import { NarrationDeliveryChoice } from "@/components/shared/NarrationDeliveryChoice";
@@ -771,7 +773,7 @@ export function ReferenceVideoCanvas({
 
   const isDirty = !!(selected && dirtyMap[selected.unit_id]);
 
-  // 编辑器列内的两种视图：写文稿 / 看解析结果。解析预览是只读派生视图，与正文同一份
+  // 编辑器列内的两种视图：写文稿 / 导演指南（导演说明 + 解析预览）。导演指南与正文同一份
   // 文本，故共用编辑器列的空间而非再占一栏（右栏留给成片预览）。
   const [editorView, setEditorView] = useState<"script" | "parse">("script");
   // 按资产内容而非项目对象引用判等：项目数据刷新会换新对象，按引用会让台词卡反复作废在途请求。
@@ -1015,6 +1017,7 @@ export function ReferenceVideoCanvas({
               ttsDurationEndpointFixed={selectedDurationEndpointFixed}
               compact
             />
+            <CreateVoiceoverButton projectName={projectName} episode={episode} scope="episode" />
             <button
               type="button"
               onClick={() => void handleBatchGenerate()}
@@ -1341,14 +1344,18 @@ export function ReferenceVideoCanvas({
                             id="reference-editor-view-panel-parse"
                             role="tabpanel"
                             aria-labelledby="reference-editor-view-tab-parse"
-                            // 解析预览是只读的，面板内没有可聚焦后代：滚动容器兼作焦点目标，
-                            // 键盘用户切到这个 tab 后才能用 PageDown / 方向键读到折线以下的内容
-                            // （WAI tabs：tabpanel 无可聚焦内容时自身取 tabindex="0"）。
-                            tabIndex={0}
+                            // 面板内有可聚焦的导演说明字段，键盘可直接 Tab 进入并滚动，tabpanel 自身不再取 tabindex。
                             className="flex min-h-0 flex-1 flex-col overflow-y-auto"
                           >
+                            <UnitDirectionSection
+                              key={`direction-${selected.unit_id}`}
+                              projectName={projectName}
+                              episode={episode}
+                              unit={selected}
+                              locked={isUnitLocked(selected.unit_id)}
+                            />
                             <ScriptPreviewPanel
-                              key={selected.unit_id}
+                              key={`preview-${selected.unit_id}`}
                               projectName={projectName}
                               episode={episode}
                               text={currentText}

@@ -39,7 +39,9 @@ TemplateAxis = Literal[
 TemplateStage = Literal[
     "source_overview",
     "episode_plan",
+    "screenplay",
     "script_plan",
+    "direction",
     "prompt_authoring",
     "asset_sheet",
     "storyboard_image",
@@ -62,7 +64,9 @@ class AgentToolTrigger(_Trigger):
     kind: Literal["agent_tool"]
     name: Literal[
         "plan_episodes",
+        "write_screenplay",
         "generate_script_plan",
+        "generate_director_plan",
         "generate_episode_script",
     ]
 

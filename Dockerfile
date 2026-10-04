@@ -63,6 +63,8 @@ COPY server/ server/
 COPY alembic/ alembic/
 COPY alembic.ini ./
 COPY scripts/ scripts/
+# 配音开始时间检测用的一次性语音识别工具（只拷源码；虚拟环境和模型在容器首次使用时创建 / 下载）
+COPY tools/ tools/
 COPY agent_runtime_profile/ agent_runtime_profile/
 COPY public/ public/
 

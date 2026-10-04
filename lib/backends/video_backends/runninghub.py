@@ -25,6 +25,7 @@ from lib.backends.video_backend_contract import (
     VideoGenerationRequest,
     VideoGenerationResult,
 )
+from lib.infra.poll_sync_hook import fire_provider_sync
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,7 @@ class RunningHubVideoBackend(ProviderJobIdPersistenceMixin):
         await self._record(request, "poll", payload)
         if not isinstance(payload, dict):
             raise RuntimeError("RunningHub poll returned invalid JSON")
+        await fire_provider_sync(label="RunningHub", status=str(payload.get("status", "")))
         return payload
 
     async def _poll_and_download(

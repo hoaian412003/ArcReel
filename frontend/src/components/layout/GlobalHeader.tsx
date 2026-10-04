@@ -1,7 +1,7 @@
 import { startTransition, useState, useEffect, useRef } from "react";
 import { errMsg, voidPromise } from "@/utils/async";
 import { useLocation } from "wouter";
-import { ChevronLeft, Settings, Bell, Download, Loader2, Package } from "lucide-react";
+import { Activity, ChevronLeft, Settings, Bell, Download, Loader2, Package } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "@/stores/app-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
@@ -337,6 +337,26 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
             aria-label={t("assets:library_title")}
           >
             <Package className="h-4 w-4" />
+          </button>
+
+          {/* Queue monitor */}
+          <button
+            type="button"
+            onClick={() => setLocation("~/app/queue")}
+            className="grid h-[30px] w-[30px] place-items-center rounded-md transition-colors focus-ring"
+            style={{ color: "var(--color-text-3)" }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "oklch(0.28 0.012 265 / 0.6)";
+              e.currentTarget.style.color = "var(--color-text)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "var(--color-text-3)";
+            }}
+            title={t("queue:open_monitor")}
+            aria-label={t("queue:open_monitor")}
+          >
+            <Activity className="h-4 w-4" />
           </button>
 
           {/* Settings */}

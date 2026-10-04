@@ -51,6 +51,8 @@ from tests.integration.server.agent_tool_support import (
     read_rv_quarantine,
     run_declared_tool,
     run_rv_split,
+    rv_directed_unit,
+    rv_director_plan,
     rv_generator_returning,
     rv_project,
     rv_quarantine_path,
@@ -193,6 +195,39 @@ async def test_promote_draft_promotes_after_repair(fake_ctx: ToolHarness, monkey
     saved = json.loads(rv_script_plan_path(fake_ctx).read_text(encoding="utf-8"))
     assert saved["units"][0]["unit_id"] == "E1U01"
     assert saved["units"][0]["text"] == "@[张三] 在 @[村口] 出场"
+    assert "brief" not in saved["units"][0]
+
+
+async def test_promote_draft_rejects_a_thinned_director_note(fake_ctx: ToolHarness, monkeypatch) -> None:
+    """存量草稿带着拆解时写下的导演说明：晋升时仍按导演规划校验，清空说明不能借晋升绕过。"""
+    rv_source(fake_ctx)
+    await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
+
+    envelope = read_rv_quarantine(fake_ctx)
+    envelope["content"]["director_plan"] = rv_director_plan(1)
+    envelope["content"]["units"][0] = {**rv_directed_unit("@[张三] 在 @[村口] 出场"), "brief": "紧张"}
+    rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+
+    out = await promote_reference_draft(fake_ctx)
+
+    assert out.problem is not None
+    assert not rv_script_plan_path(fake_ctx).exists()
+    assert [v["code"] for v in read_rv_quarantine(fake_ctx)["violations"]] == ["director_unit_invalid"]
+
+
+async def test_promote_draft_does_not_require_direction_for_a_new_breakdown(fake_ctx: ToolHarness, monkeypatch) -> None:
+    """新拆解的草稿不带导演内容：导演说明由之后的导演步骤写，晋升不因缺导演规划被拒。"""
+    rv_source(fake_ctx)
+    await run_rv_split(fake_ctx, monkeypatch, [rv_unit("@[不存在的人] 出场")])
+
+    envelope = read_rv_quarantine(fake_ctx)
+    envelope["content"]["units"][0]["text"] = "@[张三] 在 @[村口] 出场"
+    rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+
+    out = await promote_reference_draft(fake_ctx)
+
+    assert out.problem is None, out
+    assert rv_script_plan_path(fake_ctx).exists()
 
 
 async def test_promote_draft_reports_again_without_round_limit(fake_ctx: ToolHarness, monkeypatch) -> None:
@@ -381,7 +416,10 @@ async def test_split_violation_keeps_pre_generation_formal_baseline(fake_ctx: To
             await release.wait()
 
             class _Result:
-                text = json.dumps({"units": [rv_unit("@[不存在的人] 出场")]}, ensure_ascii=False)
+                text = json.dumps(
+                    {"director_plan": rv_director_plan(1), "units": [rv_unit("@[不存在的人] 出场")]},
+                    ensure_ascii=False,
+                )
 
             return _Result()
 

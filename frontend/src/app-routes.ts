@@ -7,9 +7,10 @@ export const ROUTE_APP = "/app";
 export const ROUTE_APP_PROJECTS = "/app/projects";
 export const ROUTE_APP_SETTINGS = "/app/settings";
 export const ROUTE_APP_ASSETS = "/app/assets";
+export const ROUTE_APP_QUEUE = "/app/queue";
 
 /** 无子路由的单页顶层路由——精确匹配，前缀不算数。 */
-export const APP_TOP_LEVEL_ROUTES = [ROUTE_APP, ROUTE_APP_PROJECTS, ROUTE_APP_SETTINGS, ROUTE_APP_ASSETS] as const;
+export const APP_TOP_LEVEL_ROUTES = [ROUTE_APP, ROUTE_APP_PROJECTS, ROUTE_APP_SETTINGS, ROUTE_APP_ASSETS, ROUTE_APP_QUEUE] as const;
 
 /**
  * `/app/projects/:projectName` 下的路由段常量——`router.tsx`（项目设置页）与
@@ -24,6 +25,7 @@ export const WORKSPACE_ROUTE_CHARACTERS = "characters";
 export const WORKSPACE_ROUTE_SCENES = "scenes";
 export const WORKSPACE_ROUTE_PROPS = "props";
 export const WORKSPACE_ROUTE_PRODUCTS = "products";
+export const WORKSPACE_ROUTE_FLOW = "flow";
 export const WORKSPACE_ROUTE_EPISODES = "episodes";
 /** `episodes/:n/edit` 下的剪辑时间线编辑器。 */
 export const WORKSPACE_ROUTE_EPISODE_EDIT = "edit";
@@ -39,6 +41,7 @@ const WORKSPACE_STATIC_LEAF_ROUTES = [
   WORKSPACE_ROUTE_SCENES,
   WORKSPACE_ROUTE_PROPS,
   WORKSPACE_ROUTE_PRODUCTS,
+  WORKSPACE_ROUTE_FLOW,
 ] as const;
 
 /**

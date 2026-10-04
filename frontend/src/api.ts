@@ -73,6 +73,7 @@ import type {
   ReferenceUnitCapability,
   ReferenceUnitCapabilityMap,
   ReferenceVideoUnit,
+  UnitDirectionPatch,
   DubLinePatch,
   DubTimingResult,
   UnitDub,
@@ -116,6 +117,19 @@ import type {
 import type { Asset, AssetType, AssetCreatePayload, AssetUpdatePayload } from "@/types/asset";
 import type { AgentMemoryOverview, AgentMemoryScope } from "@/types/agent-memory";
 import type { WorkflowPlan, WorkflowPlanRequest } from "@/types/workflow";
+import type { DirectionReview, DirectionReviewDecision, FlowBoard } from "@/types/flow";
+import type { Screenplay, ScreenplayOperation } from "@/types/screenplay";
+import type {
+  QueueAuditFilters,
+  QueueAuditList,
+  QueueLimitOverrides,
+  QueueLimits,
+  QueueOverview,
+  QueueTaskDetail,
+  QueueTaskList,
+  QueueTaskListFilters,
+  QueueTaskRow,
+} from "@/types/queue-monitor";
 import type {
   AgentCredential,
   CreateAgentCredentialRequest,
@@ -311,6 +325,16 @@ function agentMemoryBase(scope: AgentMemoryScope): string {
   return scope.level === "user"
     ? "/agent/memory"
     : `/projects/${encodeURIComponent(scope.projectName)}/agent-memory`;
+}
+
+/** 队列监控列表查询串：跳过 undefined / 空串。 */
+function queueQuery(filters: object): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === "") continue;
+    params.set(key, String(value));
+  }
+  return params.size > 0 ? `?${params.toString()}` : "";
 }
 
 // ==================== API class ====================
@@ -666,7 +690,7 @@ class API {
     projectName: string,
     episode: number,
     timelineId: string,
-    payload: { parent_revision: number; clips: EditClip[]; summary?: string },
+    payload: { parent_revision: number; clips: EditClip[]; summary?: string; voice_over?: boolean },
   ) {
     return this.request<EditTimelineDetail>(`${this.editTimelineBase(projectName, episode)}/${timelineId}`, {
       method: "PUT",
@@ -1219,6 +1243,17 @@ class API {
     );
   }
 
+  /** 入队该集脚本规划的文本任务（仅首次生成）；产出落盘后审阅面板经修订号自动刷新。 */
+  static async generateScriptPlan(
+    projectName: string,
+    episode: number
+  ): Promise<{ task_id: string; deduped: boolean }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/script-plan/generate`,
+      { method: "POST" }
+    );
+  }
+
   // ==================== 分镜管理（旁白/解说） ====================
 
   /**
@@ -1495,6 +1530,84 @@ class API {
       body: JSON.stringify(request),
       signal: options.signal,
     });
+  }
+
+  // ==================== Flow 看板 ====================
+
+  /** 各集所处阶段的看板快照：有序列 + 每集一张卡片。 */
+  static async getFlowBoard(
+    projectName: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<FlowBoard> {
+    return this.request(`/projects/${encodeURIComponent(projectName)}/flow-board`, {
+      signal: options.signal,
+    });
+  }
+
+  /** 读取该集分镜导演报告与审阅状态。 */
+  static async getDirectionReview(
+    projectName: string,
+    episode: number,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<DirectionReview> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/direction-review`,
+      { signal: options.signal }
+    );
+  }
+
+  /** 记录对导演报告的审阅决定（通过 / 需修改 / 让 Agent 重做）。 */
+  static async decideDirectionReview(
+    projectName: string,
+    episode: number,
+    decision: DirectionReviewDecision
+  ): Promise<DirectionReview> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/direction-review/decision`,
+      { method: "POST", body: JSON.stringify(decision) }
+    );
+  }
+
+  // ==================== 编剧剧本 ====================
+
+  /** 读取该集剧本、逐场预计时长、总时长与审阅状态；尚未编写时 status 为 "none"。 */
+  static async getScreenplay(
+    projectName: string,
+    episode: number,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<Screenplay> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/screenplay`,
+      { signal: options.signal }
+    );
+  }
+
+  /** 按场次修改剧本；baseFingerprint 取自最近一次读取，内容已变则 409。成功修改使既有审阅失效。 */
+  static async patchScreenplay(
+    projectName: string,
+    episode: number,
+    baseFingerprint: string,
+    operations: ScreenplayOperation[]
+  ): Promise<Screenplay> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/screenplay`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ base_fingerprint: baseFingerprint, operations }),
+      }
+    );
+  }
+
+  /** 记录对剧本的审阅通过；fingerprint 须是用户审阅过的那一版，内容已变则 409。 */
+  static async approveScreenplay(
+    projectName: string,
+    episode: number,
+    fingerprint: string
+  ): Promise<Screenplay> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/screenplay/approve`,
+      { method: "POST", body: JSON.stringify({ fingerprint }) }
+    );
   }
 
   static getFileUrl(
@@ -3125,6 +3238,27 @@ class API {
     );
   }
 
+  /**
+   * 自动配音：每个已有成片的视频各入队一个任务，依次写越南语台词（缺则写）、从成片检测开始时间、合成音频；
+   * 同时最多 4 个视频在跑。unit_ids 缺省即本集所有已有成片的视频。
+   */
+  static async autoDubVoiceover(
+    projectName: string,
+    episode: number,
+    payload: { unit_ids?: string[]; skip_timing?: boolean },
+  ): Promise<{
+    success: boolean;
+    task_ids: string[];
+    unit_ids: string[];
+    /** 没入队的视频及原因：还没有成片，或视频里没有台词和画外音。 */
+    skipped: { unit_id: string; reason: "no_video" | "no_speech" }[];
+  }> {
+    return this.request(`/projects/${encodeURIComponent(projectName)}/dub/episodes/${episode}/auto`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
   /** 一个单元的配音时间线：逐行生效开始时间、时长、音频与过期状态。 */
   static async getUnitDub(projectName: string, episode: number, unitId: string): Promise<UnitDub> {
     return this.request(
@@ -3197,7 +3331,7 @@ class API {
       note?: string | null;
       /** 整体替换该单元的配音台词；空数组即清空。 */
       dub_lines?: DubLinePatch[];
-    },
+    } & UnitDirectionPatch,
   ): Promise<{ unit: ReferenceVideoUnit; unit_capability: ReferenceUnitCapability }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/${encodeURIComponent(unitId)}`,
@@ -3306,6 +3440,49 @@ class API {
       `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/generate-batch`,
       { method: "POST", body: JSON.stringify(payload) },
     );
+  }
+
+  // ==================== 队列监控（管理员） ====================
+
+  static async getQueueOverview(options: { signal?: AbortSignal } = {}): Promise<QueueOverview> {
+    return this.request("/admin/queue/overview", { signal: options.signal });
+  }
+
+  static async listQueueTasks(
+    filters: QueueTaskListFilters = {},
+    options: { signal?: AbortSignal } = {},
+  ): Promise<QueueTaskList> {
+    return this.request(`/admin/queue/tasks${queueQuery(filters)}`, { signal: options.signal });
+  }
+
+  static async getQueueTask(taskId: string, options: { signal?: AbortSignal } = {}): Promise<QueueTaskDetail> {
+    return this.request(`/admin/queue/tasks/${encodeURIComponent(taskId)}`, { signal: options.signal });
+  }
+
+  static async cancelQueueTask(taskId: string): Promise<QueueTaskRow> {
+    return this.request(`/admin/queue/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+  }
+
+  static async markQueueTaskFailed(taskId: string, reason: string): Promise<QueueTaskRow> {
+    return this.request(`/admin/queue/tasks/${encodeURIComponent(taskId)}/mark-failed`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  static async listQueueAudit(
+    filters: QueueAuditFilters = {},
+    options: { signal?: AbortSignal } = {},
+  ): Promise<QueueAuditList> {
+    return this.request(`/admin/queue/audit${queueQuery(filters)}`, { signal: options.signal });
+  }
+
+  static async getQueueLimits(options: { signal?: AbortSignal } = {}): Promise<QueueLimits> {
+    return this.request("/admin/queue/limits", { signal: options.signal });
+  }
+
+  static async updateQueueLimits(overrides: QueueLimitOverrides): Promise<QueueLimits> {
+    return this.request("/admin/queue/limits", { method: "PUT", body: JSON.stringify({ overrides }) });
   }
 
 }

@@ -80,3 +80,31 @@ def test_manual_override_beats_detected_and_sources_are_labelled():
 
     assert slots[0].start_seconds == 5.0
     assert [s.source for s in slots] == ["manual", "estimated"]
+
+
+def test_a_line_pushed_back_by_the_previous_dub_reports_how_late_it_is():
+    slots = schedule_dub_lines(
+        [
+            DubTimingInput("a", audio_duration=2.8, detected_start=1.0),
+            DubTimingInput("b", audio_duration=1.0, detected_start=3.0),
+            DubTimingInput("c", audio_duration=1.0, detected_start=9.0),
+        ]
+    )
+
+    # a 在 1.0 秒开始、念到 3.8 秒；b 想在 3.0 秒开始，只能顺延到 4.0 秒（3.8 加间隙 0.2），晚了 1.0 秒
+    assert slots[0].delayed_seconds == 0.0
+    assert slots[1].start_seconds == pytest.approx(4.0)
+    assert slots[1].delayed_seconds == pytest.approx(1.0)
+    assert slots[2].delayed_seconds == 0.0
+
+
+def test_only_detected_lines_can_be_delayed():
+    slots = schedule_dub_lines(
+        [
+            DubTimingInput("a", audio_duration=5.0, start_override=0.0),
+            DubTimingInput("b", audio_duration=1.0),
+            DubTimingInput("c", audio_duration=1.0, start_override=1.0),
+        ]
+    )
+
+    assert [s.delayed_seconds for s in slots] == [0.0, 0.0, 0.0]

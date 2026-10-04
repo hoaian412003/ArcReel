@@ -44,6 +44,14 @@ class Task(UserOwnedMixin, Base):
     # 参考生视频首次提交前冻结的严格执行事实。独立列避免与可变 enqueue payload 混合，且让
     # checkpoint/job 组合在重启时可无歧义分流；只由 worker 内部消费，不属于 tasks API 契约。
     execution_checkpoint_json: Mapped[str | None] = mapped_column(Text)
+    # 0-100 的里程碑进度（running / submitted / 完成），供应商不报百分比时不伪造连续值。
+    progress: Mapped[float | None] = mapped_column(Float)
+    # 最近一次与供应商成功同步状态的时刻；对账据此判定执行中任务是否失联。
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 入队准入时的预估费用与输入摘要，用于和实际账单对照、审计。
+    estimated_cost_amount: Mapped[float | None] = mapped_column(Float)
+    estimated_currency: Mapped[str | None] = mapped_column(String)
+    input_digest: Mapped[str | None] = mapped_column(String)
     queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

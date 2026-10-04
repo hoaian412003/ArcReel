@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import unicodedata
 from pathlib import Path
 
 import pytest
 
+import lib.script.direction_review as direction_review
 import lib.script.script_review as script_review
 from lib.artifacts.artifact_activation import (
     activate_artifact_target_state,
@@ -301,9 +303,9 @@ def test_drama_target_comes_from_ledger_not_derived_filenames(tmp_path: Path) ->
     assert status.target.episode == 2
     assert status.target.script == "scripts/custom-name.json"
     assert status.target.script_filename == "custom-name.json"
-    assert status.state == "SCRIPT_PLAN_CONTENT"
-    assert status.next_action.type == "prepare_script_plan"
-    assert status.next_action.args["preprocessor"] == "normalize-drama-script"
+    assert status.state == "SCREENPLAY"
+    assert status.next_action.type == "write_screenplay"
+    assert status.next_action.args == {"episode": 2}
 
 
 def test_manual_presplit_project_routes_to_script_plan_without_writing_the_ledger(tmp_path: Path) -> None:
@@ -337,8 +339,8 @@ def test_manual_presplit_project_routes_to_script_plan_without_writing_the_ledge
     assert status.target is not None
     assert status.target.episode == 1
     assert status.target.source == "source/episode_1.txt"
-    assert status.state == "SCRIPT_PLAN_CONTENT"
-    assert status.next_action.type == "prepare_script_plan"
+    assert status.state == "SCREENPLAY"
+    assert status.next_action.type == "write_screenplay"
     assert status.next_action.args["episode"] == 1
     assert pm.load_project("demo")["episodes"] == []
 
@@ -794,8 +796,8 @@ def test_completed_first_episode_does_not_hide_later_incomplete_episode(
     assert source_reads == {"novel.txt": 1, "episode_1.txt": 1}
     assert status.target is not None
     assert status.target.episode == 2
-    assert status.state == "SCRIPT_PLAN_CONTENT"
-    assert status.next_action.type == "prepare_script_plan"
+    assert status.state == "SCREENPLAY"
+    assert status.next_action.type == "write_screenplay"
 
 
 def test_completed_first_episode_does_not_hide_later_planning_reset(tmp_path: Path) -> None:
@@ -1283,6 +1285,58 @@ def _plan_segment(segment_id: str, novel_text: str) -> dict:
         "scenes": [],
         "props": [],
     }
+
+
+def _director_plan() -> dict:
+    return {
+        "episode_intent": "让观众感到压迫与反转",
+        "arc": [{"beat": "压迫", "units": [1]}, {"beat": "反转", "units": [2]}],
+        "tone": "由压抑转为释然",
+        "motifs": [],
+    }
+
+
+def _direction() -> dict:
+    return {
+        "camera": {"angle": "低角度", "shot_size": "特写", "movement": "缓慢推进", "intent": "托出对方压人的气势"},
+        "performance": [],
+        "continuity_in": "门口",
+        "continuity_out": "桌前",
+    }
+
+
+def _direct_narration_script(project_path: Path) -> dict:
+    """给已登记的 narration 剧本补上导演数据（集级规划 + 每个分镜的导演说明）并重新登记，返回剧本。"""
+    path = project_path / "scripts" / "episode_1.json"
+    script = json.loads(path.read_text(encoding="utf-8"))
+    script["director_plan"] = _director_plan()
+    for segment in script["segments"]:
+        segment["direction"] = _direction()
+    _write_registered_script(project_path, script)
+    return script
+
+
+def _record_direction_decision(
+    pm: ProjectManager, script: dict, decision: str, *, note: str | None = None, entry_ids: list[str] | None = None
+) -> None:
+    fingerprint = direction_review.direction_fingerprint(script, "segments")
+    assert fingerprint is not None
+    pm.update_project(
+        "demo",
+        lambda project: direction_review.apply_decision(
+            project,
+            1,
+            fingerprint=fingerprint,
+            decision=decision,
+            decided_at="2026-10-03T00:00:00Z",
+            note=note,
+            entry_ids=entry_ids,
+        ),
+    )
+
+
+def _approve_direction(pm: ProjectManager, project_path: Path) -> None:
+    _record_direction_decision(pm, _direct_narration_script(project_path), "approve")
 
 
 def test_legacy_narration_scenes_skeleton_remains_resumable(tmp_path: Path) -> None:
@@ -2319,6 +2373,8 @@ def test_pending_authoring_entries_ask_to_author_prompts_before_visual_generatio
         ],
     )
 
+    _approve_direction(pm, _project_path)
+
     status = WorkflowStateService(pm).get_status("demo")
 
     assert status.artifacts["script"]["state"] == "current"
@@ -2328,8 +2384,123 @@ def test_pending_authoring_entries_ask_to_author_prompts_before_visual_generatio
     assert status.next_action.args["episode"] == 1
 
 
-def test_pending_reference_units_ask_to_author_prompts(tmp_path: Path) -> None:
-    """参考生视频确认后单元全部待编写：下一步补写单元，而不是直接进入生成。"""
+def _pending_narration_project(tmp_path: Path) -> tuple[ProjectManager, Path]:
+    plan = [_plan_segment("E1S01", "原文甲。"), _plan_segment("E1S02", "原文乙。")]
+    pm, project_path, _revision = _confirmed_narration_project_with_script(
+        tmp_path,
+        plan,
+        [
+            _valid_narration_segment(image_prompt=None, video_prompt=None, pending_authoring=True),
+            _valid_narration_segment(segment_id="E1S02", image_prompt=None, video_prompt=None, pending_authoring=True),
+        ],
+    )
+    return pm, project_path
+
+
+def test_pending_entries_without_director_output_ask_to_direct_the_episode(tmp_path: Path) -> None:
+    pm, _project_path = _pending_narration_project(tmp_path)
+
+    status = WorkflowStateService(pm).get_status("demo")
+
+    assert status.state == "DIRECTOR_PLAN"
+    assert status.next_action.type == "direct_episode"
+    assert status.next_action.requested_ids == ["E1S01", "E1S02"]
+    assert status.next_action.args == {"episode": 1}
+    assert status.gates["direction_review"] == {"state": "pending", "revision": None}
+
+
+def test_unreviewed_director_output_waits_for_the_human_review(tmp_path: Path) -> None:
+    pm, project_path = _pending_narration_project(tmp_path)
+    script = _direct_narration_script(project_path)
+
+    status = WorkflowStateService(pm).get_status("demo")
+
+    assert status.state == "DIRECTOR_REVIEW"
+    assert status.next_action.type == "review_direction"
+    assert status.next_action.requires_confirmation is True
+    assert status.next_action.args["fingerprint"] == direction_review.direction_fingerprint(script, "segments")
+    assert status.gates["direction_review"]["state"] == "pending"
+
+
+def test_approved_direction_lets_prompt_authoring_proceed(tmp_path: Path) -> None:
+    pm, project_path = _pending_narration_project(tmp_path)
+    _approve_direction(pm, project_path)
+
+    status = WorkflowStateService(pm).get_status("demo")
+
+    assert status.state == "FINAL_SCRIPT"
+    assert status.next_action.type == "author_prompts"
+    assert status.gates["direction_review"]["state"] == "approved"
+
+
+def test_editing_approved_direction_returns_to_review(tmp_path: Path) -> None:
+    pm, project_path = _pending_narration_project(tmp_path)
+    _approve_direction(pm, project_path)
+    path = project_path / "scripts" / "episode_1.json"
+    script = json.loads(path.read_text(encoding="utf-8"))
+    script["segments"][0]["direction"]["camera"]["angle"] = "高角度"
+    _write_registered_script(project_path, script)
+
+    status = WorkflowStateService(pm).get_status("demo")
+
+    assert status.state == "DIRECTOR_REVIEW"
+    assert status.next_action.type == "review_direction"
+
+
+def test_requested_changes_route_back_to_the_director_with_the_note(tmp_path: Path) -> None:
+    pm, project_path = _pending_narration_project(tmp_path)
+    script = _direct_narration_script(project_path)
+    _record_direction_decision(pm, script, "changes", note="第二个镜头太平", entry_ids=["E1S02"])
+
+    status = WorkflowStateService(pm).get_status("demo")
+
+    assert status.state == "DIRECTOR_PLAN"
+    assert status.next_action.type == "direct_episode"
+    assert status.next_action.requested_ids == ["E1S02"]
+    assert status.next_action.args == {"episode": 1, "note": "第二个镜头太平", "entry_ids": ["E1S02"]}
+    assert status.gates["direction_review"]["state"] == "changes_requested"
+
+
+def test_authored_episode_without_director_output_is_not_touched(tmp_path: Path) -> None:
+    """条目已全部编写的存量集不适用导演步骤，不被新步骤阻塞。"""
+    plan = [_plan_segment("E1S01", "原文甲。")]
+    pm, _project_path, _revision = _confirmed_narration_project_with_script(
+        tmp_path, plan, [_valid_narration_segment()]
+    )
+
+    status = WorkflowStateService(pm).get_status("demo")
+
+    assert status.state == "STORYBOARD"
+    assert status.next_action.type == "generate_storyboards"
+    assert status.gates["direction_review"] == {"state": "not_applicable", "revision": None}
+
+
+def test_episode_statuses_match_the_per_episode_status_queries(tmp_path: Path) -> None:
+    pm, project_path = _pending_narration_project(tmp_path)
+    _direct_narration_script(project_path)
+    pm.update_project(
+        "demo",
+        lambda project: project["episodes"].append(
+            {"episode": 2, "title": "第二集", "script_file": "scripts/episode_2.json", "ledger_status": "planned"}
+        ),
+    )
+    service = WorkflowStateService(pm)
+
+    statuses = service.get_episode_statuses("demo")
+
+    assert [(number, title) for number, title, _status in statuses] == [(1, ""), (2, "第二集")]
+    for number, _title, status in statuses:
+        expected = service.get_status("demo", number)
+        assert (status.state, status.next_action.type, status.gates) == (
+            expected.state,
+            expected.next_action.type,
+            expected.gates,
+        )
+    assert statuses[0][2].state == "DIRECTOR_REVIEW"
+
+
+def test_pending_reference_units_are_directed_before_their_prompts_are_authored(tmp_path: Path) -> None:
+    """参考生视频确认后单元全部待编写：先导演，导演通过后才补写提示词，而不是直接进入生成。"""
     pm, project_path = _make_project(tmp_path, "drama", generation_mode="reference_video")
     _write_source_and_complete(pm, project_path)
     pm.update_project(
@@ -2359,11 +2530,40 @@ def test_pending_reference_units_ask_to_author_prompts(tmp_path: Path) -> None:
         },
     )
 
-    status = WorkflowStateService(pm).get_status("demo")
+    service = WorkflowStateService(pm)
+    status = service.get_status("demo")
 
-    assert status.state == "FINAL_SCRIPT"
-    assert status.next_action.type == "author_prompts"
+    assert status.state == "DIRECTOR_PLAN"
+    assert status.next_action.type == "direct_episode"
     assert status.next_action.requested_ids == ["E1U01"]
+
+    directed_unit = _valid_video_unit(
+        pending_authoring=True,
+        brief="主角推开酒馆的门，空气一下子安静。",
+        shots=[{"at_seconds": 0, "framing": "中景", "camera": {"type": "static_shot"}, "action": "推门"}],
+    )
+    script = {
+        "episode": 1,
+        "title": "第一集",
+        "content_mode": "drama",
+        "director_plan": {"episode_intent": "x", "arc": [], "tone": "y", "motifs": []},
+        "video_units": [directed_unit],
+    }
+    _edit_claimed_script(project_path, script)
+    assert service.get_status("demo").next_action.type == "review_direction"
+
+    fingerprint = direction_review.direction_fingerprint(script, "video_units")
+    assert fingerprint is not None
+    pm.update_project(
+        "demo",
+        lambda project: direction_review.apply_decision(
+            project, 1, fingerprint=fingerprint, decision="approve", decided_at="now", note=None, entry_ids=None
+        ),
+    )
+    authoring = service.get_status("demo")
+    assert authoring.state == "FINAL_SCRIPT"
+    assert authoring.next_action.type == "author_prompts"
+    assert authoring.next_action.requested_ids == ["E1U01"]
 
 
 def test_pending_ad_shots_ask_to_author_prompts(tmp_path: Path) -> None:
@@ -2399,6 +2599,8 @@ def test_author_prompts_lists_marked_entries_not_empty_prompts(tmp_path: Path) -
             _valid_narration_segment(segment_id="E1S02", image_prompt=None, video_prompt=None),
         ],
     )
+
+    _approve_direction(pm, _project_path)
 
     status = WorkflowStateService(pm).get_status("demo")
 

@@ -423,6 +423,28 @@ class TestPatchEpisodeScript:
         _committed(await _patch(ref_ctx, _updates({"E1U1": {"note": "单元备注"}})))
         assert _load(ref_ctx)["video_units"][0]["note"] == "单元备注"
 
+    async def test_reference_director_notes_are_editable_through_the_tool(self, ref_ctx: ToolHarness) -> None:
+        """Agent / 远程 MCP 与界面走同一条编辑通道：导演说明按字段改写落盘，正文不动。"""
+        before_text = _load(ref_ctx)["video_units"][0]["text"]
+        edit = {
+            "unit_type": "tension_build",
+            "brief": "他想回家，危险逼近。",
+            "beats": [{"at_pct": 0, "action": "他看后视镜"}, {"at_pct": 80, "action": "窗外白光变亮"}],
+            "must_not_show": "撞击本身",
+        }
+        _committed(await _patch(ref_ctx, _updates({"E1U1": edit})))
+        unit = _load(ref_ctx)["video_units"][0]
+        assert unit["unit_type"] == "tension_build"
+        assert unit["beats"][1] == {"at_pct": 80, "action": "窗外白光变亮"}
+        assert unit["must_not_show"] == "撞击本身"
+        assert unit["text"] == before_text
+
+    async def test_reference_director_notes_reject_an_unknown_unit_type(self, ref_ctx: ToolHarness) -> None:
+        outcome = await _patch(ref_ctx, _updates({"E1U1": {"unit_type": "not-a-type"}}))
+        assert outcome.value is not None
+        assert not outcome.value.success
+        assert "unit_type" not in _load(ref_ctx)["video_units"][0]
+
     async def test_reference_replan_marker_requires_planning_edit(self, ref_ctx: ToolHarness) -> None:
         script = _reference_script()
         script["video_units"][0]["needs_replan"] = True

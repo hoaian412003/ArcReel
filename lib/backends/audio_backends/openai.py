@@ -123,6 +123,10 @@ class OpenAIAudioBackend:
     @with_retry_async(retryable_errors=OPENAI_RETRYABLE_ERRORS)
     async def _request_speech(self, request: AudioSynthesisRequest) -> bytes:
         """提交合成请求（计费段），返回音频字节。"""
+        return await self._speech_once(request)
+
+    async def _speech_once(self, request: AudioSynthesisRequest) -> bytes:
+        """发一次合成请求，不重试；需要自己的重试策略的子类从这里取单次尝试。"""
         kwargs: dict = {
             "model": self._model,
             "input": request.text,

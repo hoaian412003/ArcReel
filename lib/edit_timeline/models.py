@@ -49,6 +49,8 @@ class Revision(BaseModel):
     summary: str
     created_at: str
     clips: list[Clip]
+    #: 成片是否混入越南语配音（原声压低、配音叠加）。旧文件没有这个字段，缺省关闭。
+    voice_over: bool = False
 
     @model_validator(mode="after")
     def _unique_clip_ids(self) -> Revision:

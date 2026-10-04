@@ -130,6 +130,25 @@ async def test_open_draft_round_trips_through_promote(fake_ctx: ToolHarness) -> 
     assert derived_reference_names(fake_ctx, saved["units"][0]["text"]) == ["张三", "村口"]
 
 
+async def test_edit_copy_of_a_directed_plan_cannot_drop_the_director_plan(fake_ctx: ToolHarness) -> None:
+    """正式文件带导演说明时，编辑副本删光导演内容也晋升不了：取回时 meta 已记下必须带导演规划。"""
+    rv_source(fake_ctx)
+    write_rv_script_plan(fake_ctx, [{**rv_saved_unit("@[张三] 起身"), "brief": "张三在村口起身，准备迎接来人。"}])
+
+    await open_for_edit(fake_ctx, source="source/episode_1.txt")
+    envelope = read_rv_quarantine(fake_ctx)
+    assert envelope["content"]["units"][0]["brief"] == "张三在村口起身，准备迎接来人。"
+    envelope["content"]["units"][0].pop("brief")
+    rv_quarantine_path(fake_ctx).write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+
+    out = await promote_reference_draft(fake_ctx)
+
+    assert out.problem is not None
+    assert "director_plan_missing" in said(out)
+    saved = json.loads(rv_script_plan_path(fake_ctx).read_text(encoding="utf-8"))
+    assert saved["units"][0]["brief"] == "张三在村口起身，准备迎接来人。"
+
+
 async def test_open_draft_returns_existing_draft_without_clobbering(fake_ctx: ToolHarness, monkeypatch) -> None:
     """已有草稿在场时不覆盖：那份草稿可能已含 Agent 未晋升的修改（或本就是待修复草稿），
     拿正式文件盖过去等于抹掉它手上的工作。"""

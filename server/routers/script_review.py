@@ -5,17 +5,23 @@
 drama（utterances + source_text）与 narration（结构化 novel_text）共用本机制。
 """
 
+import asyncio
 import logging
+from typing import Any
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from lib.infra.api_errors import NotFoundError
+from lib.generation.generation_queue_client import WorkerOfflineError, enqueue_task_only
+from lib.infra.api_errors import ConflictError, NotFoundError
 from lib.project.project_manager import get_project_manager
+from server.auth import CurrentUser
 from server.dependencies import require_project_migration_ok
 from server.i18n import Translator
 from server.routers._script_review_errors import raise_review_error
 from server.services.project.script_review import ScriptReviewError, ScriptReviewService
+from server.text_generation import TextGenerationRequest
+from server.tool_runtime import script_plan_task_type
 
 logger = logging.getLogger(__name__)
 
@@ -159,3 +165,41 @@ async def confirm_script_review(
         raise_review_error(exc, episode, _t)
     except FileNotFoundError as exc:
         raise NotFoundError("project_not_found", name=project_name) from exc
+
+
+@router.post(
+    "/projects/{project_name}/episodes/{episode}/script-plan/generate",
+    dependencies=[Depends(require_project_migration_ok)],
+)
+async def generate_script_plan(project_name: str, episode: int, user: CurrentUser, _t: Translator) -> dict[str, Any]:
+    """入队该集脚本规划的文本任务；不同步等模型，产出落盘后面板经 script_plan 修订号自动刷新。
+
+    只服务首次生成：该集已有脚本规划（含待修复草稿）时 409，整集重做仍由 Agent 的确认流程把关。
+    """
+    try:
+        project = await asyncio.to_thread(get_project_manager().load_project, project_name)
+        service = ScriptReviewService(get_project_manager())
+        state = await service.get_state(project_name, episode)
+        quarantine = await service.get_quarantine_info(project_name, episode)
+    except ScriptReviewError as exc:
+        raise_review_error(exc, episode, _t)
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
+    task_type = script_plan_task_type(project)
+    if task_type is None:
+        raise ConflictError("script_plan_generate_unsupported")
+    if state["status"] != "no_script_plan" or quarantine is not None:
+        raise ConflictError("script_plan_already_exists", episode=episode)
+    try:
+        result = await enqueue_task_only(
+            project_name=project_name,
+            task_type=task_type,
+            media_type="text",
+            resource_id=f"episode-{episode}",
+            payload=TextGenerationRequest(episode=episode).to_payload(),
+            source="webui",
+            user_id=user.id,
+        )
+    except WorkerOfflineError as exc:
+        raise HTTPException(status_code=503, detail=_t("worker_offline")) from exc
+    return {"task_id": result["task_id"], "deduped": result.get("deduped", False)}

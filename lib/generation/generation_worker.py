@@ -4,8 +4,9 @@ Background worker that consumes generation tasks from SQLite queue.
 Per-provider × media_type 调度，拆成两件独立的东西：CapacityTable（上限，来自
 ConfigService 的用户配置）+ SlotTable（运行时占用台账）。
 
-受支持的部署只启动一个 uvicorn 进程；server lifespan 在该进程内创建唯一的
-GenerationWorker，二者生命周期一致，孤儿任务只来自进程重启。lease 能在进程短暂重叠时防止
+受支持的部署只启动一个 uvicorn 进程；默认形态下 server lifespan 在该进程内创建唯一的
+GenerationWorker，二者生命周期一致，孤儿任务只来自进程重启。``QUEUE_WORKER_MODE=external``
+时 worker 改由 ``server.queue_worker`` 在独立进程内运行（见 ``docs/adr/0094``），后端不再内嵌。lease 能在进程短暂重叠时防止
 重复认领，并为跨进程接管提供防御，但不让多 uvicorn worker 成为受支持部署；若支持多进程，
 须重审孤儿判定（见 ``docs/adr/0007``）。取消只对排队中的任务开放，worker 不接收取消信号，
 执行中的任务总是跑到终态（见 ``docs/adr/0006``）。
@@ -49,10 +50,13 @@ from lib.generation.generation_queue import (
     get_generation_queue,
     resolve_video_execution_for_queued_task,
 )
+from lib.generation.queue_reconciler import reconcile_stale_tasks
 from lib.generation.restart_recovery import InterruptedCallSettler, RestartRecovery
 from lib.generation.task_failure import encode_failure
 from lib.generation.task_failure_encoding import encode_task_failure_message
+from lib.generation.task_timeline import bind_task, note_provider_sync, record_task_event, unbind_task
 from lib.generation.video_resume import ResumeExecutor, VideoResumeRunner
+from lib.infra.poll_sync_hook import set_sync_hook
 from lib.infra.shutdown_abandon import abandoning, is_abandoning
 from lib.project.project_manager import get_project_manager
 
@@ -81,6 +85,17 @@ logger = logging.getLogger(__name__)
 _ORPHAN_RESCAN_LEASE_LOST_MULT = 3
 # 关停时等在跑任务自然结束的上限；超时后放弃仍在跑的任务（保持崩溃语义，由下次启动接续），避免长视频轮询拖死进程退出。
 _SHUTDOWN_GRACE_SECONDS = 10.0
+
+# 动态配置（全局并发上限、供应商并发）的兜底刷新间隔；变更另有 NOTIFY 即时通知，这里只防信号丢失。
+_CONFIG_REFRESH_SECONDS = 15.0
+# 对账扫描间隔。
+_RECONCILE_INTERVAL_SECONDS = 60.0
+#: 管理面可调的全局并发上限：media_type → system_setting key（空 = 不限）。
+GLOBAL_CAP_SETTING_KEYS: dict[str, str] = {
+    "image": "queue_global_max_image",
+    "video": "queue_global_max_video",
+    "audio": "queue_global_max_audio",
+}
 
 # Default provider used when a task payload does not specify one.
 DEFAULT_PROVIDER = "gemini-aistudio"
@@ -340,6 +355,10 @@ class SlotTable:
         bucket = self._slots.get((provider, media))
         return 0 if bucket is None else len(bucket)
 
+    def occupied_total(self, media: str) -> int:
+        """该 ``media`` 下全部 provider 的占用总数（含 pending）。"""
+        return sum(len(bucket) for (_, m), bucket in self._slots.items() if m == media)
+
     def occupied_providers(self, media: str) -> set[str]:
         """该 ``media`` 下有占用(≥1)的 provider；空 bucket 不计（黑名单源，含未知 provider）。"""
         return {provider for (provider, m), bucket in self._slots.items() if m == media and bucket}
@@ -444,7 +463,10 @@ class GenerationWorker:
         resume_executor: ResumeExecutor,
         settle_interrupted_calls: InterruptedCallSettler | None = None,
         shutdown_grace_seconds: float = _SHUTDOWN_GRACE_SECONDS,
+        on_config_reload: Callable[[], None] | None = None,
     ):
+        # 配置变更时清除执行层缓存的钩子（backend 实例缓存在 server 层，lib 不能直接依赖）。
+        self._on_config_reload = on_config_reload
         self.queue = queue or get_generation_queue()
         # 认领期与执行期共用的 provider 投影：限流按它的结果路由到对应容量桶。
         self._provider_projection = provider_projection
@@ -462,6 +484,11 @@ class GenerationWorker:
         self.heartbeat_interval = max(0.5, float(TASK_WORKER_HEARTBEAT_SEC))
         self.poll_interval = max(0.1, float(TASK_POLL_INTERVAL_SEC))
         self._shutdown_grace_seconds = max(0.0, shutdown_grace_seconds)
+
+        # 全局并发上限（跨 provider 的同媒体总占用），来自 system_setting；缺省不限。
+        self._global_caps: dict[str, int] = {}
+        self._last_config_refresh = 0.0
+        self._last_reconcile = 0.0
 
         self._main_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
@@ -513,6 +540,60 @@ class GenerationWorker:
             return
         self._capacity.replace(new._limits)
         logger.info("已更新供应商容量表: %s", self._capacity._limits)
+        await self._reload_global_caps()
+
+    async def _reload_global_caps(self) -> None:
+        try:
+            async with safe_session_factory() as session:
+                settings = await ConfigService(session).get_all_settings()
+        except Exception:
+            logger.warning("读取全局并发上限失败，保持当前值", exc_info=True)
+            return
+        caps: dict[str, int] = {}
+        for media, key in GLOBAL_CAP_SETTING_KEYS.items():
+            try:
+                value = int(settings.get(key, ""))
+            except ValueError:
+                continue
+            if value >= 1:
+                caps[media] = value
+        if caps != self._global_caps:
+            logger.info("全局并发上限更新: %s", caps)
+        self._global_caps = caps
+
+    def global_cap(self, media_type: str) -> int | None:
+        return self._global_caps.get(media_type)
+
+    def _global_cap_reached(self, media_type: str) -> bool:
+        cap = self._global_caps.get(media_type)
+        return cap is not None and self._slots.occupied_total(media_type) >= cap
+
+    async def handle_control(self, payload: dict[str, Any]) -> None:
+        """处理来自后端的跨进程控制消息。"""
+        op = payload.get("op")
+        if payload.get("resync") or op == "reload_config":
+            if self._on_config_reload is not None:
+                self._on_config_reload()
+            await self.reload_limits()
+        elif op == "force_cancel":
+            ids = {str(t) for t in payload.get("task_ids", [])}
+            if ids:
+                await self.force_cancel_running(ids)
+
+    def in_flight_task_ids(self) -> set[str]:
+        return self._slots.active_task_ids()
+
+    async def _periodic_maintenance(self) -> None:
+        now = time.monotonic()
+        if now - self._last_config_refresh >= _CONFIG_REFRESH_SECONDS:
+            self._last_config_refresh = now
+            await self.reload_limits()
+        if self._owns_lease and now - self._last_reconcile >= _RECONCILE_INTERVAL_SECONDS:
+            self._last_reconcile = now
+            try:
+                await reconcile_stale_tasks(self.queue, in_flight=self._slots.active_task_ids())
+            except Exception:
+                logger.warning("对账扫描失败", exc_info=True)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -523,6 +604,8 @@ class GenerationWorker:
             return
         self._stop_event.clear()
         self._wake_event.clear()
+        set_sync_hook(note_provider_sync)
+        await self._reload_global_caps()
         self._main_task = asyncio.create_task(self._run_loop(), name="generation-worker")
 
     async def stop(self) -> None:
@@ -562,6 +645,7 @@ class GenerationWorker:
                     logger.warning("失去 worker lease (owner=%s)", self.owner_id)
 
                 await self._drain_finished_tasks()
+                await self._periodic_maintenance()
 
                 # Lease 状态变化跟踪：首次失去 lease 时打点；重夺 lease 后判断
                 # 「真切换 owner」（>= 3× ttl）→ 重置开关；「续约 flap」（< 3× ttl）→ 保持。
@@ -640,6 +724,9 @@ class GenerationWorker:
         for media_type in self._lanes:
             attempted_current_state_tasks: set[str] = set()
             while True:
+                # 全局上限先于逐 provider 容量：达到上限的媒体类型本 cycle 不再认领，任务保持 queued。
+                if self._global_cap_reached(media_type):
+                    break
                 # 每轮重算池满集合：刚 claim 的任务可能让某 provider 进入满状态
                 pool_full = self._pool_full_providers(media_type)
                 if attempted_current_state_tasks:
@@ -817,7 +904,15 @@ class GenerationWorker:
         task_type = task.get("task_type", "unknown")
         provider_id = claimed_provider_id or await self._provider_projection(task)
         logger.info("开始处理任务 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
+        timeline_token = bind_task(task_id)
+        try:
+            # 认领后可能因池满回队，真正开始执行才记「执行中」，否则回队循环会刷爆时间线。
+            await record_task_event(task_id, "running", stage="dispatched", touch_sync=True)
+            await self._process_bound_task(task, task_id, task_type, provider_id)
+        finally:
+            unbind_task(timeline_token)
 
+    async def _process_bound_task(self, task: dict[str, Any], task_id: str, task_type: str, provider_id: str) -> None:
         try:
             if task_type in ("video", "reference_video"):
                 # 派发时把当下的全局轮询超时写进任务字典，执行器与续跑执行器都从这里读。

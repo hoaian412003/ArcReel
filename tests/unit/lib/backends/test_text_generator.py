@@ -105,3 +105,30 @@ class TestTextGenerator:
         assert len(calls) == 1
         item = calls[0]
         assert item.project_name == ""
+
+
+class TestModelOutputLimit:
+    async def test_registry_limit_replaces_generic_cap(self, wired):
+        backend = _make_backend(provider="ark", model="deepseek-v4-flash")
+        gen = TextGenerator(backend, wired.ledger, "ark-agent-plan", purpose=CallPurpose.SCRIPT_GENERATION)
+
+        await gen.generate(TextGenerationRequest(prompt="测试", max_output_tokens=64000))
+
+        sent = backend.generate.await_args.args[0]
+        assert sent.max_output_tokens == 256000
+
+    async def test_model_without_limit_keeps_caller_cap(self, wired):
+        backend = _make_backend()
+        gen = TextGenerator(backend, wired.ledger, "gemini-aistudio", purpose=CallPurpose.SCRIPT_GENERATION)
+
+        await gen.generate(TextGenerationRequest(prompt="测试", max_output_tokens=64000))
+
+        assert backend.generate.await_args.args[0].max_output_tokens == 64000
+
+    async def test_unset_caller_cap_stays_unset(self, wired):
+        backend = _make_backend(provider="ark", model="deepseek-v4-flash")
+        gen = TextGenerator(backend, wired.ledger, "ark-agent-plan", purpose=CallPurpose.SCRIPT_GENERATION)
+
+        await gen.generate(TextGenerationRequest(prompt="测试"))
+
+        assert backend.generate.await_args.args[0].max_output_tokens is None

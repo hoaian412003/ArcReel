@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { isActiveStatus, useTasksStore } from "@/stores/tasks-store";
 
-/** 配音相关的任务类型：撰写越南语台词（文本任务）与合成配音音频。 */
-const DUB_TASK_TYPES = new Set(["dub_tts", "text_reference_dub_lines"]);
+/** 配音相关的任务类型：自动配音流水线、合成配音音频、撰写越南语台词（文本任务）。 */
+const DUB_TASK_TYPES = new Set(["dub_auto", "dub_tts", "text_reference_dub_lines"]);
 
 export interface DubTaskState {
   /** 本项目有配音任务排队或运行中。 */

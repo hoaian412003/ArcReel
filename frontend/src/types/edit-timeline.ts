@@ -16,6 +16,8 @@ export interface EditRevision {
   summary: string;
   created_at: string;
   clips: EditClip[];
+  /** 成片是否混入越南语配音（原声压低、配音叠加）；旧修订没有这个字段，按关闭处理。 */
+  voice_over?: boolean;
 }
 
 export interface EditTimeline {
@@ -33,11 +35,21 @@ export interface EditTimelineSummary {
   updated_at: string;
 }
 
+/** 单元里一条已合成的越南语配音；时间相对该单元视频的起点，与片段入出点同一时间轴。 */
+export interface EditDubLine {
+  index: number;
+  text_vi: string;
+  start_s: number;
+  duration_s: number;
+  audio_url: string;
+}
+
 export interface EditUnit {
   unit_id: string;
   video_url: string | null;
   version: number;
   duration_s: number | null;
+  dub_lines?: EditDubLine[];
 }
 
 export interface EditTimelineDiagnostics {
@@ -67,4 +79,8 @@ export interface EditTimelineDetail {
   transitions: EditTransition[];
   final_cut: EditFinalCut | null;
   render: EditRenderState | null;
+  /** 项目里有已合成的配音，时间线才有配音开关。 */
+  voice_over_available?: boolean;
+  /** 混入配音时原声的音量（0–1）。 */
+  original_volume?: number;
 }

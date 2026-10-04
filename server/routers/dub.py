@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -16,12 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from lib.backends.providers import PROVIDER_VIENEU
 from lib.generation.generation_queue import get_generation_queue
 from lib.infra.api_errors import BadRequestError, NotFoundError
-from lib.infra.path_safety import safe_exists, safe_join
+from lib.infra.path_safety import safe_join
 from lib.project.project_manager import get_project_manager, is_reference_video_project
-from lib.script.reference_video.dub_lines import align_dub_lines, unit_utterances
-from lib.script.script_models import DubLine
-from lib.speech.asr_alignment import align_lines_to_segments
-from lib.speech.asr_runner import AsrError, transcribe_files
+from lib.speech.asr_runner import AsrError
 from lib.speech.dub_render import (
     DEFAULT_ORIGINAL_VOLUME,
     DubClip,
@@ -30,11 +26,11 @@ from lib.speech.dub_render import (
     render_dubbed_video,
 )
 from lib.speech.dub_settings import project_dub_target_language
-from lib.speech.dub_timeline import DubTimingInput, dub_overflow_seconds, schedule_dub_lines
 from lib.speech.vieneu_service import load_config_from_db as load_vieneu_config
 from server.auth import CurrentUser
 from server.i18n import Translator
-from server.routers._script_edits import execute_current_episode_edit, require_script_edit_result
+from server.services.dub_pipeline import detect_start_times
+from server.services.dub_service import build_unit_dub, enqueue_auto_dub
 from server.services.tasks.dub_tasks import DUB_AUDIO_PAYLOAD, DUB_TASK_TYPE
 
 router = APIRouter(prefix="/projects/{project_name}/dub")
@@ -79,71 +75,11 @@ def _find_unit(script: dict, unit_id: str, _t: Translator) -> dict:
     raise HTTPException(status_code=404, detail=_t("ref_unit_not_found", unit_id=unit_id))
 
 
-def _lines(unit: dict) -> list[DubLine]:
-    try:
-        return [DubLine.model_validate(raw) for raw in unit.get("dub_lines") or []]
-    except ValueError:
-        return []
-
-
-def _audio_current(line: DubLine) -> bool:
-    """已登记的音频仍对应现行台词（音色是否变化由合成任务按现行音色判定）。"""
-    return bool(line.audio_path) and line.audio_text == line.text_vi
-
-
-def build_unit_dub(unit: dict) -> dict[str, Any]:
-    """一个 unit 的配音时间线：逐行的生效开始时间、时长、音频与过期状态，及超出 unit 时长的秒数。"""
-    lines = _lines(unit)
-    text = str(unit.get("text") or "")
-    status_by_index = {item.index: item.status for item in align_dub_lines(text, lines)}
-    utterance_count = len(unit_utterances(text))
-    live = [line for line in lines if line.index < utterance_count]
-    slots = schedule_dub_lines(
-        [
-            DubTimingInput(
-                text=line.text_vi,
-                start_override=line.start_seconds,
-                audio_duration=line.audio_duration_seconds if _audio_current(line) else None,
-                # 原文改过的配音行，旧文本的检测时间不再可信
-                detected_start=line.detected_start_seconds if status_by_index.get(line.index) == "current" else None,
-            )
-            for line in live
-        ]
-    )
-    duration = float(unit.get("duration_seconds") or 0)
-    return {
-        "unit_id": unit.get("unit_id"),
-        "duration_seconds": duration,
-        "overflow_seconds": dub_overflow_seconds(slots, duration),
-        "lines": [
-            {
-                "index": line.index,
-                "speaker": line.speaker,
-                "gender": line.gender,
-                "text_vi": line.text_vi,
-                "source_text": line.source_text,
-                "start_seconds": slot.start_seconds,
-                "start_override": line.start_seconds,
-                "start_source": slot.source,
-                "duration_seconds": slot.duration_seconds,
-                "estimated": slot.estimated,
-                "audio_path": line.audio_path if _audio_current(line) else None,
-                "stale": status_by_index.get(line.index) in ("stale", "orphan"),
-            }
-            for line, slot in zip(live, slots, strict=True)
-        ],
-    }
-
-
 class DetectTimingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     #: 要检测的 unit；None = 本集所有既有成片又有配音台词的 unit。
     unit_ids: list[str] | None = None
-
-
-#: Whisper 能识别的剧本源语言；项目源语言不在其中（或未设置）时按中文识别。
-_ASR_LANGUAGES = frozenset({"zh", "en", "vi", "ja", "ko"})
 
 
 @router.post("/episodes/{episode}/detect-timing")
@@ -153,72 +89,64 @@ async def detect_timing(project_name: str, episode: int, req: DetectTimingReques
     整批 unit 共用一次模型加载；识别出的句子按文本相似度对回剧本台词，对不上的台词不写，
     开始时间继续按估算排布。
     """
-    project, script, script_file = await asyncio.to_thread(_load, project_name, episode, _t)
+    _project, script, script_file = await asyncio.to_thread(_load, project_name, episode, _t)
     candidates = [u for u in script.get("video_units") or [] if u.get("dub_lines")]
     if req.unit_ids is not None:
-        if not req.unit_ids:
-            raise BadRequestError("ref_batch_empty_selection")
-        known = {u.get("unit_id") for u in script.get("video_units") or []}
-        for unit_id in req.unit_ids:
-            if unit_id not in known:
-                raise HTTPException(status_code=404, detail=_t("ref_unit_not_found", unit_id=unit_id))
-        wanted = set(req.unit_ids)
-        candidates = [u for u in candidates if u.get("unit_id") in wanted]
+        _check_unit_selection(script, req.unit_ids, _t)
+        candidates = [u for u in candidates if u.get("unit_id") in set(req.unit_ids)]
     if not candidates:
         raise HTTPException(status_code=400, detail=_t("dub_no_lines"))
-
-    project_dir = get_project_manager().get_project_path(project_name)
-    results: list[dict[str, Any]] = []
-    videos: dict[str, Path] = {}
-    for unit in candidates:
-        unit_id = str(unit["unit_id"])
-        video_rel = (unit.get("generated_assets") or {}).get("video_clip")
-        if video_rel and safe_exists(project_dir, video_rel):
-            videos[unit_id] = safe_join(project_dir, video_rel)
-        else:
-            results.append({"unit_id": unit_id, "status": "no_video", "detected": 0, "total": len(unit["dub_lines"])})
-    if videos:
-        source_language = str(project.get("source_language") or "").lower()
-        try:
-            transcripts = await transcribe_files(
-                list(dict.fromkeys(videos.values())),
-                language=source_language if source_language in _ASR_LANGUAGES else "zh",
-            )
-        except AsrError as exc:
-            raise HTTPException(status_code=503, detail=_t("dub_asr_failed", err_msg=str(exc))) from exc
-
-        operations: list[dict[str, Any]] = []
-        for unit in candidates:
-            unit_id = str(unit["unit_id"])
-            video = videos.get(unit_id)
-            if video is None:
-                continue
-            transcript = transcripts.get(video)
-            raw_lines = [dict(line) for line in unit["dub_lines"]]
-            if not isinstance(transcript, list):
-                results.append({"unit_id": unit_id, "status": "failed", "detected": 0, "total": len(raw_lines)})
-                continue
-            ordered = sorted(raw_lines, key=lambda line: line.get("index", 0))
-            starts = align_lines_to_segments([str(line.get("source_text") or "") for line in ordered], transcript)
-            detected = 0
-            for line, start in zip(ordered, starts, strict=True):
-                line["detected_start_seconds"] = start
-                detected += start is not None
-            operations.append({"op": "update", "id": unit_id, "fields": {"dub_lines": raw_lines}})
-            results.append(
-                {
-                    "unit_id": unit_id,
-                    "status": "detected" if detected else ("no_speech" if not transcript else "no_match"),
-                    "detected": detected,
-                    "total": len(raw_lines),
-                }
-            )
-        if operations:
-            result = execute_current_episode_edit(
-                get_project_manager(), project_name, episode, script_file, script, operations
-            )
-            require_script_edit_result(result, operation_not_found=True)
+    try:
+        results = await detect_start_times(
+            get_project_manager(), project_name, script_file, [str(u["unit_id"]) for u in candidates], language=None
+        )
+    except AsrError as exc:
+        raise HTTPException(status_code=503, detail=_t("dub_asr_failed", err_msg=str(exc))) from exc
     return {"results": results}
+
+
+def _check_unit_selection(script: dict, unit_ids: list[str], _t: Translator) -> None:
+    if not unit_ids:
+        raise BadRequestError("ref_batch_empty_selection")
+    known = {u.get("unit_id") for u in script.get("video_units") or []}
+    for unit_id in unit_ids:
+        if unit_id not in known:
+            raise HTTPException(status_code=404, detail=_t("ref_unit_not_found", unit_id=unit_id))
+
+
+class AutoDubRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: 要配音的视频；None = 本集所有已有成片的 unit。
+    unit_ids: list[str] | None = None
+    #: 跳过从成片检测开始时间，直接按估算排布。
+    skip_timing: bool = False
+
+
+@router.post("/episodes/{episode}/auto")
+async def auto_dub(
+    project_name: str, episode: int, req: AutoDubRequest, user: CurrentUser, _t: Translator
+) -> dict[str, Any]:
+    """自动配音：每个已有成片的视频各一个任务，依次写台词、检测开始时间、合成音频，同时最多 4 个在跑。"""
+    _project, script, script_file = await asyncio.to_thread(_load, project_name, episode, _t)
+    if req.unit_ids is not None:
+        _check_unit_selection(script, req.unit_ids, _t)
+    # 配音固定走本地 VieNeu，不依赖通用音频供应商的配置；只有被明确关闭时才拒绝
+    if not (await load_vieneu_config()).enabled:
+        raise HTTPException(status_code=409, detail=_t("dub_vieneu_disabled"))
+    result = await enqueue_auto_dub(
+        project_name,
+        episode,
+        script,
+        script_file,
+        req.unit_ids,
+        skip_timing=req.skip_timing,
+        user_id=user.id,
+        source="webui",
+    )
+    if not result["task_ids"]:
+        raise HTTPException(status_code=400, detail=_t("dub_nothing_to_voice"))
+    return result
 
 
 @router.post("/episodes/{episode}/synthesize")
@@ -278,7 +206,7 @@ async def get_unit_dub(project_name: str, episode: int, unit_id: str, _t: Transl
 
 @router.post("/episodes/{episode}/units/{unit_id}/render")
 async def render_unit_dub(project_name: str, episode: int, unit_id: str, _t: Translator) -> dict[str, Any]:
-    """把已合成的配音混入该 unit 的成片（原声压到 50%），产物写入 ``dub/renders/``。"""
+    """把已合成的配音混入该 unit 的成片（原声压到 30%），产物写入 ``dub/renders/``。"""
     _project, script, _script_file = await asyncio.to_thread(_load, project_name, episode, _t)
     unit = _find_unit(script, unit_id, _t)
     video_rel = (unit.get("generated_assets") or {}).get("video_clip")

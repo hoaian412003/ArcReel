@@ -10,7 +10,7 @@ invoked_by:
 applies_to:
   content_mode: [drama, narration]
   generation_mode: [reference_video]
-output_schema: lib.script.script_models:ReferenceScriptPlanFlatDraft
+output_schema: lib.script.script_models:ReferenceScriptPlanContentFlatDraft
 slots:
   target_language: 输出语言
   project_overview: 项目概述，键齐全的对象 {synopsis, genre, theme, world_setting}；缺值传 null
@@ -31,6 +31,7 @@ slots:
   max_reference_images: 单个视频单元的参考图上限；不限时传 null
   episode_target_duration: 单集目标秒数；未设置时传 null
   dub: 越南语配音要求，对象 {speech_rate, narrator_gender, characters}（characters 为 [{name, gender}]，gender 未登记时为 null）；项目未启用配音时传 null
+  screenplay: 已确认剧本 {title, logline, scenes[{heading, summary, estimated_seconds, text}]}；没有已确认剧本时传 null
   instructions: 附加指令正文；缺值传 null
 protected: false
 ---
@@ -39,7 +40,7 @@ protected: false
 你是一位视频单元架构师，本任务是把源文拆分为适配多模态参考生视频模型的 video_unit 表（script_plan 脚本规划）。
 每个 video_unit 对应**一次视频生成调用**，正文是一段连续的画面描述，一次生成完整覆盖它。
 本阶段定的是**结构与内容契约**：unit 边界、时长（时长即计费单位）、台词落位、核心资产指认——用户会逐 unit 审阅确认这份契约。
-视觉编排（景别 / 构图 / 运镜扩写）由后续 prompt_authoring 以你的拆分为基底生成，本阶段不写。
+导演说明（镜头、表演、声音）由内容确认之后的导演步骤写，视觉编排由提示词编写阶段完成，本阶段都不写。
 
 **输出语言**：所有字符串值必须使用 {{ target_language }}；JSON 键名保持英文。
 例外（逐字保留、不翻译）：`@[名称]` 中的资产名须逐字等于下方候选表中的登记名；`source_text` 须逐字复制小说原文。
@@ -56,6 +57,12 @@ protected: false
 <novel>
 {{ novel_text }}
 </novel>
+{% if screenplay %}
+
+{{ partial("shared/lists/screenplay_block") }}
+{{ partial("shared/screenplay/reference_video") }}
+{{ partial("shared/screenplay/common_rules") }}
+{% endif %}
 
 {% if episode_outline %}
 <episode_outline>
@@ -112,6 +119,9 @@ protected: false
   - prop: {{ partial("shared/asset_name_candidates", names=prop_names) }}
 - 原文里的人物对白写成台词记号（`@[角色]{台词}`），旁白 / 心声写成画外音记号（`{台词}`），逐字保留原文措辞；
   台词是内容契约的一部分，prompt_authoring 不会再改动它。
+- **说话必有台词**：画面里只要有角色在说话 / 搭话 / 念叨 / 追问（含「说个不停」「念叨」这类原文只概述、没给原话的情形），正文里就必须为他写出具体的台词记号 `@[角色]{台词}`，不得只写「说话」的动作而没有台词。
+  原文给了原话就逐字保留；原文只概述说话内容时，依据上下文与该概述补写 1–2 句简短、贴合人物与情境的台词，不新增情节，也不改变这个 unit 想要的效果（例如「对方不答」就不要让对方回话）。
+  这是对上面「不杜撰台词」的唯一例外，且仅限已确定有人在说话的画面；整个 unit 没有人说话时不要硬加台词。
 - 每个 unit 的正文都要 `@` 引用它发生地的场景资产；地点切换到新 unit 时换成新地点的场景，
   地点不变的连续 unit 逐条重复引用同一个场景（候选表里没有匹配的场景时才用文字写地点）。
 - 本阶段不写景别 / 构图 / 运镜（prompt_authoring 补），把叙事内容与动作过程写清楚即可。

@@ -127,3 +127,37 @@ class TestPlanEntryContent:
     def test_unknown_plan_kind_fails_loud(self) -> None:
         with pytest.raises(ValueError, match="未知的脚本规划变体"):
             plan_entry_content("ad", {})
+
+
+def _directed_reference_entry(**overrides: object) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "unit_id": "E1U01",
+        "text": "@[张三] 起身",
+        "duration_seconds": 8,
+        "source_text": "张三起身。",
+        "dub_lines": [],
+        "unit_type": "tension_build",
+        "brief": "张三起身，铺垫危险。",
+        "beats": [{"at_pct": 0, "action": "起身"}, {"at_pct": 80, "action": "回头"}],
+        "performance": [],
+        "must_not_show": "撞击本身",
+        "end_frame": "白光铺满画面",
+        "continuity_in": "",
+        "continuity_out": "",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_reference_projection_carries_non_empty_director_fields():
+    """导演说明随单元进入正式脚本，Step 2 与解析预览据此读写；空值字段不落盘。"""
+    content = plan_entry_content("reference_video", _directed_reference_entry())
+    assert content["unit_type"] == "tension_build"
+    assert content["must_not_show"] == "撞击本身"
+    assert [beat["at_pct"] for beat in content["beats"]] == [0, 80]  # type: ignore[index]
+    assert not {"performance", "continuity_in", "continuity_out", "dub_lines"} & set(content)
+
+
+def test_reference_projection_of_a_legacy_entry_keeps_its_stored_shape():
+    legacy = {"unit_id": "E1U01", "text": "x", "duration_seconds": 8, "source_text": "s"}
+    assert plan_entry_content("reference_video", legacy) == legacy

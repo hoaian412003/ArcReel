@@ -12,7 +12,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from lib.script.script_models import NarrationScriptPlanDraft, ReferenceScriptPlanDraft
+from lib.script.script_models import (
+    REFERENCE_UNIT_DIRECTION_FIELDS,
+    NarrationScriptPlanDraft,
+    ReferenceScriptPlanDraft,
+)
 from lib.script.script_skeleton import SKELETONS
 
 #: script_plan 变体：drama / narration（按 content_mode）+ reference_video（按项目生成模式，
@@ -49,7 +53,14 @@ PLAN_VARIANTS: dict[str, ScriptPlanVariant] = {
         skeleton_kind="video_units",
         plan_items_key="units",
         draft_model=ReferenceScriptPlanDraft,
-        script_fields=("unit_id", "text", "duration_seconds", "source_text", "dub_lines"),
+        script_fields=(
+            "unit_id",
+            "text",
+            "duration_seconds",
+            "source_text",
+            "dub_lines",
+            *REFERENCE_UNIT_DIRECTION_FIELDS,
+        ),
     ),
 }
 
@@ -69,21 +80,25 @@ def entry_id_field(kind: ScriptPlanKind) -> str:
     return SKELETONS[plan_variant(kind).skeleton_kind].id_field
 
 
+#: 规划条目里值为空时不投影进剧本条目的字段。
+_OMIT_WHEN_EMPTY = frozenset({"dub_lines", *REFERENCE_UNIT_DIRECTION_FIELDS})
+
+
 def plan_entry_content(kind: ScriptPlanKind, entry: Mapping[str, object]) -> dict[str, object]:
     """脚本规划条目 → 剧本条目的内容层（不含视觉层）。
 
     drama / narration 整条透传（drama 的 ``scene_description`` 随之进入正式脚本，作为提示词编写的
-    视觉基底），参考生视频只取 ``unit_id`` / ``text`` / ``duration_seconds`` / ``source_text`` / ``dub_lines``（非空时）。返回新
+    视觉基底），参考生视频只取 ``unit_id`` / ``text`` / ``duration_seconds`` / ``source_text`` 与非空的 ``dub_lines`` / 导演说明字段。返回新
     dict，不就地修改入参。
     """
 
     variant = plan_variant(kind)
     if variant.script_fields is not None:
-        # dub_lines 为空（未启用配音）时不写入剧本条目，保持存量项目的落盘形状不变。
+        # 值为空的可选字段（未启用配音的 dub_lines、没有导演说明的存量规划）不写入剧本条目，保持存量落盘形状不变。
         return {
             field: entry[field]
             for field in variant.script_fields
-            if field in entry and not (field == "dub_lines" and not entry[field])
+            if field in entry and not (field in _OMIT_WHEN_EMPTY and not entry[field])
         }
     return dict(entry)
 

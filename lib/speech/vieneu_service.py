@@ -50,6 +50,10 @@ SETTING_IDLE_MINUTES = "vieneu_idle_minutes"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_WORKDIR_RELATIVE = "third_party/VieNeu-TTS"
 
+#: 托管服务的等待队列长度与排队超时（秒），见 ``_build_env``。
+SERVER_QUEUE_SLOTS = 64
+SERVER_QUEUE_TIMEOUT_SECONDS = 1800
+
 DEFAULT_COMMAND: tuple[str, ...] = ("uv", "run", "python", "-m", "apps.openai_speech")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -159,6 +163,10 @@ def _build_env(config: VieneuConfig) -> dict[str, str]:
     env["VIENEU_DEVICE"] = config.device
     if config.int8:
         env["VIENEU_PRECISION"] = "int8"
+    # CPU 上服务一次只合成一路，其余请求按这两项排队：缺省队列只有一个位置、等 10 秒就返回 429，
+    # 多个视频同时配音时会大面积失败。放宽成「排得下整集、等得到合成完」，用户自己设了的不覆盖。
+    env.setdefault("VIENEU_QUEUE", str(SERVER_QUEUE_SLOTS))
+    env.setdefault("VIENEU_QUEUE_TIMEOUT", str(SERVER_QUEUE_TIMEOUT_SECONDS))
     return env
 
 

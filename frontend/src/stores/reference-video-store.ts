@@ -9,6 +9,7 @@ import type {
   ReferenceUnitCapabilityMap,
   ReferenceVideoUnit,
   TransitionType,
+  UnitDirectionPatch,
 } from "@/types";
 
 interface AddUnitPayload {
@@ -18,7 +19,7 @@ interface AddUnitPayload {
   note?: string | null;
 }
 
-interface PatchUnitPayload {
+interface PatchUnitPayload extends UnitDirectionPatch {
   prompt?: string;
   duration_seconds?: number;
   transition_to_next?: TransitionType;

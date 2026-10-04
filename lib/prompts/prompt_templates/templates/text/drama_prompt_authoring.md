@@ -48,6 +48,7 @@ protected: false
 
 {% endif %}
 分镜内容中的「口播」与「原文锚」仅供理解戏剧节奏与语境，不要复制进视觉字段。
+{{ partial("shared/director_note") }}
 
 <shots>
 {{ scenes_content }}

@@ -167,7 +167,7 @@ export function UnitPreviewPanel({
       </div>
 
       <div
-        className={`relative aspect-video w-full overflow-hidden rounded-lg border border-[var(--color-hairline)] shadow-[0_16px_40px_-16px_oklch(0_0_0_/_0.7)] ${
+        className={`relative aspect-video w-full shrink-0 overflow-hidden rounded-lg border border-[var(--color-hairline)] shadow-[0_16px_40px_-16px_oklch(0_0_0_/_0.7)] ${
           ready
             ? "bg-[linear-gradient(135deg,oklch(0.32_0.04_240),oklch(0.18_0.02_280))]"
             : "bg-[oklch(0.18_0.010_265_/_0.5)]"

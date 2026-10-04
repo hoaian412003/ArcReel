@@ -1586,15 +1586,18 @@ async def test_h3_profile_prompt_asks_for_the_six_sections(reference_project: Pa
 
 
 @pytest.mark.asyncio
-async def test_h3_profile_saves_text_with_a_payload_bound_to_it(reference_project: Path):
+async def test_h3_profile_keeps_the_confirmed_text_and_binds_the_payload_to_it(reference_project: Path):
+    """H3 提示词档只写载荷：模型回写的正文一律不采用，单元正文保持内容确认定稿的那一版。"""
     _enable_h3_profile(reference_project)
     gen = ScriptGenerator(reference_project, generator=_h3_generator(_h3_response(H3_UNIT_TEXT, _h3_sections())))
     await gen.generate(episode=1)
 
     unit = _formal_units(reference_project)["E1U01"]
-    assert unit["text"] == H3_UNIT_TEXT
+    assert unit["text"] == SCRIPT_PLAN_UNIT["text"]
     assert unit["h3_prompt"]["summary"].startswith("[reference generation]")
-    assert unit["h3_prompt"]["source_text_hash"] == source_text_hash(H3_UNIT_TEXT)
+    assert unit["h3_prompt"]["source_text_hash"] == source_text_hash(SCRIPT_PLAN_UNIT["text"])
+    sent = gen.generator.generate.await_args.args[0].prompt
+    assert "逐字原样返回" in sent
 
 
 @pytest.mark.asyncio

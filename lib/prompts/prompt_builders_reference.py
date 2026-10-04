@@ -20,9 +20,11 @@ from lib.prompts.prompt_builders_script import (
     _outline_slot,
     _overview_slot,
     _project_asset_appearances,
+    _screenplay_slot,
 )
 from lib.prompts.prompt_rules.asset_appearance import asset_reference_names
 from lib.prompts.prompt_templates.builtin import builtin_templates
+from lib.script.script_models import REFERENCE_UNIT_TYPE_MEANINGS
 from lib.speech.dub_settings import character_dub_gender
 from lib.speech.speech_rate import speech_rate_units_per_second
 
@@ -61,6 +63,7 @@ def build_reference_units_split_prompt(
     next_episode_outline: dict | None = None,
     dub_target_language: str | None = None,
     narrator_gender: str = "male",
+    screenplay: dict | None = None,
     instructions: str | None = None,
 ) -> str:
     """Step-1 video_unit 拆分 prompt：源文 → 扁平 unit 表（时长 + 原文锚 + 引用语法正文）。
@@ -164,6 +167,7 @@ def build_reference_units_split_prompt(
         max_reference_images=max_reference_images,
         episode_target_duration=episode_target_duration,
         dub=dub,
+        screenplay=_screenplay_slot(screenplay),
         instructions=instructions,
     )
 
@@ -229,7 +233,7 @@ def build_reference_dub_lines_prompt(
 def render_reference_units_for_prompt_authoring(units: list[dict]) -> str:
     """把 script_plan units 渲染为 prompt_authoring prompt 的输入文本。
 
-    机械渲染、无 LLM 参与：按 script_plan 的落盘顺序逐 unit 输出序号 + 时长 + 正文。
+    机械渲染、无 LLM 参与：按 script_plan 的落盘顺序逐 unit 输出序号 + 时长 + 正文，带导演说明的 unit 另附一段要点。
     prompt_authoring 以此为唯一基底做视觉扩写（见 ADR 0041）；``unit_id`` 不进渲染——它由序号机械
     派生，prompt_authoring 不写 id 就没有 id 漂移可校验。
     """
@@ -237,8 +241,147 @@ def render_reference_units_for_prompt_authoring(units: list[dict]) -> str:
     for index, unit in enumerate(units, start=1):
         duration = int(unit.get("duration_seconds") or 0)
         body = str(unit.get("text") or "")
-        blocks.append(f"#### unit {index}（时长 {duration}s）\n{body}")
+        block = f"#### unit {index}（时长 {duration}s）\n{body}"
+        if direction := _render_unit_direction(unit):
+            block += f"\n\n导演说明：\n{direction}"
+        blocks.append(block)
     return "\n\n".join(blocks)
+
+
+def _camera_phrase(camera: object) -> str:
+    if not isinstance(camera, dict):
+        return ""
+    phrase = _direction_text(camera.get("type"))
+    extras = [
+        value
+        for value, default in ((camera.get("amplitude"), "medium"), (camera.get("speed"), "normal"))
+        if isinstance(value, str) and value and value != default
+    ]
+    return f"{phrase}（{', '.join(extras)}）" if extras and phrase else phrase
+
+
+def _render_unit_direction(unit: dict) -> str:
+    """unit 的导演说明渲染成逐行要点；没有任何导演内容（存量 script_plan）时返回空串。
+
+    导演步骤的镜头表按「序号 · 切入秒数 · 取景 · 运镜 · 动作」逐镜列出，台词标出所在镜头；存量单元只有
+    ``beats`` 时把 ``at_pct`` 连同时长换算成秒数给出，提示词编写据此定镜头切点，不必自己做算术。
+    """
+    duration = int(unit.get("duration_seconds") or 0)
+    lines: list[str] = []
+    if unit_type := _direction_text(unit.get("unit_type")):
+        lines.append(f"- 类型：{unit_type}")
+    if brief := _direction_text(unit.get("brief")):
+        lines.append(f"- 说明：{brief}")
+    shots = [shot for shot in unit.get("shots") or [] if isinstance(shot, dict)]
+    if shots:
+        lines.append("- 镜头：")
+        for number, shot in enumerate(shots, start=1):
+            at = shot.get("at_seconds")
+            at_text = f"{float(at):.1f}s" if isinstance(at, (int, float)) and not isinstance(at, bool) else "?"
+            parts = [
+                f"[{number}] {at_text}",
+                _direction_text(shot.get("framing")),
+                _camera_phrase(shot.get("camera")),
+                _direction_text(shot.get("action")),
+            ]
+            if why := _direction_text(shot.get("why_cut")):
+                parts.append(f"切镜：{why}")
+            lines.append("  " + "｜".join(part for part in parts if part))
+    else:
+        beats = [beat for beat in unit.get("beats") or [] if isinstance(beat, dict) and beat.get("action")]
+        if beats:
+            steps = "；".join(
+                f"{int(beat.get('at_pct') or 0)}%（约 {duration * int(beat.get('at_pct') or 0) / 100:.1f}s）{_direction_text(beat['action'])}"
+                for beat in beats
+            )
+            lines.append(f"- 动作节点：{steps}")
+    performance = [item for item in unit.get("performance") or [] if isinstance(item, dict) and item.get("note")]
+    if performance:
+        lines.append(
+            "- 表演："
+            + "；".join(
+                f"{_direction_text(item.get('character'))}——{_direction_text(item['note'])}"
+                + (f"（声音：{voice}）" if (voice := _direction_text(item.get("voice"))) else "")
+                for item in performance
+            )
+        )
+    spoken = [item for item in unit.get("lines") or [] if isinstance(item, dict) and item.get("text")]
+    if spoken:
+        lines.append("- 台词：")
+        for item in spoken:
+            delivery = _direction_text(item.get("delivery"))
+            lines.append(
+                f"  [镜头 {item.get('shot')}] {_direction_text(item.get('speaker'))}：「{_direction_text(item['text'])}」"
+                + (f"（{delivery}）" if delivery else "")
+            )
+    if sounds := _direction_text(unit.get("sounds")):
+        lines.append(f"- 同期声：{sounds}")
+    if shots:
+        lines.append(f"- 配乐：{_direction_text(unit.get('music')) or '无'}")
+    for label, key in (("必须按住", "must_not_show"), ("末帧", "end_frame")):
+        if value := _direction_text(unit.get(key)):
+            lines.append(f"- {label}：{value}")
+    continuity_in = _direction_text(unit.get("continuity_in"))
+    continuity_out = _direction_text(unit.get("continuity_out"))
+    if continuity_in or continuity_out:
+        lines.append(f"- 衔接：开场 {continuity_in or '未写'} → 结束 {continuity_out or '未写'}")
+    return "\n".join(lines)
+
+
+def render_reference_director_units(units: list[dict], *, target_ids: list[str] | None = None) -> str:
+    """把全集单元渲染为导演步骤的输入块：序号、单元 id、时长、正文，已有导演说明时一并列出。
+
+    ``target_ids`` 非空时，本次要重做的单元带「（本次重做）」标记，其余单元的现有导演说明作前后文参照。
+    """
+    if not units:
+        return "（无视频单元）"
+    targeted = set(target_ids or ())
+    blocks: list[str] = []
+    for index, unit in enumerate(units, start=1):
+        unit_id = str(unit.get("unit_id") or "?")
+        mark = "（本次重做）" if unit_id in targeted else ""
+        duration = int(unit.get("duration_seconds") or 0)
+        block = f"### {index}. {_neutralize_tags(unit_id)}（时长 {duration} 秒）{mark}\n{unit.get('text') or ''}"
+        if direction := _render_unit_direction(unit):
+            block += f"\n\n现有导演说明：\n{direction}"
+        blocks.append(block)
+    return "\n\n".join(blocks)
+
+
+def build_reference_director_prompt(
+    *,
+    project_overview: dict,
+    characters: dict | None,
+    scenes: dict | None,
+    props: dict | None,
+    units: list[dict],
+    episode: int,
+    target_ids: list[str] | None = None,
+    revision_note: str | None = None,
+    target_language: str = "中文",
+    instructions: str | None = None,
+) -> str:
+    """参考生视频导演步骤 prompt：全集单元 + 资产外观 → 集级导演规划与逐单元导演说明（``ReferenceDirectorEpisodeOutput``）。
+
+    ``target_ids`` 非空表示只修订这些单元（其余单元的现有说明作参照）；``revision_note`` 是审阅者的修改意见。
+    """
+    return builtin_templates.render(
+        "text/director_episode_reference",
+        target_language=target_language,
+        project_overview=_overview_slot(project_overview),
+        assets=_project_asset_appearances(characters, scenes, props),
+        units_content=render_reference_director_units(units, target_ids=target_ids),
+        episode=episode,
+        total_units=len(units),
+        target_unit_ids=list(target_ids) if target_ids else None,
+        unit_types=[{"value": value, "meaning": meaning} for value, meaning in REFERENCE_UNIT_TYPE_MEANINGS.items()],
+        revision_note=revision_note.strip() if isinstance(revision_note, str) and revision_note.strip() else None,
+        instructions=instructions or None,
+    )
+
+
+def _direction_text(value: object) -> str:
+    return _neutralize_tags(value.strip()) if isinstance(value, str) else ""
 
 
 def build_reference_video_prompt(

@@ -53,6 +53,8 @@ protected: false
 
 segments 表每个分镜已定稿（segment_id、逐字原文、时长、出场角色 / 场景 / 道具、是否场景切换），为只读上下文。
 
+{{ partial("shared/director_note") }}
+
 <episode_constraints>
 当前正在生成第 {{ episode }} 集。为每个分镜输出一条视觉层，其 segment_id 必须与 segments 表逐字一致——逐一对应，不增、不减、不改写。
 </episode_constraints>

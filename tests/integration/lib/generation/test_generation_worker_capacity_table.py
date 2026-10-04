@@ -489,3 +489,12 @@ class TestCapacityTable:
         assert table.get("agnes", "video") == 1  # 声明默认压过活跃的全局 5
         assert table.get("agnes", "image") == 5  # 声明不外溢到未声明的 image lane
         assert table.get("ark", "video") == 5  # 未声明默认的视频供应商仍跟随全局 env
+
+
+def test_voice_over_runs_four_videos_at_a_time_by_default(monkeypatch):
+    """配音走本地 vieneu：同一时刻最多 4 条配音任务在跑，其余排队。"""
+    monkeypatch.delenv("AUDIO_MAX_WORKERS", raising=False)
+
+    table = CapacityTable.from_env()
+
+    assert table.get("vieneu", "audio") == 4

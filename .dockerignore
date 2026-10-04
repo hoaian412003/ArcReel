@@ -19,3 +19,7 @@ htmlcov
 *.egg-info
 .claude/worktrees
 mutants/
+# 本机的语音识别环境与模型、VieNeu 检出体积很大，不进镜像
+tools/asr/.venv
+tools/asr/models
+third_party/

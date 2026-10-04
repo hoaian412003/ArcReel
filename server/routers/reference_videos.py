@@ -61,7 +61,14 @@ from lib.script.reference_video.script_preview import build_script_preview
 from lib.script.reference_video.unit_capabilities import hydrate_reference_units
 from lib.script.reference_video.voice_settings import VoiceRenderSettings
 from lib.script.script_editor import ScriptEditError
-from lib.script.script_models import DubGender, DubLine
+from lib.script.script_models import (
+    REFERENCE_UNIT_DIRECTION_FIELDS,
+    DirectorBeat,
+    DirectorPerformance,
+    DubGender,
+    DubLine,
+    ReferenceUnitType,
+)
 from lib.speech.dub_settings import project_dub_target_language
 from lib.speech.narration_delivery import (
     POST_PRODUCTION,
@@ -440,6 +447,16 @@ class PatchUnitRequest(BaseModel):
     transition_to_next: str | None = Field(default=None, pattern=r"^(cut|fade|dissolve)$")
     note: str | None = None
 
+    # 导演说明：未传（None）= 不改；传空串 / 空数组 = 清空该字段。字段集与形状见 ``ReferenceUnitDirection``。
+    unit_type: ReferenceUnitType | None = None
+    brief: str | None = None
+    beats: list[DirectorBeat] | None = None
+    performance: list[DirectorPerformance] | None = None
+    must_not_show: str | None = None
+    end_frame: str | None = None
+    continuity_in: str | None = None
+    continuity_out: str | None = None
+
 
 def _find_unit(script: dict, unit_id: str, _t: Translator) -> dict:
     for u in script.get("video_units") or []:
@@ -471,6 +488,10 @@ async def patch_unit(
         fields["transition_to_next"] = req.transition_to_next
     if req.note is not None:
         fields["note"] = req.note
+    for direction_field in REFERENCE_UNIT_DIRECTION_FIELDS:
+        value = getattr(req, direction_field)
+        if value is not None:
+            fields[direction_field] = [item.model_dump() for item in value] if isinstance(value, list) else value
     dub_enabled = project_dub_target_language(project) is not None
     if req.dub_lines is not None:
         if len({line.index for line in req.dub_lines}) != len(req.dub_lines):

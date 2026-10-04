@@ -45,6 +45,7 @@ const I18N_NAMESPACES = [
   'onboarding',
   'workflow',
   'edit_timeline',
+  'queue',
 ] as const;
 
 // Replace every [[brand]] placeholder in a loaded namespace with the current

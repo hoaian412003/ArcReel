@@ -62,6 +62,16 @@ describe("ProjectsPage", () => {
     expect(screen.getByRole("dialog", { name: "外部智能体接入" })).toBeInTheDocument();
   });
 
+  it("opens the queue monitor from the lobby top bar", async () => {
+    vi.spyOn(API, "listProjects").mockResolvedValue({ projects: [] });
+    const { location } = renderPage();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "队列监控" }));
+
+    expect(location.history?.at(-1)).toBe("/app/queue");
+  });
+
   it("does not mark settings incomplete when only the embedded-agent credential is missing", async () => {
     vi.spyOn(API, "listProjects").mockResolvedValue({ projects: [] });
     vi.spyOn(API, "getProviders").mockResolvedValue({

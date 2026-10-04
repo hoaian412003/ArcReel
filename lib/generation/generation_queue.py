@@ -7,6 +7,7 @@ Wraps TaskRepository with a module-level singleton pattern.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 import uuid
@@ -27,12 +28,20 @@ from lib.generation.generation_batch import (
     build_generation_batch_read_model,
     validate_blocked_items,
 )
+from lib.generation.queue_admission import (
+    annotate_task_admission,
+    enforce_budget,
+    estimate_task_cost,
+    input_digest,
+)
 from lib.generation.task_terminal_events import (
     TERMINAL_TASK_STATUSES,
     emit_task_progress_event,
     emit_task_terminal_events,
 )
+from lib.generation.task_timeline import record_audit, record_task_event
 from lib.infra.async_thread import run_noninterruptible_async
+from lib.infra.pg_bus import CHANNEL_WAKE, notify
 from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE
 from lib.project.project_migration_guard import assert_project_migration_ok
 
@@ -376,8 +385,72 @@ class GenerationQueue:
             repo = TaskRepository(session)
             yield repo
         emit_task_terminal_events(repo.terminal_events)
+        for event in repo.terminal_events:
+            await record_task_event(event["task_id"], event["status"], stage="terminal")
 
-    async def enqueue_task(
+    async def enqueue_task(self, **kwargs: Any) -> dict[str, Any]:
+        """准入入口：真正的入队逻辑在 ``_enqueue_task``，这里补审计、预估费用与跨进程唤醒。
+
+        每条 Web / Agent / 批量入队都经过这里，接受与拒绝因此都有审计记录，而不是各调用方自行记得。
+        """
+        actor = str(kwargs.get("user_id") or DEFAULT_USER_ID)
+        base = {
+            "project_name": kwargs.get("project_name"),
+            "task_type": kwargs.get("task_type"),
+        }
+        digest = input_digest(kwargs.get("payload"))
+        try:
+            result = await self._enqueue_task(**kwargs)
+        except Exception as exc:
+            await record_audit(
+                "enqueue_rejected",
+                actor=actor,
+                **base,
+                detail={"reason": type(exc).__name__, "key": getattr(exc, "key", None), "input_digest": digest},
+            )
+            raise
+        if not result.get("deduped"):
+            task_id = result["task_id"]
+            estimate = estimate_task_cost(
+                provider_id=result.get("provider_id") or kwargs.get("provider_id"),
+                model_id=None,
+                media_type=str(kwargs.get("media_type") or ""),
+                payload=kwargs.get("payload"),
+            )
+            try:
+                await enforce_budget(estimate)
+            except Exception as exc:
+                # 预算闸口在派生出 provider 之后才有预估可比，故任务已入队：趁还在排队立即取消。
+                # 取消失败（刚被 worker 认领）说明预估与放行之间没有可拦的窗口，任务照常执行。
+                with contextlib.suppress(TaskNotCancellableError):
+                    await self.cancel_task(task_id)
+                await record_audit(
+                    "enqueue_rejected",
+                    actor=actor,
+                    task_id=task_id,
+                    **base,
+                    detail={"reason": "budget_exceeded", "key": getattr(exc, "key", None), "input_digest": digest},
+                )
+                raise
+            await annotate_task_admission(task_id, digest=digest, estimate=estimate)
+            await record_task_event(task_id, "queued", stage="admitted", data={"input_digest": digest})
+            await record_audit(
+                "enqueue_accepted",
+                actor=actor,
+                task_id=task_id,
+                **base,
+                detail={
+                    "input_digest": digest,
+                    "provider_id": result.get("provider_id"),
+                    "estimated_cost": estimate[0] if estimate else None,
+                    "currency": estimate[1] if estimate else None,
+                    "source": kwargs.get("source", "webui"),
+                },
+            )
+            await notify(CHANNEL_WAKE)
+        return result
+
+    async def _enqueue_task(
         self,
         *,
         project_name: str,
@@ -662,6 +735,9 @@ class GenerationQueue:
     ) -> None:
         async with self._task_repo() as repo:
             await repo.persist_provider_job_id(task_id, job_id, endpoint=endpoint, base_url=base_url)
+        await record_task_event(
+            task_id, "submitted", stage="provider_submitted", data={"provider_job_id": job_id}, touch_sync=True
+        )
 
     async def persist_execution_checkpoint(self, task_id: str, checkpoint_json: str, provider_id: str) -> None:
         async with self._task_repo() as repo:

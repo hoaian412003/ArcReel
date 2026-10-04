@@ -206,6 +206,46 @@ def test_add_unit_default_duration_follows_the_bucket_of_its_available_images(
     assert expected in body["unit_capability"]["allowed_durations"]
 
 
+def test_patch_unit_saves_director_notes_and_leaves_other_fields_alone(reference_videos_client: TestClient):
+    """解析预览里改导演说明：逐字段保存，没传的字段与正文原样保留；传空值清空该字段。"""
+    uid = _seed_unit(reference_videos_client)
+    url = f"/api/v1/projects/demo/reference-videos/episodes/1/units/{uid}"
+
+    saved = reference_videos_client.patch(
+        url,
+        json={
+            "unit_type": "tension_build",
+            "brief": "他想回家，危险逼近。",
+            "beats": [{"at_pct": 0, "action": "他看后视镜"}, {"at_pct": 80, "action": "窗外白光变亮"}],
+            "performance": [{"character": "张三", "note": "先放松，最后一下猛地偏头"}],
+            "must_not_show": "撞击本身",
+            "end_frame": "白光铺满画面",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    unit = saved.json()["unit"]
+    assert unit["unit_type"] == "tension_build"
+    assert unit["beats"][1] == {"at_pct": 80, "action": "窗外白光变亮"}
+    assert unit["text"] == "镜头1：@张三 推门"
+
+    cleared = reference_videos_client.patch(url, json={"must_not_show": "", "beats": []})
+    assert cleared.status_code == 200, cleared.text
+    unit = cleared.json()["unit"]
+    assert unit["must_not_show"] == ""
+    assert unit["beats"] == []
+    assert unit["brief"] == "他想回家，危险逼近。"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"unit_type": "not-a-type"}, {"beats": [{"at_pct": 101, "action": "x"}]}, {"beats": [{"action": "缺百分比"}]}],
+)
+def test_patch_unit_rejects_malformed_director_notes(reference_videos_client: TestClient, body: dict):
+    uid = _seed_unit(reference_videos_client)
+    resp = reference_videos_client.patch(f"/api/v1/projects/demo/reference-videos/episodes/1/units/{uid}", json=body)
+    assert resp.status_code == 422
+
+
 @pytest.mark.parametrize("duration_seconds", [0, -1])
 def test_add_unit_rejects_non_positive_duration(reference_videos_client: TestClient, duration_seconds: int):
     """显式非正时长须在请求边界被拒，不静默改写成 1 秒。"""

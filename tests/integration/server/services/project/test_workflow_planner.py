@@ -704,3 +704,93 @@ async def test_planner_reports_the_audio_switch_conflict_before_any_task_exists(
     assert video.admission is not None
     codes = {problem["code"] for ticket in video.admission["units"] for problem in ticket["problems"]}
     assert "video_audio_switch_not_supported" in codes
+
+
+class _DubProjectManager(_ProjectManager):
+    def __init__(self, project_path: Path, script: dict[str, Any], *, dub: bool):
+        super().__init__(project_path, script)
+        self.dub = dub
+
+    def load_project(self, project_name: str) -> dict[str, Any]:
+        project = super().load_project(project_name)
+        project["generation_mode"] = "reference_video"
+        if self.dub:
+            project["dub_target_language"] = "vi"
+        return project
+
+
+def _dub_script(*, with_audio: bool) -> dict[str, Any]:
+    line: dict[str, Any] = {
+        "index": 0,
+        "gender": "male",
+        "source_text": "风来了。",
+        "text_vi": "Gió đến rồi.",
+    }
+    if with_audio:
+        line |= {"audio_path": "audio/dub.wav", "audio_text": "Gió đến rồi."}
+    return {
+        "episode": 1,
+        "content_mode": "narration",
+        "video_units": [
+            {
+                "unit_id": "E1U1",
+                "text": "海面\n{风来了。}",
+                "duration_seconds": 8,
+                "dub_lines": [line],
+                "generated_assets": {"video_clip": "videos/E1U1.mp4"},
+            }
+        ],
+    }
+
+
+def _reference_export_status() -> WorkflowStatus:
+    status = _status(state="EXPORT_READY", action="export")
+    return status.model_copy(
+        update={
+            "project": WorkflowProject(
+                content_mode="narration", generation_mode="reference_video", grid_storyboard=False
+            )
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("with_audio", "dub_task_running", "expected"),
+    [
+        (True, False, WorkflowStepState.COMPLETED),
+        (False, False, WorkflowStepState.READY),
+        (False, True, WorkflowStepState.ACTIVE),
+    ],
+)
+async def test_voice_over_step_follows_dub_audio_and_active_dub_tasks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    with_audio: bool,
+    dub_task_running: bool,
+    expected: WorkflowStepState,
+) -> None:
+    pm = _DubProjectManager(_project_dir(tmp_path), _dub_script(with_audio=with_audio), dub=True)
+    monkeypatch.setattr(workflow_planner.WorkflowStateService, "get_status", lambda *_args: _reference_export_status())
+
+    async def _active_tasks(**kwargs: Any) -> list[dict[str, Any]]:
+        if dub_task_running and kwargs["task_type"] == "dub_auto":
+            return [{"task_id": "d1", "resource_id": "E1U1", "task_type": "dub_auto", "status": "running"}]
+        return []
+
+    monkeypatch.setattr(workflow_planner, "get_active_tasks_for_resources", _active_tasks)
+
+    plan = await workflow_planner.WorkflowPlanner(pm).get_plan("demo", WorkflowPlanRequest())
+
+    voice_over = next(step for step in plan.steps if step.id == "voice_over")
+    assert voice_over.state is expected
+    assert voice_over.tasks == []
+    assert plan.next_action.type == "export"
+
+
+async def test_projects_without_dub_keep_their_step_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pm = _DubProjectManager(_project_dir(tmp_path), _dub_script(with_audio=False), dub=False)
+    monkeypatch.setattr(workflow_planner.WorkflowStateService, "get_status", lambda *_args: _reference_export_status())
+
+    plan = await workflow_planner.WorkflowPlanner(pm).get_plan("demo", WorkflowPlanRequest())
+
+    assert "voice_over" not in [step.id for step in plan.steps]

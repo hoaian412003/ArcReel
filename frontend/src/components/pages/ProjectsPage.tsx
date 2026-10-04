@@ -10,7 +10,7 @@ import {
 import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { formatDate } from "@/utils/date-format";
 import { Link, useLocation } from "wouter";
-import { AlertTriangle, Bot, Library, Loader2, Plus, Search, Settings, Upload } from "lucide-react";
+import { Activity, AlertTriangle, Bot, Library, Loader2, Plus, Search, Settings, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { API } from "@/api";
@@ -382,6 +382,7 @@ interface TopBarProps {
   onCreate: () => void;
   onSettings: () => void;
   onAssets: () => void;
+  onQueue: () => void;
   onOpenExternalAgent: () => void;
   importing: boolean;
   configIncomplete: boolean;
@@ -395,12 +396,13 @@ function TopBar({
   onCreate,
   onSettings,
   onAssets,
+  onQueue,
   onOpenExternalAgent,
   importing,
   configIncomplete,
   searchInputRef,
 }: TopBarProps) {
-  const { t } = useTranslation(["common", "dashboard", "assets"]);
+  const { t } = useTranslation(["common", "dashboard", "assets", "queue"]);
   return (
     <div
       className="sticky top-0 z-30"
@@ -497,6 +499,15 @@ function TopBar({
             aria-label={t("dashboard:external_agent_guide")}
           >
             <Bot className="h-4 w-4" aria-hidden />
+          </button>
+          <button
+            type="button"
+            onClick={onQueue}
+            className="rounded-md px-2 py-1.5 text-sm text-text-3 transition-colors hover:bg-bg-grad-a hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            title={t("queue:open_monitor")}
+            aria-label={t("queue:open_monitor")}
+          >
+            <Activity className="h-4 w-4" aria-hidden />
           </button>
           <button
             type="button"
@@ -994,6 +1005,7 @@ export function ProjectsPage() {
         onImport={() => importInputRef.current?.click()}
         onCreate={() => setShowCreateModal(true)}
         onSettings={() => navigate("/app/settings")}
+        onQueue={() => navigate("/app/queue")}
         onAssets={() => {
           rememberAssetLibraryReturnTo(window.location.pathname);
           navigate("/app/assets");

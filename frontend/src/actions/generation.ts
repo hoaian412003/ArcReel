@@ -395,28 +395,24 @@ export async function enqueueReferenceVideoBatch(
   return res;
 }
 
-/** 为缺失越南语台词的单元入队撰写任务（文本任务）；unitIds 缺省即本集所有缺失或过期的单元。 */
-export async function enqueueDubLines(
+/**
+ * 自动配音：每个已有成片的视频各入队一个任务（缺台词先写，再从成片检测开始时间，最后合成音频），
+ * 同时最多 4 个视频在跑；还没有成片的视频被服务端跳过，这里一并提示。
+ */
+export async function enqueueAutoDub(
   projectName: string,
   episode: number,
-  unitIds?: string[],
-): Promise<EnqueueResult> {
-  const res = await API.generateDubLines(projectName, episode, unitIds);
-  notifyEnqueued(
-    res.deduped,
-    i18n.t("dashboard:dub_lines_queued_toast", { count: res.unit_ids.length || unitIds?.length || 0 }),
-    "info",
-  );
-  return { taskIds: res.task_ids, deduped: res.deduped };
-}
-
-/** 把配音台词合成为音频：每个单元一个任务，走本地 TTS。 */
-export async function enqueueDubSynthesis(
-  projectName: string,
-  episode: number,
-  payload: { unit_ids?: string[]; line_indexes?: number[] },
-): Promise<EnqueueResult> {
-  const res = await API.synthesizeDub(projectName, episode, payload);
-  notifyEnqueued(false, i18n.t("dashboard:dub_synthesis_queued_toast", { count: res.unit_ids.length }));
-  return { taskIds: res.task_ids, deduped: false };
+  payload: { unit_ids?: string[]; skip_timing?: boolean },
+): Promise<EnqueueResult & { unitIds: string[]; skippedUnitIds: string[] }> {
+  const res = await API.autoDubVoiceover(projectName, episode, payload);
+  notifyEnqueued(false, i18n.t("dashboard:dub_auto_queued_toast", { count: res.unit_ids.length }), "info");
+  if (res.skipped.length > 0) {
+    useAppStore.getState().pushToast(i18n.t("dashboard:dub_auto_skipped_toast", { count: res.skipped.length }), "info");
+  }
+  return {
+    taskIds: res.task_ids,
+    deduped: false,
+    unitIds: res.unit_ids,
+    skippedUnitIds: res.skipped.map((item) => item.unit_id),
+  };
 }

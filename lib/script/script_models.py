@@ -238,6 +238,86 @@ def get_generated_assets(item: dict) -> dict:
     return assets if isinstance(assets, dict) else {}
 
 
+# ============ 导演规划（集级 DirectorPlan + 逐条目 EntryDirection） ============
+#
+# 集级 ``DirectorPlan`` 与逐 unit 的表演说明被参考生视频 script_plan 与分镜路线（旁白 / 剧情）共用；
+# 分镜路线的逐条目导演说明见 ``EntryDirection``，由导演步骤在内容确认之后、提示词编写之前写入正式脚本。
+
+
+class DirectorArcBeat(BaseModel):
+    """集级情绪弧线的一拍：一种情绪或转折，以及承载它的 unit。"""
+
+    model_config = _STRICT_CONFIG
+
+    beat: str = Field(description="这一拍的情绪或转折，一个短语")
+    units: list[int] = Field(description="承载这一拍的 unit / 分镜序号（从 1 起，对应条目数组顺序）")
+
+
+class DirectorPlan(BaseModel):
+    """集级导演规划：本集要完成什么、情绪弧线、基调与贯穿意象。"""
+
+    model_config = _STRICT_CONFIG
+
+    episode_intent: str = Field(description="本集要让观众知道、感受或期待什么，一到两句")
+    arc: list[DirectorArcBeat] = Field(description="按顺序排列的情绪弧线")
+    tone: str = Field(description="整集基调及其变化，一句")
+    motifs: list[str] = Field(default_factory=list, description="贯穿多个 unit / 分镜的意象、声音或道具，1-4 个")
+
+
+class DirectorPerformance(BaseModel):
+    """某个角色在本 unit 里的表演说明。"""
+
+    model_config = _STRICT_CONFIG
+
+    character: str = Field(description="角色登记名")
+    note: str = Field(description="节奏、神情、动作与音量，不写外貌、服装与镜头")
+
+
+class DirectorCamera(BaseModel):
+    """导演为一个条目定的镜头：机位角度、景别、运动与一句话意图。
+
+    四个字段都是自由文本（非空），不设固定词表：导演按画面需要自行措辞，意图写清「为什么这样拍」。
+    """
+
+    model_config = _STRICT_CONFIG
+
+    angle: str = Field(min_length=1, description="机位角度，如低角度、平视、过肩")
+    shot_size: str = Field(min_length=1, description="景别，如特写、中景、全景")
+    movement: str = Field(min_length=1, description="镜头运动，如固定、推进、跟拍")
+    intent: str = Field(min_length=1, description="这样拍的意图：为什么选这个角度 / 景别 / 运动，观众该有什么感受")
+
+
+class EntryDirection(BaseModel):
+    """分镜路线（旁白 / 剧情）单个条目的导演说明：镜头、逐角色表演与前后衔接。"""
+
+    model_config = _STRICT_CONFIG
+
+    camera: DirectorCamera = Field(description="本条目的镜头与意图")
+    performance: list[DirectorPerformance] = Field(
+        default_factory=list, description="逐角色的表演说明；出场的每个角色都要有一条"
+    )
+    continuity_in: str = Field(min_length=1, description="开场状态：地点、时间、人物位置与手中物件")
+    continuity_out: str = Field(min_length=1, description="结束状态，须与下一个条目的 continuity_in 衔接")
+
+
+class DirectorEntryOutput(BaseModel):
+    """导演步骤对单个条目的产出：条目 id（segment_id / scene_id）+ 导演说明。"""
+
+    model_config = _STRICT_CONFIG
+
+    id: str = Field(min_length=1, description="条目 id：旁白 / 剧情分别取 segment_id / scene_id，逐字等于输入")
+    direction: EntryDirection
+
+
+class DirectorEpisodeOutput(BaseModel):
+    """导演步骤的结构化产出（文本模型的 response_schema）：集级规划 + 逐条目导演说明。"""
+
+    model_config = _STRICT_CONFIG
+
+    director_plan: DirectorPlan = Field(description="集级导演规划，先于逐条目说明写出")
+    entries: list[DirectorEntryOutput] = Field(min_length=1, description="按剧本顺序排列的逐条目导演说明")
+
+
 # ============ 旁白/解说（Narration） ============
 
 
@@ -292,6 +372,8 @@ class NarrationSegment(BaseModel):
     # 待编写：视觉层尚未补出。不带视觉层的新增条目置位，提示词编写写回或手写齐视觉层时清除；
     # 对 LLM 隐藏，不在任何 PATCH 白名单内。落盘只在置位时出现。
     pending_authoring: SkipJsonSchema[bool] = Field(default=False, description="该条目待编写")
+    # 导演说明：导演步骤写入正式脚本，提示词编写只读消费；对 LLM 的视觉层 schema 隐藏，落盘只在存在时出现。
+    direction: SkipJsonSchema[EntryDirection | None] = Field(default=None, description="导演说明")
 
 
 class NovelInfo(BaseModel):
@@ -333,6 +415,8 @@ class NarrationEpisodeScript(BaseModel):
     hook: SkipJsonSchema[str | None] = Field(default=None, description="集尾钩子（来自分集账本）")
     next_episode_teaser: SkipJsonSchema[str | None] = Field(default=None, description="下集预告语（来自分集账本）")
     segments: list[NarrationSegment] = Field(description="分镜列表")
+    # 集级导演规划：导演步骤写入，对 LLM 隐藏，落盘只在存在时出现。
+    director_plan: SkipJsonSchema[DirectorPlan | None] = Field(default=None, description="集级导演规划")
 
 
 # ============ 旁白/解说 script_plan 结构化中间态 / prompt_authoring 视觉层 ============
@@ -361,6 +445,14 @@ class NarrationScriptPlanSegment(BaseModel):
     characters_in_segment: list[str] = Field(description="出场角色名称列表；无则显式写 []")
     scenes: list[str] = Field(description="出场场景名称列表；无则显式写 []")
     props: list[str] = Field(description="出场道具名称列表；无则显式写 []")
+    # 仅在提示词给出已通过剧本时由模型填写，供产出与剧本的对齐判定（lib.script.screenplay_alignment）使用；
+    # exclude=True：model_dump 不含它，持久化的 script_plan 与正式脚本形状不变。
+    scene_no: int | None = Field(
+        default=None,
+        ge=1,
+        exclude=True,
+        description="所属剧本场次的序号（从 1 起）；仅在提示词提供了已确认剧本时填写，否则省略",
+    )
 
 
 class NarrationScriptPlanDraft(BaseModel):
@@ -548,6 +640,8 @@ class DramaScene(BaseModel):
     # 待编写：视觉层尚未补出。不带视觉层的新增条目置位，提示词编写写回或手写齐视觉层时清除；
     # 对 LLM 隐藏，不在任何 PATCH 白名单内。落盘只在置位时出现。
     pending_authoring: SkipJsonSchema[bool] = Field(default=False, description="该条目待编写")
+    # 见 NarrationSegment.direction 说明。
+    direction: SkipJsonSchema[EntryDirection | None] = Field(default=None, description="导演说明")
 
 
 class DramaEpisodeScript(BaseModel):
@@ -566,6 +660,8 @@ class DramaEpisodeScript(BaseModel):
     hook: SkipJsonSchema[str | None] = Field(default=None, description="集尾钩子（来自分集账本）")
     next_episode_teaser: SkipJsonSchema[str | None] = Field(default=None, description="下集预告语（来自分集账本）")
     scenes: list[DramaScene] = Field(description="分镜列表")
+    # 见 NarrationEpisodeScript.director_plan 说明。
+    director_plan: SkipJsonSchema[DirectorPlan | None] = Field(default=None, description="集级导演规划")
 
 
 # ============ 剧情演绎两段式：script_plan 内容 / prompt_authoring 视觉（见 ADR 0041） ============
@@ -610,6 +706,14 @@ class DramaSceneContent(BaseModel):
     )
     source_text: str = Field(default="", description="逐字原文摘录（追溯锚，不朗读、不出音，best-effort）")
     needs_replan: SkipJsonSchema[bool] = Field(default=False, description="该分镜需要人工重新规划")
+    # 仅在提示词给出已通过剧本时由模型填写，供产出与剧本的对齐判定（lib.script.screenplay_alignment）使用；
+    # exclude=True：model_dump 不含它，持久化的 script_plan 与正式脚本形状不变。
+    scene_no: int | None = Field(
+        default=None,
+        ge=1,
+        exclude=True,
+        description="所属剧本场次的序号（从 1 起）；仅在提示词提供了已确认剧本时填写，否则省略",
+    )
 
 
 class DramaNormalizedScript(BaseModel):
@@ -886,6 +990,209 @@ class DubLineDraft(BaseModel):
     text_vi: str = Field(min_length=1, description="该条发声的越南语配音台词，口语自然、简洁")
 
 
+# ============ 参考生视频导演规划 ============
+#
+# 存量 script_plan 的导演说明曾随单元拆分同一次调用产出：集级 ``DirectorPlan`` + 逐 unit 的说明（类型、
+# brief、beats、表演、按住项、末帧、衔接）。现在单元拆分只定内容，导演说明由内容确认之后的导演步骤写进
+# 正式脚本（见下方「参考生视频导演步骤」）。这里的字段全部带缺省，存量 script_plan 与草稿照常通过校验，
+# 内容要求由 ``lib.script.reference_video.draft_validation`` 的导演规划校验判定。
+
+ReferenceUnitType = Literal[
+    "establishing",
+    "character_intro",
+    "exposition",
+    "dialogue_drama",
+    "romance",
+    "heartbreak",
+    "family_warmth",
+    "conflict",
+    "humor",
+    "power_move",
+    "face_slap",
+    "combat",
+    "chase",
+    "tension_build",
+    "climax_impact",
+    "reveal",
+    "time_shift",
+    "montage",
+    "cliffhanger",
+    "other",
+]
+
+#: 单元类型 → 含义，渲染进 script_plan 提示词，是各取值的唯一说明来源；键与 ``ReferenceUnitType`` 一致。
+REFERENCE_UNIT_TYPE_MEANINGS: dict[str, str] = {
+    "establishing": "交代地点、时间与氛围，故事尚未推进",
+    "character_intro": "角色的第一印象：让观众认识他是谁、是什么样的人",
+    "exposition": "交代观众必须知道的信息或背景",
+    "dialogue_drama": "以对话为主，人物关系或筹码在对话中发生变化",
+    "romance": "心动、靠近、暧昧或甜蜜的情感时刻",
+    "heartbreak": "失去、拒绝、离别或悲伤",
+    "family_warmth": "家人或挚友之间的温情",
+    "conflict": "争执、对峙或较劲，不含肢体打斗",
+    "humor": "以制造笑点为目的的喜剧段落",
+    "power_move": "主角掌控局面，展示实力、身份或手腕",
+    "face_slap": "反转打脸：看低主角的人被事实证明是错的",
+    "combat": "肢体打斗",
+    "chase": "追逐或逃离",
+    "tension_build": "危险或压力不断升高，但结果被按住、留到后面的单元",
+    "climax_impact": "大事件落地：事故、重击、真相揭晓的那一刻",
+    "reveal": "隐藏的真相、身份或反转被揭开",
+    "time_shift": "闪回、时间跳跃、重生、梦境等时间切换",
+    "montage": "压缩时间的蒙太奇或重复动作串",
+    "cliffhanger": "以悬念收尾，把问题留给下一集",
+    "other": "以上都不合适时使用",
+}
+
+_REFERENCE_UNIT_TYPES: frozenset[str] = frozenset(get_args(ReferenceUnitType))
+assert set(REFERENCE_UNIT_TYPE_MEANINGS) == _REFERENCE_UNIT_TYPES, "单元类型含义表与 ReferenceUnitType 不一致"
+
+
+def _coerce_unit_type(value: object) -> object:
+    """单元类型归一：大小写 / 首尾空白不敏感，不认识的字符串落 ``other``；``None`` 与非字符串原样透传。"""
+    if not isinstance(value, str):
+        return value
+    canon = value.strip().lower()
+    return canon if canon in _REFERENCE_UNIT_TYPES else "other"
+
+
+class DirectorBeat(BaseModel):
+    """unit 内的一个可观察动作节点。"""
+
+    model_config = _STRICT_CONFIG
+
+    at_pct: int = Field(ge=0, le=100, description="该动作在 unit 时长中的起点位置（百分比，0-100）")
+    action: str = Field(description="镜头看得见或麦克风听得见的动作，不写内心活动")
+
+
+class ReferenceUnitDirection(BaseModel):
+    """unit 级导演说明的字段集，script_plan 的扁平产出单元与落盘单元共用。"""
+
+    unit_type: Annotated[ReferenceUnitType | None, BeforeValidator(_coerce_unit_type)] = Field(
+        default=None, description="单元类型"
+    )
+    brief: str = Field(default="", description="给人看的导演说明：发生什么、为什么、观众该有什么感受，二到四句")
+    beats: list[DirectorBeat] = Field(default_factory=list, description="2-5 个可观察动作节点，at_pct 递增")
+    performance: list[DirectorPerformance] = Field(default_factory=list, description="逐角色的表演说明")
+    must_not_show: str = Field(default="", description="本 unit 必须按住、不能出现的内容")
+    end_frame: str = Field(default="", description="本 unit 最后一帧的画面")
+    continuity_in: str = Field(default="", description="开场状态：地点、时间、天气、人物位置与手中物件")
+    continuity_out: str = Field(default="", description="结束状态，须与下一个 unit 的 continuity_in 衔接")
+
+
+#: unit 级导演说明的字段名，落盘与草稿搬运时按它逐字段取用；与 ``ReferenceUnitDirection`` 的字段一致。
+REFERENCE_UNIT_DIRECTION_FIELDS: tuple[str, ...] = tuple(ReferenceUnitDirection.model_fields)
+
+
+# ============ 参考生视频导演步骤（内容确认之后、提示词编写之前） ============
+#
+# 导演步骤为每个视频单元定「这一段怎么演、怎么拍」：镜头切点与运镜、逐角色表演与声音、台词落在哪一镜、
+# 同期声与配乐。提示词编写（H3 等）只把它整理成目标格式，不再自己发明表演与镜头。运镜词表取自 MiniMax
+# H3 官方提示词写作指南（camera motion = type + amplitude + speed）。
+
+ReferenceCameraType = Literal[
+    "static_shot",
+    "push_in",
+    "pull_out",
+    "zoom_in",
+    "zoom_out",
+    "pan_left",
+    "pan_right",
+    "truck_left",
+    "truck_right",
+    "tilt_up",
+    "tilt_down",
+    "pedestal_up",
+    "pedestal_down",
+    "arc_shot",
+    "tracking_shot",
+    "shake_slightly",
+    "shake_strongly",
+    "pov",
+    "roll_clockwise",
+    "roll_counterclockwise",
+]
+
+
+class ReferenceCameraMove(BaseModel):
+    """一镜的主要运镜：类型 + 幅度 + 速度。中等幅度与正常速度是缺省，写提示词时省略。"""
+
+    model_config = _STRICT_CONFIG
+
+    type: ReferenceCameraType = Field(description="运镜类型，只取词表里的值")
+    amplitude: Literal["small", "medium", "large"] = Field(default="medium", description="幅度")
+    speed: Literal["slow", "normal", "fast"] = Field(default="normal", description="速度")
+
+
+class ReferenceShot(BaseModel):
+    """单元里的一个镜头：从第几秒切入、怎么取景、怎么运镜、发生什么。"""
+
+    model_config = _STRICT_CONFIG
+
+    at_seconds: float = Field(ge=0, description="切入时间（秒）；第一镜为 0，之后严格递增且早于单元时长")
+    framing: str = Field(min_length=1, description="景别与主体在画面里的位置，如「中景，主角居左三分之一」")
+    camera: ReferenceCameraMove = Field(description="这一镜的主要运镜，一镜只用一种")
+    action: str = Field(min_length=1, description="这一镜里看得见的动作与状态变化，不写内心活动")
+    why_cut: str = Field(default="", description="为什么切到这一镜：带来了哪个新的主体、空间、状态或视角；第一镜留空")
+
+
+class ReferencePerformance(DirectorPerformance):
+    """参考生视频单元里某个角色的表演：在通用表演说明之外，说话的角色写清声音。"""
+
+    voice: str = Field(default="", description="说话角色的声音：音高、音色、语速，必要时加口音；不说话的角色留空")
+
+
+class ReferenceLine(BaseModel):
+    """一句角色台词落在哪一镜、怎么说。台词逐字取自单元正文的 ``@[角色]{台词}``。"""
+
+    model_config = _STRICT_CONFIG
+
+    speaker: str = Field(min_length=1, description="说话的角色登记名，逐字等于正文里的说话人")
+    text: str = Field(min_length=1, description="台词，逐字等于正文花括号里的内容（标点也照抄）")
+    shot: int = Field(ge=1, description="这句台词所在的镜头序号（从 1 起）；一句台词不跨镜")
+    delivery: str = Field(default="", description="怎么说：语气、音量、停顿与同时的动作")
+
+
+class ReferenceUnitDirectionOutput(BaseModel):
+    """导演步骤对单个视频单元的产出：类型、说明、镜头表、表演、台词、声音与衔接。"""
+
+    model_config = _STRICT_CONFIG
+
+    unit_type: Annotated[ReferenceUnitType, BeforeValidator(_coerce_unit_type)] = Field(description="单元类型")
+    brief: str = Field(description="给人看的导演说明：发生什么、为什么、观众该有什么感受，二到四句")
+    shots: list[ReferenceShot] = Field(min_length=1, description="按时间顺序排列的镜头")
+    performance: list[ReferencePerformance] = Field(description="逐角色的表演；画面里没有角色时为空数组")
+    lines: list[ReferenceLine] = Field(description="正文里每一句角色台词各一条，按说出的先后；没有台词时为空数组")
+    sounds: str = Field(description="同期声：与动作同步的声响和环境音，按镜头顺序写；没有时为空串")
+    music: str = Field(description="只有观众听得到的配乐：乐器、速度与力度变化；不要配乐时为空串")
+    must_not_show: str = Field(description="本单元必须按住、不能出现的内容；不需要时为空串")
+    end_frame: str = Field(description="本单元最后一帧的画面")
+    continuity_in: str = Field(description="开场状态：地点、时间、天气、人物位置与手中物件")
+    continuity_out: str = Field(description="结束状态，须与下一个单元的 continuity_in 衔接")
+
+
+class ReferenceDirectorUnitOutput(BaseModel):
+    """导演步骤的逐单元产出：单元 id + 导演说明。"""
+
+    model_config = _STRICT_CONFIG
+
+    id: str = Field(min_length=1, description="单元 id（unit_id），逐字等于输入")
+    direction: ReferenceUnitDirectionOutput
+
+
+class ReferenceDirectorEpisodeOutput(BaseModel):
+    """参考生视频导演步骤的结构化产出（文本模型的 response_schema）：集级规划 + 逐单元导演说明。"""
+
+    model_config = _STRICT_CONFIG
+
+    director_plan: DirectorPlan = Field(description="集级导演规划，先于逐单元说明写出")
+    units: list[ReferenceDirectorUnitOutput] = Field(min_length=1, description="按剧本顺序排列的逐单元导演说明")
+
+
+#: 导演步骤写进正式脚本单元的字段（扁平存放，与存量导演说明字段并列）。``beats`` 是存量字段，新导演结果不写。
+REFERENCE_DIRECTION_OUTPUT_FIELDS: tuple[str, ...] = tuple(ReferenceUnitDirectionOutput.model_fields)
+
+
 class ReferenceVideoUnit(BaseModel):
     """视频单元——一个视频文件的最小生成粒度。
 
@@ -922,6 +1229,21 @@ class ReferenceVideoUnit(BaseModel):
     # 越南语配音台词：脚本规划步骤随同一次 LLM 调用产出，创作者可在对白面板逐行编辑。
     # 对 LLM 的单元级 schema 隐藏（规划输出用独立的扁平单元承载），落盘只在存在时出现。
     dub_lines: SkipJsonSchema[list[DubLine]] = Field(default_factory=list, description="越南语配音台词")
+    # 导演说明：脚本规划随 unit 一并产出、内容确认时透传，创作者可在解析预览里改。字段集见
+    # ``ReferenceUnitDirection``；对 LLM 隐藏（提示词编写用独立输出模型，只读不写），落盘只在有内容时出现。
+    unit_type: SkipJsonSchema[ReferenceUnitType | None] = Field(default=None, description="单元类型")
+    brief: SkipJsonSchema[str] = Field(default="", description="导演说明")
+    beats: SkipJsonSchema[list[DirectorBeat]] = Field(default_factory=list, description="可观察动作节点")
+    performance: SkipJsonSchema[list[ReferencePerformance]] = Field(default_factory=list, description="表演说明")
+    must_not_show: SkipJsonSchema[str] = Field(default="", description="必须按住的内容")
+    end_frame: SkipJsonSchema[str] = Field(default="", description="最后一帧画面")
+    continuity_in: SkipJsonSchema[str] = Field(default="", description="开场状态")
+    continuity_out: SkipJsonSchema[str] = Field(default="", description="结束状态")
+    # 导演步骤的镜头表、台词落位、同期声与配乐；对 LLM 隐藏，落盘只在有内容时出现。
+    shots: SkipJsonSchema[list[ReferenceShot]] = Field(default_factory=list, description="镜头表")
+    lines: SkipJsonSchema[list[ReferenceLine]] = Field(default_factory=list, description="台词落位")
+    sounds: SkipJsonSchema[str] = Field(default="", description="同期声")
+    music: SkipJsonSchema[str] = Field(default="", description="配乐")
 
     @model_validator(mode="after")
     def _validate_replan_shell(self) -> "ReferenceVideoUnit":
@@ -956,6 +1278,8 @@ class ReferenceVideoScript(BaseModel):
     hook: SkipJsonSchema[str | None] = Field(default=None, description="集尾钩子（来自分集账本）")
     next_episode_teaser: SkipJsonSchema[str | None] = Field(default=None, description="下集预告语（来自分集账本）")
     video_units: list[ReferenceVideoUnit] = Field(description="视频单元列表")
+    # 集级导演规划：导演步骤写入，对 LLM 隐藏，落盘只在存在时出现。
+    director_plan: SkipJsonSchema[DirectorPlan | None] = Field(default=None, description="集级导演规划")
 
 
 def resolve_content_mode(script: dict[str, Any], project: dict[str, Any]) -> str:
@@ -973,7 +1297,7 @@ def resolve_content_mode(script: dict[str, Any], project: dict[str, Any]) -> str
 # ReferenceVideoScript 的视觉编排（景别 / 构图 / 运镜扩写）。
 
 
-class ReferenceScriptPlanUnit(BaseModel):
+class ReferenceScriptPlanUnit(ReferenceUnitDirection):
     """参考生视频 script_plan（video_unit 拆分）产出的结构化单元：内容层。
 
     ``text`` 是正文唯一真相，参考图不在此落盘（见 :class:`ReferenceVideoUnit`）。
@@ -1006,6 +1330,7 @@ class ReferenceScriptPlanDraft(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    director_plan: DirectorPlan | None = Field(default=None, description="集级导演规划；存量草稿为 null")
     units: list[ReferenceScriptPlanUnit] = Field(description="video_unit 列表")
 
 
@@ -1020,8 +1345,8 @@ class ReferenceScriptPlanDraft(BaseModel):
 # parser 后校验（lib/script/reference_video/draft_validation.py）。
 
 
-class ReferenceScriptPlanFlatUnit(BaseModel):
-    """script_plan 的 LLM 产出单元：时长 + 原文锚 + 引用语法正文。"""
+class ReferenceScriptPlanFlatUnit(ReferenceUnitDirection):
+    """script_plan 的 LLM 产出单元：导演说明 + 时长 + 原文锚 + 引用语法正文。"""
 
     model_config = _STRICT_CONFIG
 
@@ -1037,6 +1362,51 @@ class ReferenceScriptPlanFlatUnit(BaseModel):
         default_factory=list,
         description="越南语配音台词：按 text 中台词与画外音记号的出现顺序，每条发声一行（未启用配音时留空）",
     )
+    # 仅在提示词给出已通过剧本时由模型填写，供产出与剧本的对齐判定（lib.script.screenplay_alignment）使用；
+    # exclude=True：model_dump 不含它，持久化的 script_plan 与正式脚本形状不变。
+    scene_no: int | None = Field(
+        default=None,
+        ge=1,
+        exclude=True,
+        description="所属剧本场次的序号（从 1 起）；仅在提示词提供了已确认剧本时填写，否则省略",
+    )
+
+
+class ReferenceScriptPlanContentFlatUnit(BaseModel):
+    """单元拆解（内容确认之前）的 LLM 产出单元：只有时长、原文锚、引用语法正文与配音行。
+
+    导演说明由内容确认之后的导演步骤写，不在拆解里产出；草稿重判与存量 script_plan 收编仍用带导演字段的
+    :class:`ReferenceScriptPlanFlatUnit`（存量规划带着导演说明）。
+    """
+
+    model_config = _STRICT_CONFIG
+
+    duration_seconds: int = Field(
+        ge=REFERENCE_UNIT_DURATION_RANGE[0],
+        le=REFERENCE_UNIT_DURATION_RANGE[1],
+        description="该单元时长（秒）",
+    )
+    source_text: str = Field(min_length=1, description="该单元所依据的小说原文逐字摘录（不转述、不翻译）")
+    text: str = Field(min_length=1, description="该单元的引用语法正文：画面描述 + 行内的台词 / 画外音记号")
+    dub_lines: list[DubLineDraft] = Field(
+        default_factory=list,
+        description="越南语配音台词：按 text 中台词与画外音记号的出现顺序，每条发声一行（未启用配音时留空）",
+    )
+    # 见 ReferenceScriptPlanFlatUnit.scene_no。
+    scene_no: int | None = Field(
+        default=None,
+        ge=1,
+        exclude=True,
+        description="所属剧本场次的序号（从 1 起）；仅在提示词提供了已确认剧本时填写，否则省略",
+    )
+
+
+class ReferenceScriptPlanContentFlatDraft(BaseModel):
+    """单元拆解的 LLM 产出顶层形状：只有 unit 列表，没有导演规划。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    units: list[ReferenceScriptPlanContentFlatUnit] = Field(min_length=1, description="按叙事顺序排列的 unit 列表")
 
 
 class ReferenceScriptPlanFlatDraft(BaseModel):
@@ -1044,6 +1414,8 @@ class ReferenceScriptPlanFlatDraft(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # 排在 units 之前：模型按字段顺序生成，先定整集规划再逐 unit 拆分。
+    director_plan: DirectorPlan | None = Field(default=None, description="集级导演规划，先于 units 写出")
     units: list[ReferenceScriptPlanFlatUnit] = Field(min_length=1, description="按叙事顺序排列的 unit 列表")
 
 
@@ -1234,7 +1606,40 @@ def _ad_episode_model(duration_type: object, description: str) -> type[BaseModel
     )
 
 
-def build_reference_units_script_plan_model(supported_durations: list[int]) -> type[BaseModel]:
+#: 发给模型的 script_plan 产出单元：导演说明各字段必填。落盘与草稿重判沿用带缺省的
+#: :class:`ReferenceScriptPlanFlatUnit`（存量 script_plan 不带导演说明）；只有发给模型的 response_schema
+#: 用它——带缺省的字段在 JSON schema 里不进 ``required``，模型会直接略过它们。
+ReferenceScriptPlanDirectedFlatUnit: type[BaseModel] = create_model(
+    "ReferenceScriptPlanFlatUnit",
+    __base__=ReferenceScriptPlanFlatUnit,
+    unit_type=(Annotated[ReferenceUnitType, BeforeValidator(_coerce_unit_type)], Field(description="单元类型")),
+    brief=(str, Field(description="给人看的导演说明：发生什么、为什么、观众该有什么感受，二到四句")),
+    beats=(list[DirectorBeat], Field(description="2-5 个可观察动作节点，at_pct 递增")),
+    performance=(list[DirectorPerformance], Field(description="逐角色的表演说明；画面里没有角色时为空数组")),
+    must_not_show=(str, Field(description="本 unit 必须按住、不能出现的内容；不需要时为空串")),
+    end_frame=(str, Field(description="本 unit 最后一帧的画面")),
+    continuity_in=(str, Field(description="开场状态：地点、时间、天气、人物位置与手中物件")),
+    continuity_out=(str, Field(description="结束状态，须与下一个 unit 的 continuity_in 衔接")),
+)
+
+
+def build_reference_units_content_model(supported_durations: list[int]) -> type[BaseModel]:
+    """单元拆解发给模型的 response_schema：unit 时长被 ``supported_durations`` 枚举硬约束，不含导演说明。"""
+    unit = _constrained_duration_item(
+        ReferenceScriptPlanContentFlatUnit,
+        _duration_literal(supported_durations),
+        "该单元时长（秒），必须取 supported_durations 中的值",
+    )
+    return create_model(
+        "ReferenceScriptPlanContentFlatDraft",
+        __base__=ReferenceScriptPlanContentFlatDraft,
+        units=(list[unit], Field(min_length=1, description="按叙事顺序排列的 unit 列表")),
+    )
+
+
+def build_reference_units_script_plan_model(
+    supported_durations: list[int], *, require_director: bool = False
+) -> type[BaseModel]:
     """构造 unit 时长被 ``supported_durations`` 枚举硬约束的参考生视频 script_plan 模型（扁平形状）。
 
     unit 是一次生成调用的单元，拆分阶段决定的就是发给供应商的那个秒数，故枚举约束加在
@@ -1242,16 +1647,26 @@ def build_reference_units_script_plan_model(supported_durations: list[int]) -> t
     生成层即被卡死），与 prompt_authoring 同口径衔接：prompt_authoring 沿用 script_plan 的 unit 时长，只做提示词编写。
     参考图数上限与文本内语法依赖运行时能力值 / 项目登记表，不进 schema，由拆分工具后校验。
 
+    ``require_director`` 为 True 时导演规划与 unit 级导演说明全部必填：发给模型的 response_schema 用它，
+    草稿重判与存量 script_plan 的收编用缺省的宽松形状。
+
     prompt_authoring 无对应工厂：它不产出时长，没有需要按能力收窄的枚举字段，直接用静态
     ``ReferencePromptAuthoringFlatScript``。
     """
     unit = _constrained_duration_item(
-        ReferenceScriptPlanFlatUnit,
+        ReferenceScriptPlanDirectedFlatUnit if require_director else ReferenceScriptPlanFlatUnit,
         _duration_literal(supported_durations),
         "该单元时长（秒），必须取 supported_durations 中的值",
     )
+    if not require_director:
+        return create_model(
+            "ReferenceScriptPlanFlatDraft",
+            __base__=ReferenceScriptPlanFlatDraft,
+            units=(list[unit], Field(min_length=1, description="按叙事顺序排列的 unit 列表")),
+        )
     return create_model(
         "ReferenceScriptPlanFlatDraft",
         __base__=ReferenceScriptPlanFlatDraft,
+        director_plan=(DirectorPlan, Field(description="集级导演规划，先于 units 写出")),
         units=(list[unit], Field(min_length=1, description="按叙事顺序排列的 unit 列表")),
     )

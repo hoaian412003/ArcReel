@@ -13,16 +13,19 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import httpx
+from openai import RateLimitError
 
 from lib.backends.audio_backends.base import AudioSynthesisRequest, AudioSynthesisResult, VoiceOption
 from lib.backends.audio_backends.openai import OpenAIAudioBackend
-from lib.backends.openai_shared import create_openai_client
+from lib.backends.openai_shared import OPENAI_RETRYABLE_ERRORS, create_openai_client
 from lib.backends.providers import PROVIDER_VIENEU
+from lib.infra.retry import AsyncClock, retry_async
 from lib.speech.vieneu_service import DEFAULT_HOST, DEFAULT_PORT, get_vieneu_manager
 from lib.speech.wav_header import finalize_streaming_wav
 
@@ -137,6 +140,13 @@ async def fetch_server_voices(base_url: str) -> list[VoiceOption] | None:
     return voices or None
 
 
+#: 服务忙（429：排队已满 / 等位超时）时的等待节奏（秒）：服务端一次只合成一路，几个视频同时配音时
+#: 必然要排队，等一会儿就轮到了。逐步拉长到每 15 秒一次，总共约 20 分钟，之后才放弃。
+BUSY_BACKOFF_SECONDS: tuple[int, ...] = (2, 3, 5, 8, 12, *([15] * 78))
+#: 其它瞬时错误（连接断开、超时、5xx）仍只快速重试这么多次，不跟着排队一起长等。
+_OTHER_TRANSIENT_RETRIES = 3
+
+
 class VieneuAudioBackend(OpenAIAudioBackend):
     """VieNeu-TTS 本地后端：显式 ``base_url`` 时直连外部服务，否则走托管服务（首次合成自动拉起）。"""
 
@@ -146,7 +156,13 @@ class VieneuAudioBackend(OpenAIAudioBackend):
         base_url: str | None = None,
         model: str | None = None,
         api_key: str | None = None,
+        busy_backoff_seconds: tuple[int, ...] = BUSY_BACKOFF_SECONDS,
+        clock: AsyncClock | None = None,
+        jitter: Callable[[float, float], float] | None = None,
     ) -> None:
+        self._busy_backoff = busy_backoff_seconds
+        self._clock = clock
+        self._jitter = jitter
         self._explicit_base_url = (base_url or "").strip() or None
         self._api_key = api_key or _PLACEHOLDER_API_KEY
         self._current_base_url = self._explicit_base_url or DEFAULT_BASE_URL
@@ -169,6 +185,28 @@ class VieneuAudioBackend(OpenAIAudioBackend):
 
     def _response_format(self, output_path: Path) -> str:
         return "wav"
+
+    async def _request_speech(self, request: AudioSynthesisRequest) -> bytes:
+        """服务忙就耐心排队重试，其它瞬时错误只快速重试几次；基类的快速重试在忙时撑不过一轮排队。"""
+        other_failures = 0
+
+        def should_retry(exc: Exception) -> bool:
+            nonlocal other_failures
+            if isinstance(exc, RateLimitError):
+                return True
+            if isinstance(exc, OPENAI_RETRYABLE_ERRORS):
+                other_failures += 1
+                return other_failures <= _OTHER_TRANSIENT_RETRIES
+            return False
+
+        return await retry_async(
+            lambda: self._speech_once(request),
+            max_attempts=len(self._busy_backoff) + 1,
+            backoff_seconds=self._busy_backoff,
+            retry_if=should_retry,
+            clock=self._clock,
+            jitter=self._jitter,
+        )
 
     def _use_base_url(self, base_url: str) -> None:
         if base_url != self._current_base_url:

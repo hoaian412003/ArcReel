@@ -38,6 +38,14 @@ describe("DubPreviewPlayer", () => {
     expect(screen.getByText(/50%/)).toBeInTheDocument();
   });
 
+  it("plays the original at 30% unless told otherwise, and the voice-over clips at full volume", () => {
+    const { container } = render(<DubPreviewPlayer videoUrl="/v.mp4" clips={CLIPS} />);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    expect(video.volume).toBe(0.3);
+    expect(screen.getByText(/30%/)).toBeInTheDocument();
+    for (const audio of Array.from(container.querySelectorAll("audio"))) expect(audio.volume).toBe(1);
+  });
+
   it("plays only the clip covering the current time and shows its subtitle", () => {
     const { container } = render(<DubPreviewPlayer videoUrl="/v.mp4" clips={CLIPS} />);
     const video = container.querySelector("video") as HTMLVideoElement;
