@@ -76,12 +76,12 @@ ID 参数时，前者传入，后者必须**省略该参数**，不得把 `[]` �
 
 | `next_action.type` | 执行入口 |
 |---|---|
-| `collect_project_input` | 引导用户在 Web 端补齐项目输入 |
+| `collect_project_input` | 引导用户在 Web 端补齐项目输入（drama：在分集列表上传该集源文） |
 | `draft_selling_points` | 起草卖点后经 `mcp__arcreel__patch_project` 写回（ad） |
-| `analyze_assets` | dispatch `analyze-assets` 子智能体 |
-| `reset_episode_planning` | `mcp__arcreel__reset_episode_planning`，按 `next_action.args` 传参 |
-| `plan_episodes` | `mcp__arcreel__plan_episodes` |
-| `write_screenplay` | dispatch `write-screenplay` 子智能体（旁白 / 剧情项目的新一集：本集还没有脚本规划，且没有剧本或剧本依据的源文已变化）；`args.episode` |
+| `analyze_assets` | narration：dispatch `analyze-assets` 子智能体；drama：服务端在上传分集后自动分析，只告知用户并提示可在项目概览点「分析资产」重试 |
+| `reset_episode_planning` | `mcp__arcreel__reset_episode_planning`，按 `next_action.args` 传参（narration；drama 项目不会出现） |
+| `plan_episodes` | `mcp__arcreel__plan_episodes`（narration；drama 项目不会出现，工具会拒绝） |
+| `write_screenplay` | dispatch `write-screenplay` 子智能体，由它自己编写并经 `submit_screenplay` 提交（旁白 / 剧情项目的新一集：本集还没有脚本规划，且没有剧本或剧本依据的源文已变化）；`args.episode` |
 | `review_screenplay` | 剧本待人工审阅（需要用户决定，对话中进行；Web 的 Flow 标签页是等价路径）：`mcp__arcreel__get_screenplay` 取可读剧本与逐场预计时长 / 总时长展示给用户；用户表态后通过 `mcp__arcreel__approve_screenplay`（带 `args.fingerprint`），要求修改用 `mcp__arcreel__patch_screenplay` 按场次改（`base_fingerprint` 取自 `get_screenplay`），整集重做把用户的修改要求作 `instructions`（附加指令）重跑 `write_screenplay` |
 | `prepare_script_plan` | 单元拆解：依据已通过的剧本与源文划分单元；dispatch `next_action.args.preprocessor` 指名的子智能体。有已通过剧本时拆解成功即自动完成内容确认 |
 | `confirm_script_plan` | `mcp__arcreel__confirm_script_review`（存量路径：没有剧本的集；或该集已有正式脚本、自动确认需要用户同意覆盖时） |

@@ -82,7 +82,6 @@ export default {
   'task_type_text_drama_script_plan': '脚本规划',
   'task_type_text_narration_script_plan': '脚本规划',
   'task_type_text_director_plan': '导演规划',
-  'task_type_text_screenplay': '编剧',
   'task_type_text_reference_script_plan': '脚本规划',
   'task_type_character': '角色',
   'task_type_scene': '场景',

@@ -62,7 +62,6 @@ from server.text_generation import (
     _coverage_source_scope,
     _drama_script_plan_result_text,
     _fetch_reference_split_caps,
-    _load_novel_source,
     _load_script_plan_source_with_basis,
     _narration_script_plan_path,
     _narration_script_plan_result_text,
@@ -72,6 +71,7 @@ from server.text_generation import (
     _uses_reference_video_units,
     _video_facts_failure_text,
     fetch_storyboard_durations,
+    load_novel_source,
     render_soft_violation_section,
 )
 
@@ -359,7 +359,7 @@ def _open_script_plan_draft(
 
 
 def _validate_open_source(project_path: Path, episode: int, source: str) -> None:
-    _load_novel_source(project_path, source, episode=episode)
+    load_novel_source(project_path, source, episode=episode)
 
 
 def _rewrite_invalid_draft(
@@ -1069,7 +1069,7 @@ async def _open_reference_script_plan_for_edit(
     """把本集正式参考生视频 script_plan 取回为草稿（正式文件保持原样），返回给 Agent 的编辑指引。"""
     project_path = ctx.project_path
     # source 在写草稿前校验：草稿一旦落盘就把它记进 meta.source 供晋升重判用，若此刻
-    # 是个缺失/改名/写错的路径，晋升会在 _load_novel_source 上反复报错，而草稿已在场
+    # 是个缺失/改名/写错的路径，晋升会在 load_novel_source 上反复报错，而草稿已在场
     # 又挡住重新取回改正 source——Agent 会卡在一个自己改不动的死角。校验失败时不落盘，
     # 无效参数不留持久副作用。
     if source is not None:
@@ -1275,7 +1275,7 @@ class DraftWorkflow:
         if updates_source:
             if resolved == QUARANTINE_KIND_PROMPT_AUTHORING:
                 raise DraftWorkflowError("invalid_request", "source is only valid for script_plan drafts")
-            _load_novel_source(self.ctx.project_path, source, episode=episode)
+            load_novel_source(self.ctx.project_path, source, episode=episode)
             meta = {**meta, "source": source}
         if accepts_formal_revision:
             actual_formal_revision = script_review.content_fingerprint(self._formal_path(episode, resolved))

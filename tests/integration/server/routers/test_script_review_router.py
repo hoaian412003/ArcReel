@@ -143,15 +143,15 @@ class TestGenerateScriptPlan:
         assert kwargs["resource_id"] == "episode-1"
         assert kwargs["payload"]["episode"] == 1
 
-    def test_reference_video_project_uses_the_reference_task(self, tmp_path, monkeypatch, video_request_facts):
+    def test_reference_video_project_is_not_generated_by_the_server(self, tmp_path, monkeypatch, video_request_facts):
         client, _pm = _client(monkeypatch, tmp_path, generation_mode="reference_video")
         enqueue = AsyncMock(return_value={"task_id": "task-2"})
         monkeypatch.setattr(router_mod, "enqueue_task_only", enqueue)
         with client:
             resp = client.post(self._url())
 
-        assert resp.status_code == 200, resp.text
-        assert enqueue.await_args.kwargs["task_type"] == "text_reference_script_plan"
+        assert resp.status_code == 409
+        enqueue.assert_not_awaited()
 
     def test_refuses_when_a_script_plan_already_exists(self, tmp_path, monkeypatch):
         client, pm = _client(monkeypatch, tmp_path)

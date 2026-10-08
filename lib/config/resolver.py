@@ -1688,6 +1688,11 @@ class ConfigResolver:
         project_name: str | None,
     ) -> tuple[str, str]:
         project = get_project_manager().load_project(project_name) if project_name else None
+        if task_type == TextTaskType.REVIEW_SUMMARY:
+            settings = await svc.get_all_settings()
+            raw_review = settings.get("text_backend_review", "")
+            if "/" in raw_review:
+                return ConfigService._parse_backend(raw_review, _DEFAULT_TEXT_BACKEND)
         keys = _TEXT_LAYERED_KEYS[TEXT_TASK_TIERS[task_type]]
         resolved = await self._resolve_layered_backend(svc, session, project, keys)
         if task_type in VISION_REQUIRED_TASKS:

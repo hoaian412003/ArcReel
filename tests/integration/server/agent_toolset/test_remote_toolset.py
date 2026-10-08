@@ -39,6 +39,7 @@ from server.agent_toolset.dub_voiceover import GENERATE_DUB_VOICEOVER, GET_DUB_S
 from server.agent_toolset.envelope import json_value
 from server.agent_toolset.generation_batches import CANCEL_GENERATION_BATCH, GET_GENERATION_BATCH
 from server.agent_toolset.grid_storyboards import GENERATE_GRID, SPLIT_GRIDS
+from server.agent_toolset.keyframe_planning import GET_KEYFRAME_BRIEF, SUBMIT_KEYFRAME_PLAN
 from server.agent_toolset.orientation import GET_PROMPT_PREVIEW, GET_VIDEO_CAPABILITIES
 from server.agent_toolset.project_entry import CREATE_PROJECT
 from server.agent_toolset.remote import LONG_TASK_NOTE, remote_tool
@@ -102,7 +103,18 @@ SAMPLE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "generate_dub_voiceover": {"script": "episode_1.json", "unit_ids": ["E1U1"], "skip_timing": True},
     "get_dub_status": {"script": "episode_1.json"},
     "generate_episode_script": {"episode": 1, "dry_run": True},
-    "write_screenplay": {"episode": 1, "dry_run": True},
+    "submit_screenplay": {
+        "episode": 1,
+        "title": "t",
+        "logline": "l",
+        "scenes": [
+            {
+                "heading": "内景 · 屋 · 日",
+                "summary": "s",
+                "beats": [{"kind": "dialogue", "speaker": "张三", "text": "你好"}],
+            }
+        ],
+    },
     "get_screenplay": {"episode": 1},
     "patch_screenplay": {
         "episode": 1,
@@ -111,10 +123,52 @@ SAMPLE_ARGUMENTS: dict[str, dict[str, Any]] = {
     },
     "approve_screenplay": {"episode": 1, "fingerprint": "x"},
     "generate_script_plan": {"episode": 1, "dry_run": True},
+    "get_script_plan_brief": {"episode": 1},
+    "submit_script_plan": {"episode": 1, "units": [{"duration_seconds": 4, "source_text": "s", "text": "t"}]},
     "confirm_script_review": {"episode": 1},
     "generate_director_plan": {"episode": 1, "dry_run": True},
+    "get_prompt_authoring_brief": {"episode": 1},
+    "submit_h3_prompts": {
+        "episode": 1,
+        "units": [
+            {
+                "unit_id": "E1U01",
+                "subject_definitions": "s",
+                "summary": "s",
+                "retention_analysis": "s",
+                "detailed_description": "s",
+                "overall_soundscape": "s",
+                "non_diegetic_music": "N/A",
+            }
+        ],
+    },
+    "get_director_brief": {"episode": 1},
+    "submit_director_plan": {"episode": 1, "units": [{"unit_id": "E1U01", "direction": "导演说明"}]},
     "get_direction_report": {"episode": 1},
+    "get_keyframe_brief": {"episode": 1},
+    "get_canvas": {},
+    "canvas_add_node": {"type": "text", "position": {"x": 0, "y": 0}, "text": "t"},
+    "canvas_patch_node": {"node_id": "n", "text": "t"},
+    "canvas_delete_node": {"node_id": "n"},
+    "canvas_connect": {"source": "a", "source_handle": "text", "target": "b", "target_handle": "prompt"},
+    "canvas_disconnect": {"edge_id": "e"},
+    "canvas_set_episodes": {"episodes": [1]},
+    "canvas_run_node": {"node_id": "n"},
+    "submit_keyframe_plan": {
+        "episode": 1,
+        "cells": [
+            {
+                "label": "近景",
+                "scene": "车内",
+                "staging": "甲在左、乙在右",
+                "framing": "近景",
+                "characters": ["甲"],
+                "unit_ids": ["E1U01"],
+            }
+        ],
+    },
     "decide_direction_review": {"episode": 1, "decision": "approve"},
+    "create_review_summary": {"episode": 1, "review_kind": "direction"},
     "open_draft": {"episode": 1, "doc_type": "drama_script_plan"},
     "patch_draft": {
         "episode": 1,
@@ -448,6 +502,19 @@ _PROBLEM_ON_SAMPLE = frozenset(
         GET_PROMPT_PREVIEW.name,
         GET_GENERATION_BATCH.name,
         CANCEL_GENERATION_BATCH.name,
+        # 测试项目的画布是空的：这些工具要找的节点与连线不存在（真实流程见 test_canvas_tools）。
+        "canvas_patch_node",
+        "canvas_delete_node",
+        "canvas_connect",
+        "canvas_disconnect",
+        "canvas_run_node",
+        # 测试项目不是参考生视频项目：单元拆解的简报与提交只服务该路线。
+        "get_script_plan_brief",
+        "submit_script_plan",
+        "get_director_brief",
+        "submit_director_plan",
+        "get_prompt_authoring_brief",
+        "submit_h3_prompts",
         # 测试项目已有正式脚本：确认需要覆盖认可，取回编辑副本被拒；没有在场草稿可改、可晋升。
         CONFIRM_SCRIPT_REVIEW.name,
         OPEN_DRAFT.name,
@@ -465,6 +532,10 @@ _PROBLEM_ON_SAMPLE = frozenset(
         GET_SCREENPLAY.name,
         PATCH_SCREENPLAY.name,
         APPROVE_SCREENPLAY.name,
+        "create_review_summary",
+        # 测试项目没有登记分集条目：起始帧规划找不到分集。
+        GET_KEYFRAME_BRIEF.name,
+        SUBMIT_KEYFRAME_PLAN.name,
         # 测试项目不是参考生视频，也未启用配音。
         GENERATE_DUB_VOICEOVER.name,
         GET_DUB_STATUS.name,

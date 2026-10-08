@@ -88,4 +88,6 @@ class TestResourceTypes:
             "grids",
             "reference_videos",
             "character_derivatives",
+            "keyframe_sheets",
+            "canvas_images",
         }

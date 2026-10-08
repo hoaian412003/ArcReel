@@ -96,7 +96,11 @@ export interface QueueApiCall {
 }
 
 export interface QueueTaskDetail {
-  task: QueueTaskRow & { input_digest: string | null };
+  task: QueueTaskRow & {
+    input_digest: string | null;
+    input: unknown;
+    output: unknown;
+  };
   events: QueueTaskEvent[];
   api_calls: QueueApiCall[];
 }

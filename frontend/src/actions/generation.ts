@@ -18,6 +18,7 @@
 import { API, derivativeResourceId } from "@/api";
 import i18n from "@/i18n";
 import { useAppStore } from "@/stores/app-store";
+import { keyframeSheetResourceId } from "@/types/keyframe";
 import type {
   ReferenceBatchAdmission,
   ReferenceBatchGenerateRequest,
@@ -415,4 +416,20 @@ export async function enqueueAutoDub(
     unitIds: res.unit_ids,
     skippedUnitIds: res.skipped.map((item) => item.unit_id),
   };
+}
+
+/** 生成一张起始帧联合图：资源 id 是 `episode_N/S1`，占用态按它在 tasks-store 里打标。 */
+export async function enqueueKeyframeSheet(
+  projectName: string,
+  episode: number,
+  sheetId: string,
+): Promise<EnqueueResult> {
+  const resourceId = keyframeSheetResourceId(episode, sheetId);
+  const res = await submit(
+    [markResource(projectName, "keyframe_sheet", resourceId, "keyframe_sheet")],
+    () => API.generateKeyframeSheet(projectName, episode, sheetId),
+    oneTaskId,
+  );
+  notifyEnqueued(res.deduped, i18n.t("dashboard:keyframe_sheet_task_submitted_toast", { id: sheetId }));
+  return { taskIds: [res.task_id], deduped: res.deduped };
 }

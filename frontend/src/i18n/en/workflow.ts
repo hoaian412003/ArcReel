@@ -80,7 +80,6 @@ export default {
   'task_type_text_drama_script_plan': 'Script plan',
   'task_type_text_narration_script_plan': 'Script plan',
   'task_type_text_director_plan': 'Director plan',
-  'task_type_text_screenplay': 'Screenplay',
   'task_type_text_reference_script_plan': 'Script plan',
   'task_type_character': 'Character',
   'task_type_scene': 'Scene',

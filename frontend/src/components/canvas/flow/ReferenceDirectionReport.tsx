@@ -33,10 +33,14 @@ function UnitCard({ row, warned }: { row: ReferenceDirectionRow; warned: boolean
           {row.id}
         </span>
         {row.unit_type && <span className="shrink-0 font-mono text-[10.5px] text-text-4">{row.unit_type}</span>}
-        <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-text">{row.brief || row.description}</p>
+        <p className="min-w-0 flex-1 whitespace-pre-wrap text-[12.5px] leading-relaxed text-text">
+          {row.direction || row.brief || row.description}
+        </p>
         {warned && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />}
       </div>
 
+      {row.direction ? null : (
+        <>
       {row.shots.length > 0 && (
         <ol className="flex flex-col gap-1" aria-label={t("flow_dr_shots")}>
           {row.shots.map((shot, index) => (
@@ -99,6 +103,8 @@ function UnitCard({ row, warned }: { row: ReferenceDirectionRow; warned: boolean
         {row.continuity_in && <Labeled label={t("flow_dr_continuity_in")}>{row.continuity_in}</Labeled>}
         {row.continuity_out && <Labeled label={t("flow_dr_continuity_out")}>{row.continuity_out}</Labeled>}
       </dl>
+        </>
+      )}
     </li>
   );
 }

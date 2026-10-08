@@ -1,4 +1,4 @@
-"""编剧步骤：生成工具、剧本读写与审阅工具（Agent 与 REST 共用同一服务）。"""
+"""编剧步骤：提交工具、剧本读写与审阅工具（Agent 与 REST 共用同一服务）。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import pytest
 from lib.project.project_manager import ProjectManager
 from lib.script import screenplay
 from server.services.project.workflow_planner import WorkflowPlanner
-from server.text_generation import TextGenerationError, TextGenerationRequest, generate_screenplay
 from server.tool_runtime import (
     ApproveScreenplayRequest,
     CallerContext,
@@ -19,10 +18,12 @@ from server.tool_runtime import (
     ProjectScope,
     ScreenplayRequest,
     Services,
+    SubmitScreenplayRequest,
     ToolRequest,
     approve_screenplay,
     get_screenplay,
     patch_screenplay,
+    submit_screenplay,
 )
 from tests.fakes import FakeConfigResolver
 
@@ -49,31 +50,6 @@ def _model_output(**overrides: Any) -> str:
     )
 
 
-class _Generator:
-    def __init__(self, text: str) -> None:
-        self.text = text
-        self.prompts: list[str] = []
-        self.schemas: list[Any] = []
-
-    async def generate(self, request, project_name=None):
-        self.prompts.append(request.prompt)
-        self.schemas.append(request.response_schema)
-
-        class _Result:
-            text = self.text
-
-        return _Result()
-
-
-def _use_generator(monkeypatch: pytest.MonkeyPatch, generator: _Generator) -> None:
-    from server import text_generation as mod
-
-    async def fake_create(_task_type, project_name=None, **_kwargs):
-        return generator
-
-    monkeypatch.setattr(mod.TextGenerator, "create", fake_create)
-
-
 def _project(tmp_path: Path, content_mode: str = "drama", generation_mode: str = "storyboard") -> ProjectManager:
     pm = ProjectManager(tmp_path / "projects")
     pm.create_project("demo")
@@ -87,14 +63,39 @@ def _project(tmp_path: Path, content_mode: str = "drama", generation_mode: str =
     return pm
 
 
-async def _write(pm: ProjectManager, **request: Any) -> str:
-    result = await generate_screenplay(
-        TextGenerationRequest(episode=1, **request),
-        project_name="demo",
-        projects=pm,
-        config_resolver=FakeConfigResolver(),
-    )
-    return result.message
+def _services(pm: ProjectManager) -> Services:
+    return Services(projects=pm, workflow_planner=WorkflowPlanner(pm), capabilities=FakeConfigResolver())
+
+
+def _beat(kind: str = "dialogue", text: str = "你来了。", **extra: Any) -> dict[str, Any]:
+    beat: dict[str, Any] = {"kind": kind, "text": text, **extra}
+    if kind == "dialogue":
+        beat.setdefault("speaker", "阿离")
+    if kind == "action":
+        beat.setdefault("seconds", 4)
+    return beat
+
+
+def _submission(*, scenes: list[dict[str, Any]] | None = None, **overrides: Any) -> dict[str, Any]:
+    default_scene = {
+        "heading": "内景 · 府门 · 日",
+        "summary": "老管家送来亲笔信",
+        "beats": [_beat("action", "老管家递上书信。"), _beat(text="这是少爷的亲笔信。", speaker="阿离")],
+    }
+    return {
+        "episode": 1,
+        "title": "边关来信",
+        "logline": "一封信带来谜团",
+        "scenes": scenes or [default_scene],
+        **overrides,
+    }
+
+
+async def _submit(pm: ProjectManager, **overrides: Any) -> Any:
+    services = _services(pm)
+    scope = ProjectScope(project_name="demo", data_root=pm.data_root)
+    request = ToolRequest(SubmitScreenplayRequest.model_validate(_submission(**overrides)))
+    return await submit_screenplay(request, scope, _CALLER, services)
 
 
 @pytest.mark.parametrize(
@@ -106,35 +107,29 @@ async def _write(pm: ProjectManager, **request: Any) -> str:
         ("drama", "reference_video"),
     ],
 )
-async def test_the_screenwriter_serves_every_non_ad_route_with_one_model_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content_mode: str, generation_mode: str
+async def test_the_screenwriter_submission_serves_every_non_ad_route(
+    tmp_path: Path, content_mode: str, generation_mode: str
 ) -> None:
     pm = _project(tmp_path, content_mode, generation_mode)
-    generator = _Generator(_model_output())
-    _use_generator(monkeypatch, generator)
 
-    message = await _write(pm)
+    outcome = await _submit(pm)
 
-    assert len(generator.prompts) == 1
-    assert generator.schemas == [screenplay.ScreenplayDraft]
-    assert "阿离在府门前等来了老管家" in generator.prompts[0]
+    assert outcome.problem is None
     saved = screenplay.load_screenplay(pm.get_project_path("demo"), 1)
     assert saved is not None
-    assert [scene["estimated_seconds"] for scene in saved["scenes"]] == [12, 8]
+    assert saved["scenes"][0]["text"] == "老管家递上书信。\n\n**阿离**: 这是少爷的亲笔信。"
     assert screenplay.review_status(saved) == "pending_review"
-    assert "约 20 秒" in message
+    assert saved["source_digest"] == screenplay.source_digest("阿离在府门前等来了老管家。")
+    assert outcome.value.total_seconds == saved["scenes"][0]["estimated_seconds"]
+    assert "已写入" in outcome.value.message
 
 
-async def test_a_rewrite_replaces_the_screenplay_and_clears_the_review(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_a_resubmission_replaces_the_screenplay_and_clears_the_review(tmp_path: Path) -> None:
     pm = _project(tmp_path)
-    _use_generator(monkeypatch, _Generator(_model_output()))
-    await _write(pm)
+    await _submit(pm)
     screenplay.approve_screenplay(pm.get_project_path("demo"), 1)
 
-    _use_generator(monkeypatch, _Generator(_model_output(title="新版")))
-    await _write(pm)
+    await _submit(pm, title="新版")
 
     saved = screenplay.load_screenplay(pm.get_project_path("demo"), 1)
     assert saved is not None
@@ -142,47 +137,55 @@ async def test_a_rewrite_replaces_the_screenplay_and_clears_the_review(
     assert screenplay.review_status(saved) == "pending_review"
 
 
-async def test_dry_run_returns_the_prompt_without_calling_the_model_or_writing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_warnings_are_reported_but_the_screenplay_is_still_written(tmp_path: Path) -> None:
     pm = _project(tmp_path)
-    generator = _Generator(_model_output())
-    _use_generator(monkeypatch, generator)
+    pm.update_project("demo", lambda project: project.__setitem__("episode_target_duration", 60))
 
-    message = await _write(pm, dry_run=True)
+    outcome = await _submit(pm)
 
-    assert message.startswith("DRY RUN")
-    assert generator.prompts == []
+    assert outcome.problem is None
+    assert any("偏离目标 60 秒" in warning for warning in outcome.value.warnings)
+    assert "质量检查未通过" in outcome.value.message
+    assert screenplay.load_screenplay(pm.get_project_path("demo"), 1) is not None
+
+
+async def test_an_episode_without_any_spoken_beat_is_rejected_and_nothing_is_written(tmp_path: Path) -> None:
+    pm = _project(tmp_path)
+    scene = {"heading": "内景 · 府门 · 日", "summary": "无声", "beats": [_beat("action", "她站着。")]}
+
+    outcome = await _submit(pm, scenes=[scene])
+
+    assert outcome.problem is not None
+    assert outcome.problem.code == "screenplay_rejected"
+    assert "没有任何对白" in outcome.problem.detail
     assert screenplay.load_screenplay(pm.get_project_path("demo"), 1) is None
 
 
-async def test_unusable_model_output_fails_loudly_and_writes_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pm = _project(tmp_path)
-    _use_generator(monkeypatch, _Generator(_model_output(scenes=[_scene(estimated_seconds=0)])))
-
-    with pytest.raises(TextGenerationError, match="剧本"):
-        await _write(pm)
-
-    assert screenplay.load_screenplay(pm.get_project_path("demo"), 1) is None
+async def test_malformed_beats_are_rejected_by_the_request_schema() -> None:
+    with pytest.raises(ValueError, match="speaker"):
+        SubmitScreenplayRequest.model_validate(
+            _submission(scenes=[{"heading": "h", "summary": "s", "beats": [{"kind": "dialogue", "text": "嗯"}]}])
+        )
 
 
-async def test_ad_projects_have_no_screenplay_step(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_ad_projects_have_no_screenplay_step(tmp_path: Path) -> None:
     pm = _project(tmp_path, "ad")
-    _use_generator(monkeypatch, _Generator(_model_output()))
 
-    with pytest.raises(TextGenerationError, match="广告"):
-        await _write(pm)
+    outcome = await _submit(pm)
+
+    assert outcome.problem is not None
+    assert "广告" in outcome.problem.detail
 
 
-async def test_a_missing_source_is_reported_as_a_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_missing_source_is_reported_as_a_refusal(tmp_path: Path) -> None:
     pm = _project(tmp_path)
     (pm.get_project_path("demo") / "source" / "episode_1.txt").unlink()
-    _use_generator(monkeypatch, _Generator(_model_output()))
 
-    with pytest.raises(TextGenerationError):
-        await _write(pm)
+    outcome = await _submit(pm)
+
+    assert outcome.problem is not None
+    assert outcome.problem.code == "generation_refused"
+    assert screenplay.load_screenplay(pm.get_project_path("demo"), 1) is None
 
 
 @pytest.fixture

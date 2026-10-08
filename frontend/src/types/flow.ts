@@ -20,6 +20,25 @@ export interface FlowBoard {
   cards: FlowCard[];
 }
 
+export type ReviewTaskKind = "screenplay" | "script_plan" | "direction";
+
+export interface ReviewTask {
+  id: string;
+  episode: number;
+  title: string;
+  kind: ReviewTaskKind;
+  fingerprint: string;
+  blockers: Array<{ code?: string; message?: string; detail?: string }>;
+  summary: string | null;
+  summary_status: "missing" | "ready";
+  summary_provider: string | null;
+  summary_model: string | null;
+}
+
+export interface ReviewTasksResponse {
+  tasks: ReviewTask[];
+}
+
 export type DirectionReviewStatus =
   | "not_applicable"
   | "no_direction"
@@ -70,6 +89,8 @@ export interface ReferenceDirectionRow {
   id: string;
   description: string;
   duration_seconds: number;
+  /** 导演写的自由文本说明；有它时报告只展示这段文字，不再拆成分项。 */
+  direction?: string;
   unit_type: string;
   brief: string;
   shots: ReferenceDirectionShot[];

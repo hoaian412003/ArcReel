@@ -333,6 +333,8 @@ class SystemConfigPatchRequest(BaseModel):
     # 各档未设置回退 default_text_backend。
     text_backend_simple: str | None = None
     text_backend_complex: str | None = None
+    # Human-facing Vietnamese review summaries. Empty follows the simple tier.
+    text_backend_review: str | None = None
 
 
 # Setting keys that map directly to string DB settings
@@ -417,6 +419,7 @@ async def get_system_config(
         "agent_max_concurrent_sessions": int(all_s.get("agent_max_concurrent_sessions") or "5"),
         "text_backend_simple": all_s.get("text_backend_simple") or "",
         "text_backend_complex": all_s.get("text_backend_complex") or "",
+        "text_backend_review": all_s.get("text_backend_review") or "",
         "market_github_proxy_prefix": all_s.get(PROXY_PREFIX_SETTING) or "",
     }
 
@@ -535,6 +538,7 @@ async def patch_system_config(
         "default_audio_backend",
         "text_backend_simple",
         "text_backend_complex",
+        "text_backend_review",
     ):
         if backend_key in patch:
             value = str(patch[backend_key] or "").strip()

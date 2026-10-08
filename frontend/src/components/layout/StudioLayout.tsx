@@ -10,7 +10,8 @@ import { DemoReadOnlyBanner } from "@/onboarding/DemoReadOnlyBanner";
 import { useDemoWorkbench } from "@/onboarding/use-demo-workbench";
 import { isDemoProject } from "@/onboarding/demo-project";
 import { Bot } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
+import { useClaudeStore } from "@/stores/claude-store";
 import { ClaudePanel } from "@/components/claude/ClaudePanel";
 import { useTranslation } from "react-i18next";
 
@@ -23,7 +24,9 @@ interface StudioLayoutProps {
  */
 export function StudioLayout({ children }: StudioLayoutProps) {
   const { t } = useTranslation("dashboard");
-  const [claudeOpen, setClaudeOpen] = useState(false);
+  const openProject = useClaudeStore((s) => s.openProject);
+  const openClaude = useClaudeStore((s) => s.open);
+  const closeClaude = useCallback(() => useClaudeStore.getState().close(), []);
   const [, setLocation] = useLocation();
   const currentProjectName = useProjectsStore((s) => s.currentProjectName);
   // 演示项目在后端不存在：任务 / 项目事件流都是真实写路径，演示态下整条都不接
@@ -35,7 +38,7 @@ export function StudioLayout({ children }: StudioLayoutProps) {
   // 同步这一判定，否则该帧会退化成对全局任务的轮询而非真正停用。
   const isEffectivelyDemo = demoMode || isDemoProject(currentProjectName);
   const sseProjectName = isEffectivelyDemo ? null : currentProjectName;
-  const closeClaude = useCallback(() => setClaudeOpen(false), []);
+  const claudeOpen = openProject === currentProjectName;
   useTaskRefresh(sseProjectName, !isEffectivelyDemo);
   useProjectEventsSSE(sseProjectName);
 
@@ -54,13 +57,13 @@ export function StudioLayout({ children }: StudioLayoutProps) {
           {children}
         </main>
         {!isEffectivelyDemo && currentProjectName && claudeOpen ? (
-          <ClaudePanel projectName={currentProjectName} onClose={closeClaude} />
+          <ClaudePanel key={currentProjectName} projectName={currentProjectName} onClose={closeClaude} />
         ) : null}
       </div>
       {!isEffectivelyDemo && currentProjectName && !claudeOpen ? (
         <button
           type="button"
-          onClick={() => setClaudeOpen(true)}
+          onClick={() => openClaude(currentProjectName)}
           aria-label={t("claude_open")}
           className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full bg-[#d7ff45] px-4 py-2.5 text-sm font-semibold text-black shadow-xl"
         >

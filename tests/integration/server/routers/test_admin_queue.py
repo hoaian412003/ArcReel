@@ -106,7 +106,13 @@ async def test_task_list_filters_and_aggregates_cost_and_coins(admin_client, pro
 
 @pytest.mark.asyncio
 async def test_task_detail_returns_timeline_and_calls_in_order(admin_client, project):
-    task_id = await _seed(project, "running", input_digest="d" * 64)
+    task_id = await _seed(
+        project,
+        "running",
+        input_digest="d" * 64,
+        payload_json='{"prompt":"fly over the city"}',
+        result_json='{"path":"videos/final.mp4"}',
+    )
     now = datetime.now(UTC)
     async with async_session_factory() as session:
         session.add_all(
@@ -121,6 +127,8 @@ async def test_task_detail_returns_timeline_and_calls_in_order(admin_client, pro
     body = admin_client.get(f"/api/v1/admin/queue/tasks/{task_id}").json()
 
     assert body["task"]["input_digest"] == "d" * 64
+    assert body["task"]["input"] == {"prompt": "fly over the city"}
+    assert body["task"]["output"] == {"path": "videos/final.mp4"}
     assert [e["kind"] for e in body["events"]] == ["running", "submitted"]
     assert body["events"][1]["data"] == {"provider_job_id": "j"}
     assert [(c["cost_amount"], c["provider_coins"]) for c in body["api_calls"]] == [(0.5, 2.0)]

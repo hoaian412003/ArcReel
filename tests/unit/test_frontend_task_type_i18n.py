@@ -47,7 +47,6 @@ TEXT_TASK_TYPES = frozenset(
         "text_narration_script_plan",
         "text_reference_script_plan",
         "text_director_plan",
-        "text_screenplay",
     }
 )
 
@@ -56,8 +55,15 @@ UNIT_TASK_TYPES = frozenset({"storyboard", "grid", "tts", "video", "reference_vi
 #: 越南语配音的三类任务（撰写台词、合成音频、整条自动配音）只出现在任务面板，不是工作流步骤挂载的任务。
 DUB_TASK_TYPES = frozenset({"dub_auto", "dub_tts", "text_reference_dub_lines"})
 
+#: 上传分集源文后入队的资产分析任务同样只出现在任务面板。
+ASSET_ANALYSIS_TASK_TYPES = frozenset({"text_asset_analysis"})
+
 FIXED_TASK_TYPES = (
-    TEXT_TASK_TYPES | UNIT_TASK_TYPES | DUB_TASK_TYPES | {"image_edit", "voice_sample", DERIVATIVE_TASK_TYPE}
+    TEXT_TASK_TYPES
+    | UNIT_TASK_TYPES
+    | DUB_TASK_TYPES
+    | ASSET_ANALYSIS_TASK_TYPES
+    | {"image_edit", "voice_sample", "canvas_image", DERIVATIVE_TASK_TYPE}
 )
 
 ALL_TASK_TYPES = FIXED_TASK_TYPES | frozenset(ASSET_SPECS.keys())

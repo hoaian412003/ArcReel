@@ -116,6 +116,14 @@ describe("EpisodeSourceReview", () => {
       total_seconds: 12,
       scenes: [{ heading: "内景 · 茶馆 · 夜", summary: "主角登场", estimated_seconds: 12, text: "他推门而入。" }],
     });
+    const approveScreenplay = vi.spyOn(API, "approveScreenplay").mockResolvedValue({
+      episode: 1,
+      status: "approved",
+      fingerprint: "fp",
+      title: "初遇",
+      total_seconds: 12,
+      scenes: [{ heading: "内景 · 茶馆 · 夜", summary: "主角登场", estimated_seconds: 12, text: "他推门而入。" }],
+    });
 
     render(<EpisodeSourceReview projectName="demo" episode={1} episodes={[makeEpisode()]} />);
     await waitFor(() => expect(screen.getByText("这是本集源文……")).toBeInTheDocument());
@@ -124,6 +132,9 @@ describe("EpisodeSourceReview", () => {
     fireEvent.click(screen.getByRole("button", { name: "剧本" }));
     await waitFor(() => expect(screen.getByDisplayValue("内景 · 茶馆 · 夜")).toBeInTheDocument());
     expect(getScreenplay).toHaveBeenCalledWith("demo", 1, expect.anything());
+    expect(screen.getByRole("heading", { name: "编剧报告" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "通过剧本" }));
+    await waitFor(() => expect(approveScreenplay).toHaveBeenCalledWith("demo", 1, "fp"));
     expect(screen.queryByText("这是本集源文……")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "原文" }));

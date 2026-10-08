@@ -5,13 +5,11 @@ import { referenceVideoCacheKey, useReferenceVideoStore } from "@/stores/referen
 import type { H3PromptStatus, ReferenceVideoUnit } from "@/types";
 import { H3PromptControls, H3RegenerateAllButton } from "./H3PromptControls";
 
-vi.mock("@/api", () => ({
-  API: {
-    patchReferenceUnitH3Prompt: vi.fn(),
-    regenerateH3Prompts: vi.fn(),
-    listReferenceVideoUnits: vi.fn(),
-  },
-}));
+beforeEach(() => {
+  vi.spyOn(API, "patchReferenceUnitH3Prompt");
+  vi.spyOn(API, "regenerateH3Prompts");
+  vi.spyOn(API, "listReferenceVideoUnits");
+});
 
 const KEY = referenceVideoCacheKey("demo", 1);
 

@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from lib.infra.api_errors import BadRequestError, ConflictError, NotFoundError
 from server.auth import CurrentUser
+from server.claude_runtime.actions import ClaudeAction
 from server.claude_runtime.auth import (
     ClaudeAuthBusyError,
     ClaudeAuthLoginNotFoundError,
@@ -18,8 +21,8 @@ from server.claude_runtime.auth import (
 )
 from server.claude_runtime.service import (
     ClaudeSessionService,
+    ClaudeUnavailableError,
     PermissionRequestNotFoundError,
-    SessionBusyError,
 )
 from server.sse_channel import IDLE
 
@@ -40,12 +43,121 @@ class CompleteClaudeLoginRequest(BaseModel):
     code: str = Field(min_length=1, max_length=4096)
 
 
+class WriteClaudeMemoryRequest(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9_-]+\.md$")
+    content: str = Field(max_length=200_000)
+
+
+class PromoteClaudeMemoryRequest(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9_-]+\.md$")
+
+
 def get_claude_service(request: Request) -> ClaudeSessionService:
     return request.app.state.claude_session_service
 
 
 def get_claude_auth(request: Request) -> ClaudeAuthManager:
     return request.app.state.claude_auth_manager
+
+
+@router.post("/projects/{project_name}/claude/actions", status_code=202)
+async def send_claude_action(project_name: str, body: ClaudeAction, request: Request, user: CurrentUser) -> dict:
+    try:
+        return await get_claude_service(request).send_action(project_name, body, user_id=user.id)
+    except ValueError as exc:
+        raise BadRequestError("claude_action_invalid").with_diagnostic(str(exc)) from exc
+    except ClaudeUnavailableError as exc:
+        raise ConflictError("claude_auth_required") from exc
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
+
+
+@router.get("/projects/{project_name}/claude/agent")
+async def get_project_claude_agent(project_name: str, request: Request, user: CurrentUser) -> dict:
+    service = get_claude_service(request)
+    try:
+        workspace = await service.workspace(project_name, user.id)
+        sessions = await service.list_sessions(project_name, user_id=user.id)
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
+    auth = await get_claude_auth(request).status()
+    return {
+        "agent_id": workspace.agent_id,
+        "main_session_id": workspace.main_session(user.id),
+        "workspace": str(workspace.cwd),
+        "memory_path": str(workspace.memory_dir),
+        "memory_enabled": True,
+        "logged_in": auth["logged_in"],
+        "mcp_available": True,
+        "skills": [p.parent.name for p in (workspace.cwd / ".claude" / "skills").glob("*/SKILL.md")],
+        "sessions": sessions,
+    }
+
+
+@router.get("/projects/{project_name}/claude/memory")
+async def get_claude_memory(project_name: str, request: Request, user: CurrentUser) -> dict:
+    try:
+        workspace = await get_claude_service(request).workspace(project_name, user.id)
+        return {"files": await asyncio.to_thread(workspace.memory)}
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
+
+
+@router.put("/projects/{project_name}/claude/memory")
+async def write_claude_memory(
+    project_name: str, body: WriteClaudeMemoryRequest, request: Request, user: CurrentUser
+) -> dict:
+    workspace = await get_claude_service(request).workspace(project_name, user.id)
+    try:
+        await asyncio.to_thread(workspace.write_memory, body.name, body.content)
+    except ValueError as exc:
+        raise BadRequestError("claude_memory_invalid").with_diagnostic(str(exc)) from exc
+    return {"saved": True}
+
+
+@router.post("/projects/{project_name}/claude/memory/promote")
+async def promote_claude_memory(
+    project_name: str, body: PromoteClaudeMemoryRequest, request: Request, user: CurrentUser
+) -> dict:
+    workspace = await get_claude_service(request).workspace(project_name, user.id)
+    try:
+        await asyncio.to_thread(workspace.promote, body.name)
+    except ValueError as exc:
+        raise BadRequestError("claude_memory_invalid").with_diagnostic(str(exc)) from exc
+    return {"promoted": True}
+
+
+@router.post("/projects/{project_name}/claude/memory/reset")
+async def reset_claude_memory(project_name: str, request: Request, user: CurrentUser) -> dict:
+    service = get_claude_service(request)
+    workspace = await service.workspace(project_name, user.id)
+    sessions = await service.list_sessions(project_name, user_id=user.id)
+    if any(s["status"] == "running" for s in sessions):
+        raise ConflictError("claude_session_busy")
+    await asyncio.to_thread(workspace.reset)
+    return {"reset": True, "backup_retained": True}
+
+
+@router.get("/projects/{project_name}/claude/export")
+async def export_claude_agent(project_name: str, request: Request, user: CurrentUser) -> Response:
+    service = get_claude_service(request)
+    workspace = await service.workspace(project_name, user.id)
+    history = {}
+    sdk_session_ids = []
+    for session in await service.list_sessions(project_name, user_id=user.id):
+        row = await service.require_session(session["id"], project_name=project_name, user_id=user.id)
+        sdk_session_ids.append(row["sdk_session_id"])
+        history[session["id"]] = {
+            "session": session,
+            "events": await service.events(session["id"], user_id=user.id),
+            "usage": await service.turns(session["id"], project_name=project_name, user_id=user.id),
+        }
+    archive = await asyncio.to_thread(workspace.export, history, sdk_session_ids)
+    return Response(
+        archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="claude-{workspace.agent_id}.zip"'},
+    )
 
 
 @router.get("/claude/auth/status")
@@ -97,6 +209,19 @@ async def list_claude_sessions(
     return {"sessions": sessions}
 
 
+@router.delete("/projects/{project_name}/claude/sessions")
+async def clear_claude_sessions(
+    project_name: str,
+    request: Request,
+    user: CurrentUser,
+) -> dict:
+    try:
+        deleted = await get_claude_service(request).clear_sessions(project_name, user_id=user.id)
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
+    return {"deleted": deleted}
+
+
 @router.post("/projects/{project_name}/claude/messages", status_code=202)
 async def send_claude_message(
     project_name: str,
@@ -119,8 +244,8 @@ async def send_claude_message(
         if body.session_id:
             raise NotFoundError("claude_session_not_found") from exc
         raise NotFoundError("project_not_found", name=project_name) from exc
-    except SessionBusyError as exc:
-        raise ConflictError("claude_session_busy") from exc
+    except ClaudeUnavailableError as exc:
+        raise ConflictError("claude_auth_required") from exc
 
 
 @router.get("/projects/{project_name}/claude/sessions/{session_id}/events")

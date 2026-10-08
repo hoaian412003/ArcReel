@@ -67,6 +67,8 @@ from lib.prompts.prompt_templates import TemplateError
 from lib.prompts.style_templates import is_known_template, resolve_template_prompt
 from lib.prompts.video_prompt_profile import (
     DEFAULT_VIDEO_PROMPT_PROFILE,
+    H3_PROMPT_LANGUAGE_FIELD,
+    VALID_H3_PROMPT_LANGUAGES,
     VALID_VIDEO_PROMPT_PROFILES,
     h3_ref2va_supported,
 )
@@ -312,6 +314,8 @@ class UpdateProjectRequest(BaseModel):
     character_voice_binding: str | None = None
     # 参考生视频提示词档：default / h3_ref2va；null / 空串 = 清除、回落默认档
     video_prompt_profile: str | None = None
+    # H3 六段提示词书写语言：en（默认）/ zh；null / 空串 = 清除、回落英文
+    h3_prompt_language: str | None = None
     # H3 写作指南预设：null / 空串 = 清除、继承全局设置
     h3_guide_preset: str | None = None
     # H3 自定义写作指南正文：null / 空串 = 清除、继承全局设置
@@ -1028,6 +1032,14 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                         project[VIDEO_PROMPT_PROFILE_FIELD] = profile
                     else:
                         raise HTTPException(status_code=422, detail=_t("video_prompt_profile_invalid"))
+                if "h3_prompt_language" in req.model_fields_set:
+                    language = (req.h3_prompt_language or "").strip()
+                    if not language or language == "en":
+                        project.pop(H3_PROMPT_LANGUAGE_FIELD, None)
+                    elif language in VALID_H3_PROMPT_LANGUAGES and h3_ref2va_supported(project):
+                        project[H3_PROMPT_LANGUAGE_FIELD] = language
+                    else:
+                        raise HTTPException(status_code=422, detail=_t("h3_prompt_language_invalid"))
                 if "h3_guide_preset" in req.model_fields_set:
                     preset = (req.h3_guide_preset or "").strip()
                     if not preset:

@@ -1,6 +1,6 @@
 export default {
   title: "Queue Monitor",
-  subtitle: "Generation worker, concurrency lanes, tasks and audit trail",
+  subtitle: "Generation worker, concurrency lanes and tasks",
   back: "Back to projects",
   open_monitor: "Queue monitor",
   tabs_label: "Queue monitor sections",
@@ -79,6 +79,10 @@ export default {
   "detail.close": "Close",
   "detail.summary": "Summary",
   "detail.error": "Error",
+  "detail.input": "Input",
+  "detail.input_empty": "No input recorded",
+  "detail.output": "Output",
+  "detail.output_empty": "No output recorded yet",
   "detail.events": "Event timeline",
   "detail.events_empty": "No events recorded",
   "detail.api_calls": "API calls",

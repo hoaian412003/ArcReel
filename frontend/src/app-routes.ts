@@ -26,6 +26,8 @@ export const WORKSPACE_ROUTE_SCENES = "scenes";
 export const WORKSPACE_ROUTE_PROPS = "props";
 export const WORKSPACE_ROUTE_PRODUCTS = "products";
 export const WORKSPACE_ROUTE_FLOW = "flow";
+export const WORKSPACE_ROUTE_REVIEWS = "reviews";
+export const WORKSPACE_ROUTE_NODE_CANVAS = "canvas";
 export const WORKSPACE_ROUTE_EPISODES = "episodes";
 /** `episodes/:n/edit` 下的剪辑时间线编辑器。 */
 export const WORKSPACE_ROUTE_EPISODE_EDIT = "edit";
@@ -42,6 +44,8 @@ const WORKSPACE_STATIC_LEAF_ROUTES = [
   WORKSPACE_ROUTE_PROPS,
   WORKSPACE_ROUTE_PRODUCTS,
   WORKSPACE_ROUTE_FLOW,
+  WORKSPACE_ROUTE_REVIEWS,
+  WORKSPACE_ROUTE_NODE_CANVAS,
 ] as const;
 
 /**

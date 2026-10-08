@@ -51,6 +51,9 @@ from lib.workflow.workflow_rules import workflow_rule
 
 logger = logging.getLogger(__name__)
 
+#: 分集由用户逐集上传、不经分集规划的 content_mode：账本只由上传登记，工作流不产生规划 / 重置动作。
+_MANUAL_EPISODE_MODES = frozenset({"drama"})
+
 WorkflowStateName = Literal[
     "PROJECT_INPUT",
     "SELLING_POINTS",
@@ -654,6 +657,8 @@ class WorkflowStateService:
 
     @staticmethod
     def _planning_action(project: dict[str, Any], reason: str) -> WorkflowNextAction:
+        if project.get("content_mode") in _MANUAL_EPISODE_MODES:
+            return _action(WorkflowActionType.COLLECT_PROJECT_INPUT, "episode source has not been uploaded")
         if episodes_without_source_range(project):
             return _action(
                 WorkflowActionType.RESET_EPISODE_PLANNING,
@@ -677,6 +682,8 @@ class WorkflowStateService:
 
         if source is None or not source.files:
             return False
+        if project.get("content_mode") in _MANUAL_EPISODE_MODES:
+            return True
         if all(is_derived_episode_name(PurePosixPath(rel).name) for rel in source.files):
             return True
         recorded_fingerprints = project.get(SOURCE_FINGERPRINTS_KEY)
@@ -1378,19 +1385,27 @@ class WorkflowStateService:
                     "expected_source_revision": source.revision if source else None,
                 },
             )
-        elif mode != "ad" and _planning_fingerprints_diverged(project, shared.planning_sources):
+        elif mode not in _MANUAL_EPISODE_MODES and _planning_fingerprints_diverged(project, shared.planning_sources):
             state = "EPISODE_PLAN"
             next_action = _action(
                 WorkflowActionType.RESET_EPISODE_PLANNING,
                 "source files changed after episode planning",
                 args={"from_episode": 1},
             )
-        elif mode != "ad" and _new_source_precedes_cursor(project, shared.planning_sources):
+        elif mode not in _MANUAL_EPISODE_MODES and _new_source_precedes_cursor(project, shared.planning_sources):
             state = "EPISODE_PLAN"
             next_action = _action(
                 WorkflowActionType.RESET_EPISODE_PLANNING,
                 "new source text precedes the current planning cursor",
                 args={"from_episode": 1},
+            )
+        elif mode in _MANUAL_EPISODE_MODES and selected is None:
+            # 手动上传分集的项目没有分集规划：账本里还没有这一集，等用户上传
+            state = "PROJECT_INPUT"
+            next_action = _action(
+                WorkflowActionType.COLLECT_PROJECT_INPUT,
+                "episode source has not been uploaded",
+                args={"episode": episode} if episode is not None else {},
             )
         elif mode != "ad" and selected is None:
             state = "EPISODE_PLAN"

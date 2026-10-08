@@ -50,6 +50,7 @@ from server.routers import (
     admin_queue,
     api_keys,
     assets,
+    canvas,
     characters,
     claude_sessions,
     cost_estimation,
@@ -59,10 +60,12 @@ from server.routers import (
     dub,
     edit_timelines,
     end_frames,
+    episode_sources,
     files,
     flow_board,
     generate,
     grids,
+    keyframes,
     market,
     onboarding,
     presentations,
@@ -73,6 +76,7 @@ from server.routers import (
     props,
     providers,
     reference_videos,
+    review_inbox,
     scenes,
     screenplay,
     script_review,
@@ -441,6 +445,12 @@ app.include_router(
 )
 app.include_router(files.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["文件管理"])
 app.include_router(
+    episode_sources.router,
+    prefix="/api/v1",
+    dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
+    tags=["分集源文"],
+)
+app.include_router(
     generate.router,
     prefix="/api/v1",
     dependencies=[Depends(get_current_user), Depends(require_project_migration_ok)],
@@ -456,7 +466,10 @@ app.include_router(
     direction_review.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["导演审阅"]
 )
 app.include_router(screenplay.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["编剧剧本"])
+app.include_router(canvas.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["节点画布"])
+app.include_router(keyframes.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["起始帧"])
 app.include_router(flow_board.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Flow 看板"])
+app.include_router(review_inbox.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["审阅收件箱"])
 app.include_router(
     shot_uploads.router,
     prefix="/api/v1",

@@ -167,3 +167,35 @@ class TestRendering:
         assert "<Audio 1>: reference - the voice timbre of <Subject 1>." in prompt
         with pytest.raises(H3PromptUnavailable):
             render_h3_prompt(payload, TEXT, PROJECT, references, [])
+
+
+class TestPromptLanguage:
+    def _zh_sections(self) -> dict[str, str]:
+        return {
+            "subject_definitions": "@[Lan] 是 <Picture @[Lan]> 中的主角。\n@[Mo] 是 <Picture @[Mo]> 中的主角。\n@[Tavern] 是 <Picture @[Tavern]> 中的场景。",
+            "summary": "[reference generation] @[Lan] 与 @[Mo] 在 @[Tavern] 里对话。",
+            "retention_analysis": (
+                "@[Lan] (appears in [Shot 1]): fully_preserved - 参考图定义了其外貌。\n"
+                "@[Mo] (appears in [Shot 1]): fully_preserved - 参考图定义了其外貌。\n"
+                "@[Tavern] (appears in [Shot 1]): fully_preserved - 参考图定义了场景。"
+            ),
+            "detailed_description": "[Shot 1] 固定镜头。@[Lan] 站在 @[Tavern] 门口。",
+            "overall_soundscape": "木门吱呀作响。",
+            "non_diegetic_music": "N/A",
+        }
+
+    def test_chinese_sections_are_rejected_by_default(self):
+        with pytest.raises(DraftViolation) as exc:
+            validate_h3_prompt(
+                "unit E1U01", "@[Lan] @[Mo] @[Tavern]", self._zh_sections(), duration_seconds=4, project=PROJECT
+            )
+        assert exc.value.code == "h3_not_english"
+
+    def test_chinese_sections_pass_when_the_project_writes_h3_in_chinese(self):
+        project = {**PROJECT, "h3_prompt_language": "zh"}
+
+        result = validate_h3_prompt(
+            "unit E1U01", "@[Lan] @[Mo] @[Tavern]", self._zh_sections(), duration_seconds=4, project=project
+        )
+
+        assert result is None

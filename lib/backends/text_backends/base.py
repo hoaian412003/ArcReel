@@ -182,6 +182,7 @@ class TextTaskType(StrEnum):
     OVERVIEW = "overview"
     STYLE_ANALYSIS = "style"
     TRANSLATE_DUB = "translate_dub"
+    REVIEW_SUMMARY = "review_summary"
 
 
 class TextTaskTier(StrEnum):
@@ -202,6 +203,8 @@ TEXT_TASK_TIERS: dict[TextTaskType, TextTaskTier] = {
     TextTaskType.OVERVIEW: TextTaskTier.SIMPLE,
     TextTaskType.STYLE_ANALYSIS: TextTaskTier.SIMPLE,
     TextTaskType.TRANSLATE_DUB: TextTaskTier.SIMPLE,
+    # Dedicated global override is resolved before this fallback tier.
+    TextTaskType.REVIEW_SUMMARY: TextTaskTier.SIMPLE,
 }
 
 if _missing := set(TextTaskType) - set(TEXT_TASK_TIERS):

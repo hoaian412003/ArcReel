@@ -2,6 +2,7 @@ import { TriangleAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useProjectsStore } from "@/stores/projects-store";
+import { AskAgentButton } from "@/components/claude/AskAgentButton";
 
 /**
  * 工作台顶部的一条阻断说明：本项目的数据升级没跑完，生成入口全部关闭。
@@ -12,6 +13,7 @@ import { useProjectsStore } from "@/stores/projects-store";
 export function MigrationRepairBanner() {
   const { t } = useTranslation("dashboard");
   const status = useProjectsStore((state) => state.currentProjectData?.status);
+  const projectName = useProjectsStore((state) => state.currentProjectName);
   const needsRepair = status?.needs_repair === true;
   const reason = status?.repair_reason ?? null;
 
@@ -35,6 +37,7 @@ export function MigrationRepairBanner() {
         <p className="m-0 text-[12px] leading-[1.55] text-[var(--color-text-2)]">
           {t("migration_repair_body")}
         </p>
+        {projectName ? <AskAgentButton projectName={projectName} action={{ action: "repair_project" }} /> : null}
         {reason ? (
           <p className="m-0 break-words font-mono text-[11.5px] leading-[1.5] text-[var(--color-text-3)]">
             {reason}

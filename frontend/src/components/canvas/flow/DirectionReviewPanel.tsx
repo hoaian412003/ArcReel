@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, RotateCcw } from "lucide-react";
 import { API } from "@/api";
+import { AskAgentButton } from "@/components/claude/AskAgentButton";
 import type { DirectionReview, DirectionReportRow } from "@/types/flow";
 import { ReferenceDirectionReportView } from "./ReferenceDirectionReport";
 import { errMsg } from "@/utils/async";
@@ -117,7 +118,7 @@ export function DirectionReviewPanel({
   }
   const report = review.report;
   if (review.status === "no_direction" || !report) {
-    return <p className="text-[12.5px] text-text-3">{t("flow_dr_none")}</p>;
+    return <div><p className="text-[12.5px] text-text-3">{t("flow_dr_none")}</p><AskAgentButton projectName={projectName} action={{ action: "create_direction", episode }} /></div>;
   }
 
   const warnedIds = new Set(report.warnings.flatMap((w) => w.entry_ids));

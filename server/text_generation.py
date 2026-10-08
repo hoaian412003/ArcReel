@@ -22,7 +22,6 @@ from lib.artifacts.artifact_manifest import (
 from lib.artifacts.artifact_provenance import (
     ScriptPlanPromptVariant,
     build_script_plan_request,
-    project_script_plan_prompt_inputs,
 )
 from lib.artifacts.formal_write import formal_write_transaction
 from lib.backends.providers import CallPurpose
@@ -30,7 +29,6 @@ from lib.backends.text_backends.base import DEFAULT_MAX_OUTPUT_TOKENS, TextTaskT
 from lib.backends.text_backends.base import TextGenerationRequest as BackendTextGenerationRequest
 from lib.backends.text_generator import TextGenerator
 from lib.config.resolver import ConfigResolver
-from lib.episode.episode_ledger import episode_outline_context
 from lib.episode.episode_paths import (
     SCRIPT_PLAN_FILENAMES,
     episode_drafts_dir,
@@ -61,8 +59,8 @@ from lib.prompts.prompt_builders_script import (
     build_director_prompt,
     build_narration_split_prompt,
     build_normalize_prompt,
-    build_screenplay_prompt,
 )
+from lib.prompts.video_prompt_profile import h3_prompt_language, is_h3_ref2va
 from lib.references.reference_catalog import ReferenceCatalog, build_reference_catalog
 from lib.script import direction_review, screenplay, script_review
 from lib.script.director_validation import collect_director_violations
@@ -80,7 +78,6 @@ from lib.script.draft_quarantine import (
 )
 from lib.script.draft_violation import DraftViolation, collect_violations, render_violation_report
 from lib.script.reference_video.director_validation import (
-    collect_reference_director_violations,
     has_director_content,
     validate_director_plan,
     validate_unit_direction,
@@ -102,9 +99,11 @@ from lib.script.reference_video.script_preview import (
     WARN_SILENT_EPISODE,
     WARN_SILENT_MODEL,
     WARN_SPEAKER_WITHOUT_AUDIO,
+    WARN_SPEAKER_WITHOUT_PICTURE,
     WARN_UNIT_WITHOUT_SCENE,
     derive_utterances,
     derive_voice_bindings,
+    speakers_without_picture,
     unit_lacks_scene_reference,
 )
 from lib.script.reference_video.text_parser import extract_mentions
@@ -117,10 +116,10 @@ from lib.script.script_models import (
     REFERENCE_DIRECTION_OUTPUT_FIELDS,
     REFERENCE_UNIT_DIRECTION_FIELDS,
     DirectorEpisodeOutput,
+    DirectorPlan,
     DubLine,
     DubLineDraft,
     NarrationScriptPlanDraft,
-    ReferenceDirectorEpisodeOutput,
     ReferenceDubLinesBackfill,
     build_drama_normalized_script_model,
     build_reference_units_content_model,
@@ -399,7 +398,7 @@ def _parse_normalized_content(response_text: str, model: type[BaseModel]) -> dic
     return _parse_script_plan_json(response_text, model, label="script_plan 规范化内容", top_shape="{title, scenes}")
 
 
-def _load_novel_source(project_path: Path, source: str | None, *, episode: int) -> str:
+def load_novel_source(project_path: Path, source: str | None, *, episode: int) -> str:
     """读取 script_plan 工具的源文：指定 source 文件，或缺省时本集派生源文；异常情况抛 ValueError。
 
     normalize / split 两类 script_plan 工具共用：路径越界、文件缺失、内容为空均 fail-fast，
@@ -451,7 +450,7 @@ def _load_script_plan_source_with_basis(
 ) -> tuple[str, dict[str, object], ArtifactBasis]:
     """Freeze the exact source text and project semantics consumed by a script_plan request."""
 
-    novel_text = _load_novel_source(project_path, source, episode=episode)
+    novel_text = load_novel_source(project_path, source, episode=episode)
     prompt_inputs, basis = build_script_plan_request(
         novel_text,
         episode=episode,
@@ -573,6 +572,129 @@ async def generate_episode_script(
     return TextGenerationResult(summary, warnings)
 
 
+def _h3_authoring_project_check(project: Mapping[str, Any]) -> None:
+    if not is_h3_ref2va(project):
+        raise TextGenerationError(
+            "❌ 提示词编写由子智能体撰写只适用于 H3 Ref2VA 提示词档的参考生视频项目"
+            "（项目设置里把「提示词档」选为 H3 Ref2VA）；其它项目请调用 generate_episode_script"
+        )
+
+
+_H3_BRIEF_FRAME = """# 提示词编写简报（H3 Ref2VA）
+
+你亲自为下面的视频单元写 H3 全参考提示词，写好后经 `submit_h3_prompts` 提交（可分批）。
+**只提交每个 unit 的六段 `h3_prompt`**：单元正文 `text` 已经定稿，服务端原样保留，不要重写、也不要提交它。
+下文凡是写着「逐 unit 产出 `text` 与 `h3_prompt`」「`units` 数组等长同序」「response_schema」的地方，
+在这里都按此理解：你只提交 `h3_prompt` 六段，并用 `unit_id` 指明它属于哪个单元。
+
+---
+
+"""
+
+_H3_BRIEF_ZH = """# 本项目 H3 提示词用中文书写
+
+本项目设置了 H3 提示词语言为中文，**覆盖上文「六段全部用英文」的要求**：
+
+- 六段（`subject_definitions`、`summary`、`retention_analysis`、`detailed_description`、`overall_soundscape`、`non_diegetic_music`）的叙述一律用**中文**书写；
+  `<d>[中文] 台词</d>` 里是**中文台词**，逐字取自单元正文（单元正文里的台词已经是中文）。
+- 结构记号保持原样，不翻译：`@[名称]`、`<Picture @[名称]>`、`[Shot N]`、`At MM:SS.mmm,`（后面跟英文逗号与空格）、
+  保留程度 `fully_preserved` 等关键词、说话人编号 `(S1)`、`[reference generation]`。
+- 上文所有「英文」写法的示例，改成同样含义的中文句子（运镜词用中文：推镜 / 拉镜 / 摇镜 / 固定镜头 / 跟拍 / 环绕 / 轻微晃动 / 主观镜头，幅度「小幅」「大幅」、速度「缓慢」「快速」）。
+- `non_diegetic_music` 没有配乐写 `N/A`。
+
+---
+
+"""
+
+_H3_BRIEF_SUBMIT = """
+
+---
+
+# 提交
+
+```text
+submit_h3_prompts({"episode": N, "units": [
+  {"unit_id": "E1U01",
+   "subject_definitions": "...", "summary": "...", "retention_analysis": "...",
+   "detailed_description": "...", "overall_soundscape": "...", "non_diegetic_music": "..."}
+]})
+```
+
+- 六段全部英文，只有 `<d>` 里的台词与画面上可见的文字保留原语言；资产用 `@[名称]` / `<Picture @[名称]>` 占位，不写数字标签。
+- 可以一次提交一个、几个或全部单元；每次只改动提交的单元。
+- 服务端对着现有正文做机械校验（占位与引用、台词逐字进 `<d>`、分镜时间戳、画外音不进 `<d>`、长度上限等）。有违约时整批不写正式脚本，
+  产出连同逐条报告落到 prompt_authoring 草稿，按报告走 `open_draft` → `patch_draft` → `promote_draft` 修复，不要重新整份提交。
+"""
+
+
+async def reference_prompt_authoring_brief(
+    *,
+    episode: int,
+    entry_ids: Sequence[str] = (),
+    instructions: str | None = None,
+    project_name: str,
+    projects: ProjectManager,
+    config_resolver: ConfigResolver,
+) -> TextGenerationResult:
+    """提示词编写子智能体的写作简报：H3 Ref2VA 的单元、资产、导演说明与写作指南。只读，不调模型。"""
+    project_path = projects.get_project_path(project_name)
+    project = await asyncio.to_thread(projects.load_project, project_name)
+    _h3_authoring_project_check(project)
+    await asyncio.to_thread(prompt_authoring_preflight, project_path, episode)
+    try:
+        generator = await asyncio.to_thread(ScriptGenerator, project_path, config_resolver=config_resolver)
+        prompt = await generator.build_prompt(episode, instructions=_instructions(instructions), entry_ids=entry_ids)
+    except PromptAuthoringTargetError as exc:
+        raise TextGenerationError(f"❌ 编写范围无效: {exc}") from exc
+    except VideoRequestFactsError as exc:
+        raise TextGenerationError(_video_facts_failure_text(exc.failure)) from exc
+    zh = _H3_BRIEF_ZH if h3_prompt_language(project) == "zh" else ""
+    return TextGenerationResult(_H3_BRIEF_FRAME + zh + prompt + _H3_BRIEF_SUBMIT)
+
+
+async def submit_reference_prompts(
+    *,
+    episode: int,
+    prompts: Mapping[str, Mapping[str, str]],
+    project_name: str,
+    projects: ProjectManager,
+    config_resolver: ConfigResolver,
+    before_commit: Callable[[], None] | None = None,
+) -> TextGenerationResult:
+    """落盘提示词编写子智能体自己写的 H3 六段载荷（不调模型），机械校验，违约落草稿。"""
+    project_path = projects.get_project_path(project_name)
+    project = await asyncio.to_thread(projects.load_project, project_name)
+    _h3_authoring_project_check(project)
+    await asyncio.to_thread(prompt_authoring_preflight, project_path, episode)
+    try:
+        generator = await asyncio.to_thread(ScriptGenerator, project_path, config_resolver=config_resolver)
+        result_path = await generator.submit_reference_h3_prompts(
+            episode, prompts, before_quarantine_commit=before_commit
+        )
+    except PromptAuthoringTargetError as exc:
+        raise TextGenerationError(f"❌ 编写范围无效: {exc}") from exc
+    except DraftViolation as exc:
+        raise TextGenerationError(str(exc)) from exc
+    except VideoRequestFactsError as exc:
+        raise TextGenerationError(_video_facts_failure_text(exc.failure)) from exc
+    except FileNotFoundError as exc:
+        raise TextGenerationError(f"❌ 文件错误: {exc}") from exc
+    ids = list(prompts)
+    summary = f"✅ 第 {episode} 集提示词已写入: {result_path}\n   本次写入单元: {'、'.join(ids)}"
+    script = await asyncio.to_thread(projects.load_script_readonly, project_name, result_path.name)
+    remaining = [
+        str(unit["unit_id"])
+        for unit in script.get("video_units", [])
+        if isinstance(unit, dict) and unit.get("pending_authoring") is True
+    ]
+    summary += (
+        f"\n   还没有提示词的单元: {'、'.join(remaining)}，继续提交其余部分。"
+        if remaining
+        else "\n   全部单元提示词已齐。"
+    )
+    return TextGenerationResult(summary)
+
+
 def _rewritten_mention_warnings(
     projects: ProjectManager,
     project_name: str,
@@ -652,7 +774,7 @@ def _approved_screenplay_for_plan(project_path: Path, episode: int, novel_text: 
     if not screenplay.matches_source(data, novel_text):
         raise TextGenerationError(
             f"❌ 第 {episode} 集的剧本是依据旧的源文写的，源文已经变化（如分集被重新划分）；请重新运行编剧步骤"
-            "（write_screenplay）并让用户审阅后再拆解单元。"
+            "（write-screenplay 编剧子智能体经 submit_screenplay 提交）并让用户审阅后再拆解单元。"
         )
     if screenplay.review_status(data) != "approved":
         raise TextGenerationError(
@@ -1209,6 +1331,23 @@ def _reference_scene_warning_lines(unit_texts: list[str], project: dict[str, Any
     ]
 
 
+def _reference_speaker_picture_warning_lines(
+    unit_texts: list[str], project: dict[str, Any], *, episode: int
+) -> list[str]:
+    """逐 unit 点名「有台词却没有被 ``@`` 引用到画面里」的角色，带 unit 定位。
+
+    说话人位不派生参考图，这类角色在该 unit 没有参考图；他若在画面里，视频模型会拿别的角色的
+    长相臆造他。与场景提示同属容忍类（纯画外音合法），由作者按画面判断；判据与编辑器预览共用
+    ``speakers_without_picture``。
+    """
+    lines: list[str] = []
+    for index, text in enumerate(unit_texts, start=1):
+        for name in speakers_without_picture(text, project):
+            message = translate(WARN_SPEAKER_WITHOUT_PICTURE, name=name)
+            lines.append(f"{_reference_unit_label(episode, index)}：{message}")
+    return lines
+
+
 def _reference_soft_violation_lines(
     unit_texts: list[str],
     project: dict[str, Any],
@@ -1223,11 +1362,13 @@ def _reference_soft_violation_lines(
     以及拆分 / 晋升被违约挡下时回给 Agent 的报告。派生须留在本函数内，新增一类软违约才会同时
     到达四条路，而不是只被接到其中一条上、其余继续沉默。
 
-    顺序固定为「声音在前、场景在后」：报告与回执并排比对时，同一份产物在不同路径上给出的
+    顺序固定为「声音在前、场景在后、无图说话人最后」：报告与回执并排比对时，同一份产物在不同路径上给出的
     行序不该抖动。
     """
-    lines = _reference_voice_warning_lines(unit_texts, project, voice) + _reference_scene_warning_lines(
-        unit_texts, project, episode=episode
+    lines = (
+        _reference_voice_warning_lines(unit_texts, project, voice)
+        + _reference_scene_warning_lines(unit_texts, project, episode=episode)
+        + _reference_speaker_picture_warning_lines(unit_texts, project, episode=episode)
     )
     if dub_units and project_dub_target_language(project) is not None:
         lines += _reference_dub_budget_warning_lines(dub_units, episode=episode)
@@ -1468,43 +1609,42 @@ def _collect_narration_violations(
     return violations
 
 
-async def generate_reference_script_plan(
-    request: TextGenerationRequest,
+async def reference_script_plan_brief(
     *,
+    episode: int,
+    source: str | None = None,
+    instructions: str | None = None,
     project_name: str,
     projects: ProjectManager,
     config_resolver: ConfigResolver,
-    before_commit: Callable[[], None] | None = None,
 ) -> TextGenerationResult:
-    episode = request.episode
-    instructions = _instructions(request.instructions)
+    """单元拆解子智能体的写作简报：本集源文、登记资产、已通过剧本、生效时长档位与引用语法规范。
+
+    与 :func:`submit_reference_script_plan` 的校验同源——档位、参考图上限、语速都取自同一次能力求值，
+    简报里写的约束就是提交时会被机械校验的约束。不调模型，只读。
+    """
     project_path = projects.get_project_path(project_name)
     project = await asyncio.to_thread(projects.load_project, project_name)
-
     try:
-        novel_text, prompt_inputs, script_plan_basis = await asyncio.to_thread(
+        novel_text, prompt_inputs, _basis = await asyncio.to_thread(
             _load_script_plan_source_with_basis,
             project_path,
-            request.source,
+            source,
             project,
             episode,
             "reference_video",
         )
     except ValueError as exc:
         raise TextGenerationError(f"❌ {exc}") from exc
-
     try:
-        characters = cast(dict[str, Any], prompt_inputs["characters"])
-        scenes = cast(dict[str, Any], prompt_inputs["scenes"])
-        props = cast(dict[str, Any], prompt_inputs["props"])
         split_caps = await _fetch_reference_split_caps(project, config_resolver=config_resolver)
         approved_screenplay = await asyncio.to_thread(_approved_screenplay_for_plan, project_path, episode, novel_text)
-        prompt = build_reference_units_split_prompt(
+        brief = build_reference_units_split_prompt(
             novel_text=novel_text,
             project_overview=cast(dict[str, Any], prompt_inputs["project_overview"]),
-            characters=characters,
-            scenes=scenes,
-            props=props,
+            characters=cast(dict[str, Any], prompt_inputs["characters"]),
+            scenes=cast(dict[str, Any], prompt_inputs["scenes"]),
+            props=cast(dict[str, Any], prompt_inputs["props"]),
             supported_durations=split_caps.durations,
             reference_supported_durations=split_caps.reference_durations,
             text_supported_durations=split_caps.text_durations,
@@ -1521,13 +1661,50 @@ async def generate_reference_script_plan(
             dub_target_language=cast(str | None, prompt_inputs.get("dub_target_language")),
             narrator_gender=cast(str, prompt_inputs.get("narrator_gender", "male")),
             screenplay=approved_screenplay,
-            instructions=instructions,
+            instructions=_instructions(instructions),
         )
+    except TextGenerationError:
+        raise
+    except VideoRequestFactsError as exc:
+        raise TextGenerationError(_video_facts_failure_text(exc.failure)) from exc
+    except Exception as exc:
+        raise TextGenerationError(f"get_script_plan_brief 失败: {exc}") from exc
+    return TextGenerationResult(brief)
 
-        if request.dry_run:
-            return TextGenerationResult(
-                f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}\n\nPrompt 长度: {len(prompt)} 字符"
-            )
+
+async def submit_reference_script_plan(
+    units: Sequence[Mapping[str, Any]],
+    *,
+    episode: int,
+    source: str | None = None,
+    project_name: str,
+    projects: ProjectManager,
+    config_resolver: ConfigResolver,
+    before_commit: Callable[[], None] | None = None,
+) -> TextGenerationResult:
+    """校验并落盘 Agent 自己写的参考生视频单元表（script_plan）。
+
+    单元由单元拆解子智能体撰写；这里不调模型，只做机械校验：时长落在生效档位内、原文锚是源文逐字子串、
+    正文语法与资产引用合法、台词念得完、与已通过剧本对齐。违约时正式文件不写，产出连同逐条违约报告落到草稿。
+    """
+    project_path = projects.get_project_path(project_name)
+    project = await asyncio.to_thread(projects.load_project, project_name)
+
+    try:
+        novel_text, _prompt_inputs, script_plan_basis = await asyncio.to_thread(
+            _load_script_plan_source_with_basis,
+            project_path,
+            source,
+            project,
+            episode,
+            "reference_video",
+        )
+    except ValueError as exc:
+        raise TextGenerationError(f"❌ {exc}") from exc
+
+    try:
+        split_caps = await _fetch_reference_split_caps(project, config_resolver=config_resolver)
+        approved_screenplay = await asyncio.to_thread(_approved_screenplay_for_plan, project_path, episode, novel_text)
 
         draft_path = quarantine_path(project_path, episode, QUARANTINE_KIND_SCRIPT_PLAN)
         formal_script_plan_path = script_review.official_reference_script_plan_path(project_path, episode)
@@ -1538,18 +1715,8 @@ async def generate_reference_script_plan(
                 formal_script_plan_path,
             )
         schema = build_reference_units_content_model(split_caps.durations)
-        generator = await TextGenerator.create(
-            TextTaskType.SCRIPT, project_name=project_name, purpose=CallPurpose.SCRIPT_GENERATION
-        )
-        result = await generator.generate(
-            BackendTextGenerationRequest(
-                prompt=prompt,
-                response_schema=schema,
-                max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-            ),
-            project_name=project_name,
-        )
-        flat = _parse_script_plan_json(result.text, schema, label="script_plan 拆分内容", top_shape="{units}")
+        submitted_text = json.dumps({"units": [dict(unit) for unit in units]}, ensure_ascii=False)
+        flat = _parse_script_plan_json(submitted_text, schema, label="script_plan 拆分内容", top_shape="{units}")
         flat_units = flat.get("units")
         if not isinstance(flat_units, list) or not flat_units:
             raise ValueError("script_plan 拆分内容结构异常：units 必须是非空的 unit 对象数组")
@@ -1569,7 +1736,7 @@ async def generate_reference_script_plan(
         screenplay_violations, screenplay_notes = _screenplay_alignment(
             approved_screenplay,
             flat_units,
-            result.text,
+            submitted_text,
             items_key="units",
             kind="reference_video",
             label_of=lambda _unit, index: _reference_unit_label(episode, index),
@@ -1591,7 +1758,7 @@ async def generate_reference_script_plan(
                     QUARANTINE_KIND_SCRIPT_PLAN,
                     _script_plan_content(flat_units, director_plan),
                     violations,
-                    request.source,
+                    source,
                     formal_baseline,
                 )
             # 产出即违约这条路同样带上软违约段：草稿在场、Agent 这一轮就在改它，降级提示留到晋升
@@ -1625,7 +1792,7 @@ async def generate_reference_script_plan(
                         episode,
                         QUARANTINE_KIND_SCRIPT_PLAN,
                         _script_plan_content(flat_units, director_plan),
-                        request.source,
+                        source,
                         formal_baseline,
                         exc.actual,
                     )
@@ -1649,7 +1816,7 @@ async def generate_reference_script_plan(
     except VideoRequestFactsError as exc:
         raise TextGenerationError(_video_facts_failure_text(exc.failure)) from exc
     except Exception as exc:
-        raise TextGenerationError(f"generate_script_plan 失败: {exc}") from exc
+        raise TextGenerationError(f"submit_script_plan 失败: {exc}") from exc
 
 
 #: 配音回填单次调用处理的 unit 数上限：一批台词连同角色表放进同一个 prompt，批太大既拖慢也稀释预算约束。
@@ -1729,10 +1896,7 @@ async def generate_reference_dub_lines(
                     "unit_id": str(unit["unit_id"]),
                     "duration_seconds": unit.get("duration_seconds") or 0,
                     "text": unit["text"],
-                    "utterances": [
-                        {"index": i, "speaker": u.speaker, "text": u.text}
-                        for i, u in enumerate(unit_utterances(unit["text"]))
-                    ],
+                    "utterances": _dub_prompt_utterances(unit),
                 }
                 for unit in batch_units
             ],
@@ -1758,7 +1922,7 @@ async def generate_reference_dub_lines(
                 failed.append(f"{unit_id}：模型未返回该 unit")
                 continue
             drafts = [DubLineDraft.model_validate(line) for line in item.get("dub_lines") or []]
-            lines = build_dub_lines_from_drafts(unit["text"], drafts)
+            lines = build_dub_lines_from_drafts(unit["text"], drafts, unit.get("speech_cues") or ())
             hard, over_budget = dub_line_violations(unit["text"], unit.get("duration_seconds") or 0, lines)
             if hard:
                 failed.append(f"{unit_id}：" + "；".join(hard))
@@ -1967,98 +2131,6 @@ async def generate_narration_script_plan(
 
 
 # ---------------------------------------------------------------------------
-# write_screenplay（编剧步骤：源文 → 面向审阅者的单集剧本）
-# ---------------------------------------------------------------------------
-
-
-def _screenplay_result_text(data: Mapping[str, Any]) -> str:
-    seconds = "、".join(
-        f"第 {i} 场 {sec}s" for i, sec in enumerate(screenplay.screenplay_summary(data)["scene_seconds"], 1)
-    )
-    return (
-        f"✅ 第 {data['episode']} 集剧本已写入：《{data['title']}》，共 {len(data['scenes'])} 场，"
-        f"预计总时长约 {screenplay.total_seconds(data)} 秒（{seconds}）。剧本待人工审阅，通过后再进入单元拆解。"
-    )
-
-
-async def generate_screenplay(
-    request: TextGenerationRequest,
-    *,
-    project_name: str,
-    projects: ProjectManager,
-    config_resolver: ConfigResolver,
-) -> TextGenerationResult:
-    """编剧步骤：把本集源文改编为按场次组织的可读剧本，整份写入 ``drafts/episode_N/screenplay.json``。
-
-    旁白 / 剧情两种内容类型与分镜、参考生视频两条路线共用；广告没有剧本规划，不走这一步。一次调用文本模型，
-    产出经 ``ScreenplayDraft`` 校验后整份替换已有剧本（审阅记录随之清空），总时长由各场时长相加得出、不取自模型。
-    """
-    del config_resolver
-    episode = request.episode
-    instructions = _instructions(request.instructions)
-    project_path = projects.get_project_path(project_name)
-    project = await asyncio.to_thread(projects.load_project, project_name)
-    try:
-        if project.get("content_mode", "narration") == "ad":
-            raise TextGenerationError("❌ 广告/短片项目没有剧本规划，不走编剧步骤；请直接调用 generate_episode_script")
-        try:
-            novel_text = await asyncio.to_thread(_load_novel_source, project_path, request.source, episode=episode)
-            prompt_inputs = project_script_plan_prompt_inputs(episode, project=project)
-        except ValueError as exc:
-            raise TextGenerationError(f"❌ {exc}") from exc
-        outline, next_outline = episode_outline_context(project, episode)
-        raw_source_kind = project.get("source_kind")
-        source_language = project.get("source_language")
-        prompt = build_screenplay_prompt(
-            novel_text=novel_text,
-            project_overview=cast(dict[str, Any], prompt_inputs["project_overview"]),
-            style=project.get("style") if isinstance(project.get("style"), str) else None,
-            characters=cast(dict[str, Any], prompt_inputs["characters"]),
-            scenes=cast(dict[str, Any], prompt_inputs["scenes"]),
-            props=cast(dict[str, Any], prompt_inputs["props"]),
-            episode=episode,
-            source_kind=raw_source_kind if isinstance(raw_source_kind, str) else "novel",
-            target_language=cast(str, prompt_inputs["target_language"]),
-            source_language=source_language if isinstance(source_language, str) else None,
-            speech_rate_override=project_speech_rate_override(project),
-            episode_target_duration=cast(int | None, prompt_inputs["episode_target_duration"]),
-            episode_outline=outline,
-            next_episode_outline=next_outline,
-            instructions=instructions,
-        )
-        if request.dry_run:
-            return TextGenerationResult(
-                f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}\n\nPrompt 长度: {len(prompt)} 字符"
-            )
-        generator = await TextGenerator.create(
-            TextTaskType.SCRIPT, project_name=project_name, purpose=CallPurpose.SCRIPT_GENERATION
-        )
-        result = await generator.generate(
-            BackendTextGenerationRequest(
-                prompt=prompt,
-                response_schema=screenplay.ScreenplayDraft,
-                max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-            ),
-            project_name=project_name,
-        )
-        content = _parse_script_plan_json(
-            result.text, screenplay.ScreenplayDraft, label="剧本", top_shape="{title, logline, scenes}"
-        )
-        data = await asyncio.to_thread(
-            screenplay.write_screenplay,
-            project_path,
-            episode,
-            screenplay.ScreenplayDraft.model_validate(content),
-            source_text=novel_text,
-        )
-        return TextGenerationResult(_screenplay_result_text(data))
-    except TextGenerationError:
-        raise
-    except Exception as exc:
-        raise TextGenerationError(f"write_screenplay 失败: {exc}") from exc
-
-
-# ---------------------------------------------------------------------------
 # generate_director_plan（分镜路线导演步骤）
 # ---------------------------------------------------------------------------
 
@@ -2114,32 +2186,299 @@ def _merge_director_output(
     return merged
 
 
-def _merge_reference_director_output(
-    script: dict[str, Any], output: dict[str, Any], target_ids: list[str]
-) -> dict[str, Any]:
-    """把参考生视频导演产出写回正式脚本快照：集级规划整份替换，目标单元的扁平导演字段整组替换。
+#: 导演说明（自由文本）去首尾空白后的最短字数，短于此多半是一句空话，写不出镜头与表演。
+REFERENCE_DIRECTION_MIN_CHARS = 60
 
-    空值字段不落盘（与单元上其它可选字段同一口径）；存量的 ``beats`` 被新镜头表取代，一并移除。
+#: 导演步骤写进参考生视频单元的字段：自由文本 ``direction`` 取代所有分项字段，写入时分项字段整组清掉。
+_LEGACY_DIRECTION_FIELDS: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        field
+        for field in (*REFERENCE_UNIT_DIRECTION_FIELDS, *REFERENCE_DIRECTION_OUTPUT_FIELDS)
+        if field != "direction"
+    )
+)
+
+
+def _reference_director_context(
+    project: dict[str, Any], script: dict[str, Any] | None, episode: int
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """参考生视频导演的前置检查：参考生视频路线、正式脚本在场、该集仍有待编写单元。返回 ``(全集单元, 全集单元 id)``。"""
+    if not (direction_review.entry_kind(project) == direction_review.REFERENCE_KIND):
+        raise TextGenerationError("❌ 只有参考生视频项目的导演由子智能体撰写；分镜路线请调用 generate_director_plan")
+    if script is None:
+        raise TextGenerationError(
+            f"❌ 第 {episode} 集尚无正式脚本，无法导演。请先完成本集脚本规划并确认（确认即生成正式脚本）。"
+        )
+    if not direction_review.has_pending_authoring(script, direction_review.REFERENCE_KIND):
+        raise TextGenerationError(f"❌ 第 {episode} 集没有待编写的条目（提示词已编写完成），导演步骤不再改动这一集。")
+    entries = direction_review.script_entries(script, direction_review.REFERENCE_KIND)
+    ids = [str(entry["unit_id"]) for entry in entries if isinstance(entry.get("unit_id"), str)]
+    return entries, ids
+
+
+async def reference_director_brief(
+    *,
+    episode: int,
+    entry_ids: Sequence[str] = (),
+    instructions: str | None = None,
+    project_name: str,
+    projects: ProjectManager,
+) -> TextGenerationResult:
+    """导演子智能体的写作简报：全集单元（正文、台词、时长）、登记资产外观、已有导演说明与审阅意见。只读，不调模型。"""
+    project = await asyncio.to_thread(projects.load_project, project_name)
+    try:
+        script = await asyncio.to_thread(read_formal_script, projects, project_name, project, episode)
+        entries, ids = _reference_director_context(project, script, episode)
+        unknown = [entry_id for entry_id in dict.fromkeys(entry_ids) if entry_id not in ids]
+        if unknown:
+            raise TextGenerationError(f"❌ entry_ids 不在第 {episode} 集正式脚本内: {unknown}")
+        assert script is not None
+        status = direction_review.review_status(project, script, episode)
+        stored = direction_review.stored_review(project, episode)
+        note = stored.get("note") if status == "changes_requested" and isinstance(stored.get("note"), str) else None
+        brief = build_reference_director_prompt(
+            project_overview=project.get("overview", {}),
+            characters=project.get("characters") if isinstance(project.get("characters"), dict) else {},
+            scenes=project.get("scenes") if isinstance(project.get("scenes"), dict) else {},
+            props=project.get("props") if isinstance(project.get("props"), dict) else {},
+            units=[{**entry, "utterances": _dub_prompt_utterances(entry)} for entry in entries],
+            episode=episode,
+            target_ids=list(dict.fromkeys(entry_ids)) or None,
+            revision_note=note,
+            target_language=project.get("source_language") or "中文",
+            instructions=_instructions(instructions),
+        )
+    except TextGenerationError:
+        raise
+    except Exception as exc:
+        raise TextGenerationError(f"get_director_brief 失败: {exc}") from exc
+    return TextGenerationResult(brief)
+
+
+def _dub_prompt_utterances(unit: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """配音回填 prompt 的发声序列：正文派生的台词 / 画外音，导演给了时间窗的另带窗长（秒）。"""
+    windows = {
+        cue.get("index"): float(cue["end_seconds"]) - float(cue["start_seconds"])
+        for cue in unit.get("speech_cues") or []
+        if isinstance(cue, Mapping)
+    }
+    result: list[dict[str, Any]] = []
+    for index, utterance in enumerate(unit_utterances(str(unit["text"]))):
+        item: dict[str, Any] = {"index": index, "speaker": utterance.speaker, "text": utterance.text}
+        if index in windows:
+            item["window_seconds"] = round(windows[index], 2)
+        result.append(item)
+    return result
+
+
+def _speech_cue_problems(
+    unit_id: str,
+    entry: Mapping[str, Any],
+    cues: Sequence[Mapping[str, Any]] | None,
+    *,
+    stored: Any,
+    dub_enabled: bool,
+) -> list[str]:
+    """导演给的发声时间窗是否合格：序号有效不重复、时间窗在单元内、每条发声配齐时间，画外音另配性别。
+
+    项目启用配音时，单元里每条发声（台词与画外音）都必须有 cue（本次给的，或该单元已存的）：配音的开始时间
+    以导演的时间窗为准，缺了它配音就从单元起点顺序排布，与画面对不上；画外音没有口型可对，还须给配音性别。
     """
-    directions = {unit["id"]: unit["direction"] for unit in output["units"]}
-    merged = dict(script)
-    merged["director_plan"] = output["director_plan"]
-    units: list[Any] = []
-    for item in script[direction_review.REFERENCE_KIND]:
-        unit_id = str(item.get("unit_id")) if isinstance(item, dict) else ""
-        if unit_id not in target_ids or unit_id not in directions:
-            units.append(item)
+    utterances = derive_utterances(str(entry.get("text") or ""))[0]
+    voiceover = {index for index, u in enumerate(utterances) if u.kind == "voiceover"}
+    duration = float(entry.get("duration_seconds") or 0)
+    problems: list[str] = []
+    effective: Sequence[Mapping[str, Any]] = cues if cues is not None else (stored if isinstance(stored, list) else [])
+    if cues is not None:
+        seen: set[int] = set()
+        for cue in cues:
+            index = cue.get("index")
+            end = cue.get("end_seconds")
+            if not isinstance(index, int) or not 0 <= index < len(utterances):
+                problems.append(
+                    f"{unit_id} 的 speech_cues 里序号 {index} 不是该单元的发声（共 {len(utterances)} 条，从 0 起）"
+                )
+                continue
+            if index in seen:
+                problems.append(f"{unit_id} 的 speech_cues 序号 {index} 重复")
+            seen.add(index)
+            if isinstance(end, int | float) and duration and end > duration:
+                problems.append(f"{unit_id} 的 speech_cues[{index}] 结束于 {end}s，超出单元时长 {duration:g}s")
+        ordered = sorted((cue for cue in cues if isinstance(cue.get("index"), int)), key=lambda cue: cue["index"])
+        starts = [float(cue["start_seconds"]) for cue in ordered if isinstance(cue.get("start_seconds"), int | float)]
+        if starts != sorted(starts):
+            problems.append(f"{unit_id} 的 speech_cues 开始时间须随序号递增（发声按正文顺序依次出现）")
+    if dub_enabled and utterances:
+        by_index = {cue.get("index"): cue for cue in effective if isinstance(cue, Mapping)}
+        lacking = sorted(index for index in range(len(utterances)) if index not in by_index)
+        if lacking:
+            problems.append(
+                f"{unit_id} 的发声序号 {lacking} 没有 speech_cues：项目启用了配音，配音的开始时间以导演给的时间窗为准，"
+                "请为每条台词与画外音写 index / start_seconds / end_seconds（画外音另写 gender）"
+            )
+        no_gender = sorted(index for index in voiceover if index in by_index and not by_index[index].get("gender"))
+        if no_gender:
+            problems.append(f"{unit_id} 的画外音 speech_cues（序号 {no_gender}）缺少 gender（male / female）")
+    return problems
+
+
+#: 词边界只对拉丁字母（含越南语变音）生效；CJK 文字之间没有空格，不能用 ``\\w`` 判边界。
+_LATIN_LETTERS = "A-Za-z\u00c0-\u1ef9"
+
+
+def _characters_missing_reference(text: str, direction: str, character_names: Sequence[str]) -> list[str]:
+    """导演说明里提到、但正文画面描述没有 ``@`` 引用的登记角色。
+
+    说明里常用简称（姓名末词），故按全名或末词做词边界匹配；说话人位不计入引用（见 ``extract_mentions``）。
+    """
+    referenced = {asset_name_comparison_key(name.split("/", 1)[0]) for name in extract_mentions(text)}
+    missing: list[str] = []
+    for name in character_names:
+        if asset_name_comparison_key(name) in referenced:
             continue
-        unit = {key: value for key, value in item.items() if key != "beats"}
-        for field in REFERENCE_DIRECTION_OUTPUT_FIELDS:
-            value = directions[unit_id].get(field)
-            if value:
-                unit[field] = value
+        aliases = {name, name.split()[-1]} if name.split() else {name}
+        if any(
+            re.search(rf"(?<![{_LATIN_LETTERS}]){re.escape(alias)}(?![{_LATIN_LETTERS}])", direction)
+            for alias in aliases
+        ):
+            missing.append(name)
+    return missing
+
+
+def _direction_warnings(
+    units_by_id: Mapping[str, Mapping[str, Any]],
+    submitted: Mapping[str, str],
+    character_names: Sequence[str] = (),
+) -> list[str]:
+    """软提示：单元正文里每句角色台词都应在导演说明里出现（落在哪一镜、怎么说），缺的逐条点名；
+    导演说明让角色入镜却没在正文里 ``@`` 引用的，也逐条点名（否则该角色没有参考图，长相与座位都会被臆造）。"""
+    warnings: list[str] = []
+    for unit_id, direction in submitted.items():
+        unreferenced = _characters_missing_reference(
+            str(units_by_id[unit_id].get("text") or ""), direction, character_names
+        )
+        if unreferenced:
+            warnings.append(
+                f"{unit_id} 的导演说明里出现了 {'、'.join(unreferenced)}，但正文画面描述没有 @ 引用——"
+                "该单元不会给他发参考图，视频模型会臆造他的长相与位置；请回到单元拆解补引用"
+            )
+        utterances, _ = derive_utterances(str(units_by_id[unit_id].get("text") or ""))
+        missing = [
+            u.text for u in utterances if u.kind == "dialogue" and u.text.strip() and u.text.strip() not in direction
+        ]
+        if missing:
+            warnings.append(f"{unit_id} 的导演说明里没有出现这些台词：{'；'.join(missing)}")
+    return warnings
+
+
+async def submit_reference_director_plan(
+    *,
+    episode: int,
+    director_plan: Mapping[str, Any] | None,
+    units: Sequence[Mapping[str, Any]],
+    project_name: str,
+    projects: ProjectManager,
+) -> TextGenerationResult:
+    """校验并写回导演子智能体自己写的导演结果：可选的集级导演规划 + 若干单元的自由文本导演说明。
+
+    可分批提交：每次只改动提交的单元与（给了就整份替换的）集级规划，其余保持原样。全部单元与集级规划齐了，
+    这一集才算导演完成并进入人工审阅。单元的分项导演字段在写入 ``direction`` 时整组清掉，不与自由文本并存。
+    """
+    project_path = projects.get_project_path(project_name)
+    project = await asyncio.to_thread(projects.load_project, project_name)
+    try:
+        script = await asyncio.to_thread(read_formal_script, projects, project_name, project, episode)
+        entries, ids = _reference_director_context(project, script, episode)
+        assert script is not None
+        submitted: dict[str, str] = {}
+        submitted_cues: dict[str, list[dict[str, Any]]] = {}
+        problems: list[str] = []
+        entries_by_id = {str(entry["unit_id"]): entry for entry in entries if isinstance(entry.get("unit_id"), str)}
+        dub_enabled = project_dub_target_language(project) is not None
+        for item in units:
+            unit_id, text = str(item.get("unit_id") or ""), str(item.get("direction") or "").strip()
+            if unit_id not in ids:
+                problems.append(f"{unit_id or '（空）'} 不在第 {episode} 集正式脚本内")
+            elif unit_id in submitted:
+                problems.append(f"{unit_id} 重复提交")
+            elif len(text) < REFERENCE_DIRECTION_MIN_CHARS:
+                problems.append(
+                    f"{unit_id} 的导演说明只有 {len(text)} 字，至少 {REFERENCE_DIRECTION_MIN_CHARS} 字——"
+                    "写清镜头怎么走、人物怎么演、听到什么"
+                )
             else:
-                unit.pop(field, None)
-        units.append(unit)
-    merged[direction_review.REFERENCE_KIND] = units
-    return merged
+                submitted[unit_id] = text
+                entry = entries_by_id.get(unit_id, {})
+                cue_problems = _speech_cue_problems(
+                    unit_id,
+                    entry,
+                    item.get("speech_cues"),
+                    stored=entry.get("speech_cues"),
+                    dub_enabled=dub_enabled,
+                )
+                problems.extend(cue_problems)
+                if item.get("speech_cues") is not None and not cue_problems:
+                    submitted_cues[unit_id] = [dict(cue) for cue in item["speech_cues"]]
+        if director_plan is not None:
+            violation = collect_violations([lambda: validate_director_plan(director_plan, len(ids))])
+            problems.extend(str(item) for item in violation)
+        if not submitted and director_plan is None and not problems:
+            problems.append("没有可提交的内容：至少给出 director_plan 或一个单元的 direction")
+        if problems:
+            raise TextGenerationError(
+                "❌ 导演结果未写入，请修正后重新提交：\n" + "\n".join(f"- {item}" for item in problems)
+            )
+
+        merged = dict(script)
+        if director_plan is not None:
+            merged["director_plan"] = DirectorPlan.model_validate(director_plan).model_dump()
+        merged_units: list[Any] = []
+        for item in script[direction_review.REFERENCE_KIND]:
+            unit_id = str(item.get("unit_id")) if isinstance(item, dict) else ""
+            if unit_id not in submitted:
+                merged_units.append(item)
+                continue
+            unit = {key: value for key, value in item.items() if key not in _LEGACY_DIRECTION_FIELDS}
+            unit["direction"] = submitted[unit_id]
+            if unit_id in submitted_cues:
+                unit["speech_cues"] = sorted(submitted_cues[unit_id], key=lambda cue: cue["index"])
+            merged_units.append(unit)
+        merged[direction_review.REFERENCE_KIND] = merged_units
+
+        filename = script_review.formal_script_filename(project_path, project, episode)
+        baseline = await asyncio.to_thread(script_review.content_fingerprint, project_path / "scripts" / filename)
+        try:
+            await run_sync_transaction(
+                projects.save_script,
+                project_name,
+                merged,
+                filename,
+                validate=True,
+                expected_fingerprint=baseline,
+            )
+        except ScriptWriteConflict as exc:
+            raise TextGenerationError(
+                f"❌ 第 {episode} 集正式脚本在导演期间被改动，本次导演未写入；请重新读取简报后再提交"
+            ) from exc
+        units_by_id = {str(entry["unit_id"]): entry for entry in entries if isinstance(entry.get("unit_id"), str)}
+        warnings = _direction_warnings(units_by_id, submitted, list(project.get(BUCKET_KEY["character"]) or {}))
+        remaining = direction_review.undirected_entry_ids(merged, direction_review.REFERENCE_KIND)
+        has_plan = isinstance(merged.get("director_plan"), Mapping)
+    except TextGenerationError:
+        raise
+    except Exception as exc:
+        raise TextGenerationError(f"submit_director_plan 失败: {exc}") from exc
+    parts = [f"✅ 第 {episode} 集导演结果已写入：{'、'.join(submitted) or '仅集级导演规划'}。"]
+    if remaining or not has_plan:
+        todo = ([f"还没有导演说明的单元：{'、'.join(remaining)}"] if remaining else []) + (
+            [] if has_plan else ["还没有集级导演规划 director_plan"]
+        )
+        parts.append("导演尚未完成（" + "；".join(todo) + "），继续提交其余部分。")
+    else:
+        parts.append("导演结果已齐，待人工审阅（get_direction_report 取报告，decide_direction_review 记录决定）。")
+    if warnings:
+        parts.append("提示：" + "；".join(warnings))
+    return TextGenerationResult("\n".join(parts))
 
 
 async def generate_director_plan(
@@ -2163,13 +2502,17 @@ async def generate_director_plan(
         script = await asyncio.to_thread(read_formal_script, projects, project_name, project, episode)
         kind, entries, target_ids = _director_context(project, script, episode, request)
         assert script is not None
+        if kind == direction_review.REFERENCE_KIND:
+            raise TextGenerationError(
+                "参考生视频项目的导演说明由 direct-episode 子智能体亲自撰写：先 get_director_brief 取写作简报，"
+                "写好后 submit_director_plan 提交；服务端不再调用文本模型生成"
+            )
         revising = bool(request.entry_ids)
         stored = direction_review.stored_review(project, episode)
         status = direction_review.review_status(project, script, episode)
         revision_note = (
             stored.get("note") if status == "changes_requested" and isinstance(stored.get("note"), str) else None
         )
-        reference = kind == direction_review.REFERENCE_KIND
         prompt_kwargs: dict[str, Any] = {
             "project_overview": project.get("overview", {}),
             "characters": project.get("characters") if isinstance(project.get("characters"), dict) else {},
@@ -2181,11 +2524,7 @@ async def generate_director_plan(
             "target_language": project.get("source_language") or "中文",
             "instructions": instructions,
         }
-        prompt = (
-            build_reference_director_prompt(units=entries, **prompt_kwargs)
-            if reference
-            else build_director_prompt(entries=entries, kind=kind, **prompt_kwargs)
-        )
+        prompt = build_director_prompt(entries=entries, kind=kind, **prompt_kwargs)
         if request.dry_run:
             return TextGenerationResult(
                 f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}\n\nPrompt 长度: {len(prompt)} 字符"
@@ -2196,7 +2535,7 @@ async def generate_director_plan(
         generator = await TextGenerator.create(
             TextTaskType.SCRIPT, project_name=project_name, purpose=CallPurpose.SCRIPT_GENERATION
         )
-        schema: type[BaseModel] = ReferenceDirectorEpisodeOutput if reference else DirectorEpisodeOutput
+        schema: type[BaseModel] = DirectorEpisodeOutput
         result = await generator.generate(
             BackendTextGenerationRequest(
                 prompt=prompt,
@@ -2209,40 +2548,26 @@ async def generate_director_plan(
             result.text,
             schema,
             label="导演产出",
-            top_shape="{director_plan, units}" if reference else "{director_plan, entries}",
+            top_shape="{director_plan, entries}",
         )
         id_field, chars_field = SKELETONS[kind].id_field, SKELETONS[kind].chars_field
-        if reference:
-            units_by_id = {str(entry[id_field]): entry for entry in entries if isinstance(entry.get(id_field), str)}
-            violations = collect_reference_director_violations(
-                output,
-                units_by_id=units_by_id,
-                expected_ids=target_ids,
-                total_units=len(entries),
-                last_unit_id=str(entries[-1].get(id_field)) if entries else None,
-            )
-        else:
-            characters_by_id = {
-                str(entry[id_field]): [name for name in (entry.get(chars_field) or []) if isinstance(name, str)]
-                for entry in entries
-                if isinstance(entry.get(id_field), str) and chars_field is not None
-            }
-            violations = collect_director_violations(
-                output,
-                expected_ids=target_ids,
-                characters_by_id=characters_by_id,
-                total_entries=len(entries),
-            )
+        characters_by_id = {
+            str(entry[id_field]): [name for name in (entry.get(chars_field) or []) if isinstance(name, str)]
+            for entry in entries
+            if isinstance(entry.get(id_field), str) and chars_field is not None
+        }
+        violations = collect_director_violations(
+            output,
+            expected_ids=target_ids,
+            characters_by_id=characters_by_id,
+            total_entries=len(entries),
+        )
         if violations:
             raise TextGenerationError(
                 f"❌ 导演产出未通过校验，未写入正式脚本；请按下列问题重新调用 generate_director_plan：\n"
                 f"{render_violation_report(violations)}"
             )
-        merged = (
-            _merge_reference_director_output(script, output, target_ids)
-            if reference
-            else _merge_director_output(script, kind, output, target_ids)
-        )
+        merged = _merge_director_output(script, kind, output, target_ids)
         try:
             await run_sync_transaction(
                 projects.save_script,

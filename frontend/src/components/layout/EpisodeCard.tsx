@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Clapperboard, Download, Loader2 } from "lucide-react";
+import { Clapperboard, Download, Loader2, Trash2 } from "lucide-react";
 import type { EpisodeMeta } from "@/types";
 import { itemCountKey, type GenerationRoute } from "@/utils/generation-mode";
 import { useCostStore } from "@/stores/cost-store";
@@ -18,6 +18,8 @@ interface EpisodeCardProps {
   /** 导出该集成片视频；缺省则不显示导出按钮。 */
   onExportVideo?: () => void;
   exportingVideo?: boolean;
+  /** 删除该集；缺省则不显示删除按钮。 */
+  onDelete?: () => void;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -49,6 +51,7 @@ export function EpisodeCard({
   route,
   onExportVideo,
   exportingVideo = false,
+  onDelete,
 }: EpisodeCardProps) {
   const { t } = useTranslation(["dashboard"]);
   const status = ep.status ?? "draft";
@@ -209,6 +212,17 @@ export function EpisodeCard({
         </span>
       )}
     </button>
+    {onDelete && (
+      <button
+        type="button"
+        onClick={onDelete}
+        title={t("episode_delete")}
+        aria-label={t("episode_delete")}
+        className={`absolute ${onExportVideo ? "bottom-1.5 right-7" : "bottom-1.5 right-1.5"} grid h-5 w-5 place-items-center rounded text-text-4 transition-colors hover:text-[var(--color-danger)] focus-ring`}
+      >
+        <Trash2 className="h-3 w-3" aria-hidden />
+      </button>
+    )}
     {onExportVideo && (
       <button
         type="button"

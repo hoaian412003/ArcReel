@@ -31,7 +31,6 @@ from lib.project.project_migration_failure import ProjectMigrationError, record_
 from lib.project.project_schema import CURRENT_PROJECT_SCHEMA_VERSION
 from lib.script.draft_quarantine import (
     QUARANTINE_KIND_NARRATION_SCRIPT_PLAN,
-    QUARANTINE_KIND_SCRIPT_PLAN,
     quarantine_path,
 )
 from server.text_generation import TextGenerationRequest
@@ -49,7 +48,6 @@ from server.tool_runtime import (
     plan_episodes,
 )
 from tests.fakes import refuse_resume_execution
-from tests.integration.server.agent_tool_support import rv_director_plan, rv_unit
 
 
 async def _start_text_worker(
@@ -84,7 +82,6 @@ async def _start_text_worker(
         ("script", "ad", "storyboard", "script", "text_episode_script"),
         ("drama", "drama", "storyboard", "script_plan", "text_drama_script_plan"),
         ("narration", "narration", "storyboard", "script_plan", "text_narration_script_plan"),
-        ("reference", "narration", "reference_video", "script_plan", "text_reference_script_plan"),
         ("planning", "narration", "storyboard", "plan", "text_episode_plan"),
     ],
 )
@@ -354,6 +351,40 @@ async def test_queued_plan_resolves_data_root_from_current_config_and_preserves_
     assert problem.action is GenerationAction.RETRY
 
 
+async def test_queued_asset_analysis_reports_its_result_and_preserves_typed_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lib.project.asset_analysis import AssetAnalysisError, AssetAnalysisResult
+
+    projects = ProjectManager(tmp_path / "projects")
+    projects.create_project("analysis", content_mode="drama")
+    projects.create_project_metadata("analysis", "Analysis", "", "drama")
+    monkeypatch.setenv("ARCREEL_DATA_DIR", str(projects.data_root))
+    task = {"task_id": "task-analysis", "project_name": "analysis", "task_type": "text_asset_analysis", "payload": {}}
+
+    class Analyzer:
+        @classmethod
+        async def create(cls, _pm, _project_name):
+            return cls()
+
+        async def analyze(self):
+            return AssetAnalysisResult(analyzed_units=["2"], counts={"characters": 3}, added={"characters": ["少女"]})
+
+    result = await execute_queued_text_task(task, analyzer_cls=Analyzer)
+    assert result["analyzed_units"] == ["2"]
+    assert result["added"] == {"characters": ["少女"]}
+
+    class FailingAnalyzer(Analyzer):
+        async def analyze(self):
+            raise AssetAnalysisError("没有可分析的源文")
+
+    with pytest.raises(RuntimeError) as raised:
+        await execute_queued_text_task(task, analyzer_cls=FailingAnalyzer)
+    problem = problem_from_task_failure(str(raised.value))
+    assert problem.code == "asset_analysis_failed"
+    assert problem.action is GenerationAction.RETRY
+
+
 async def test_cancel_during_started_episode_script_commit_leaves_member_running_to_success(
     tmp_path: Path, file_db_factory, monkeypatch
 ) -> None:
@@ -525,18 +556,6 @@ async def test_cancel_during_started_episode_plan_commit_leaves_member_running_t
 @pytest.mark.parametrize(
     ("project_name", "generation_mode", "quarantine_kind", "generated_text"),
     [
-        (
-            "reference",
-            "reference_video",
-            QUARANTINE_KIND_SCRIPT_PLAN,
-            json.dumps(
-                {
-                    "director_plan": rv_director_plan(1),
-                    "units": [rv_unit("@[未登记角色] 出场", duration=4, source_text="张三走向村口。")],
-                },
-                ensure_ascii=False,
-            ),
-        ),
         (
             "narration",
             "storyboard",

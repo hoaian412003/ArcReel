@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -27,11 +29,15 @@ from lib.db.repositories.agent_credential_repo import AgentCredentialRepository
 from lib.db.repositories.agent_event_repo import AgentEventRepository
 from lib.db.repositories.agent_turn_repo import AgentTurnRepository
 from lib.db.repositories.session_repo import SessionRepository
+from lib.infra.api_errors import ConflictError, NotFoundError
 from lib.infra.data_root_layout import DataRootLayout
 from lib.project.project_manager import ProjectManager
+from server.claude_runtime.actions import ClaudeAction, render_action
 from server.claude_runtime.auth import ClaudeAuthManager
+from server.claude_runtime.mcp import project_mcp
 from server.claude_runtime.serialization import json_safe, sdk_message_payload
 from server.claude_runtime.usage import cost_delta, usage_delta
+from server.claude_runtime.workspace import AgentWorkspace
 from server.sse_channel import IDLE, DropSubscriber, SseChannel
 
 logger = logging.getLogger(__name__)
@@ -39,7 +45,7 @@ logger = logging.getLogger(__name__)
 ClientFactory = Callable[[ClaudeAgentOptions], Any]
 
 
-class SessionBusyError(RuntimeError):
+class ClaudeUnavailableError(RuntimeError):
     pass
 
 
@@ -61,6 +67,7 @@ class ClaudeSessionService:
     ) -> None:
         layout = DataRootLayout.current() if data_root is None else DataRootLayout(Path(data_root))
         self._projects_dir = layout.projects_dir
+        self._layout = layout
         self._project_manager = ProjectManager(Path(data_root) if data_root is not None else layout.root)
         self._session_factory = session_factory or safe_session_factory
         self._client_factory = client_factory or (lambda options: ClaudeSDKClient(options=options))
@@ -70,23 +77,40 @@ class ClaudeSessionService:
         self._active_clients: dict[str, Any] = {}
         self._channels: dict[str, SseChannel] = {}
         self._accept_locks: dict[str, asyncio.Lock] = {}
+        self._event_locks: dict[str, asyncio.Lock] = {}
         self._permission_waiters: dict[str, tuple[str, asyncio.Future[bool]]] = {}
         self._unstarted_sessions: set[str] = set()
+        self._project_tasks: dict[str, asyncio.Task[None]] = {}
+        self._project_locks: dict[str, asyncio.Lock] = {}
+        self._stopping = False
+        self._container_runtime = Path("/.dockerenv").exists()
+        self._maintenance_tasks: set[asyncio.Task[None]] = set()
 
     async def startup(self) -> None:
         async with self._session_factory() as db:
             await SessionRepository(db).interrupt_running()
+            await AgentTurnRepository(db).recover_running()
+            pending = await AgentTurnRepository(db).pending()
+            await db.commit()
+        for item in pending:
+            self._start_project_worker(item["project_name"])
 
     async def shutdown(self) -> None:
+        self._stopping = True
         clients = list(self._active_clients.values())
         for client in clients:
             with contextlib.suppress(Exception):
                 await client.interrupt()
-        tasks = list(self._active_tasks.values())
+        tasks = list(self._project_tasks.values())
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        maintenance = list(self._maintenance_tasks)
+        for task in maintenance:
+            task.cancel()
+        if maintenance:
+            await asyncio.gather(*maintenance, return_exceptions=True)
         for _, future in self._permission_waiters.values():
             if not future.done():
                 future.cancel()
@@ -98,6 +122,35 @@ class ClaudeSessionService:
             rows = await SessionRepository(db).list(project_name=project_name, user_id=user_id)
         return [self._public_session(row) for row in rows]
 
+    async def clear_sessions(self, project_name: str, *, user_id: str = DEFAULT_USER_ID) -> int:
+        """Clear one project's session history without touching project files or memory."""
+        await asyncio.to_thread(self._project_manager.get_project_path, project_name)
+        project_task = self._project_tasks.get(project_name)
+        if project_task is not None and not project_task.done():
+            raise ConflictError("claude_session_busy")
+
+        async with self._session_factory() as db:
+            session_repo = SessionRepository(db)
+            rows = await session_repo.list_for_project(project_name, user_id=user_id)
+            if any(row["status"] == "running" for row in rows):
+                raise ConflictError("claude_session_busy")
+            pending = await AgentTurnRepository(db).pending(project_name, user_id=user_id)
+            if pending:
+                raise ConflictError("claude_session_busy")
+            deleted = await session_repo.delete_for_project(project_name, user_id=user_id)
+
+        workspace = await self.workspace(project_name, user_id)
+        await asyncio.to_thread(workspace.clear_main_session, user_id)
+        for row in deleted:
+            session_id = row["id"]
+            self._active_tasks.pop(session_id, None)
+            self._active_clients.pop(session_id, None)
+            self._channels.pop(session_id, None)
+            self._accept_locks.pop(session_id, None)
+            self._event_locks.pop(session_id, None)
+            self._unstarted_sessions.discard(session_id)
+        return len(deleted)
+
     async def send_message(
         self,
         *,
@@ -106,11 +159,17 @@ class ClaudeSessionService:
         session_id: str | None,
         client_key: str,
         user_id: str = DEFAULT_USER_ID,
+        action: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         prompt = content.strip()
         if not prompt:
             raise ValueError("message content is empty")
-        project_path = await asyncio.to_thread(self._project_manager.get_project_path, project_name)
+        if self._auth_manager is not None and not await self._auth_manager.is_logged_in():
+            async with self._session_factory() as db:
+                credential = await AgentCredentialRepository(db).get_active(user_id)
+            if credential is None and not os.environ.get("ANTHROPIC_API_KEY"):
+                raise ClaudeUnavailableError("Claude authentication is required")
+        await asyncio.to_thread(self._project_manager.get_project_path, project_name)
 
         if session_id is None:
             new_lock = self._accept_locks.setdefault(f"new:{user_id}:{project_name}:{client_key}", asyncio.Lock())
@@ -139,13 +198,14 @@ class ClaudeSessionService:
                     session_id=session_row["id"],
                     client_key=client_key,
                     user_id=user_id,
+                    action=action,
                 )
 
         resolved_session_id = session_id
         assert resolved_session_id is not None
 
         lock = self._accept_locks.setdefault(resolved_session_id, asyncio.Lock())
-        async with lock:
+        async with lock, self._event_locks.setdefault(resolved_session_id, asyncio.Lock()):
             async with self._session_factory() as db:
                 session_repo = SessionRepository(db)
                 session_row = await session_repo.get_by_id(resolved_session_id, user_id=user_id)
@@ -157,40 +217,129 @@ class ClaudeSessionService:
                 if existing is not None:
                     return {"session": self._public_session(session_row), "turn": existing}
 
-                active = self._active_tasks.get(resolved_session_id)
-                if active is not None and not active.done():
-                    raise SessionBusyError(session_id)
-
-                turn = await turn_repo.create(session_id=resolved_session_id, client_key=client_key, user_id=user_id)
+                turn = await turn_repo.create(
+                    session_id=resolved_session_id, client_key=client_key, user_id=user_id, prompt=prompt, action=action
+                )
                 event = await AgentEventRepository(db).append(
                     session_id=resolved_session_id,
                     entry_type="user_message",
-                    payload={"turn_id": turn["id"], "content": prompt},
+                    payload={"turn_id": turn["id"], "content": prompt, "action": action},
                     client_key=client_key,
+                    user_id=user_id,
+                )
+                queued = await AgentEventRepository(db).append(
+                    session_id=resolved_session_id,
+                    entry_type="turn_queued",
+                    payload={"turn_id": turn["id"]},
                     user_id=user_id,
                 )
                 await db.commit()
 
             self._broadcast(event)
-            task = asyncio.create_task(
-                self._run_turn(
-                    session=session_row,
-                    turn=turn,
-                    prompt=prompt,
-                    project_path=project_path,
-                    user_id=user_id,
-                ),
-                name=f"claude-turn-{turn['id']}",
-            )
-            self._active_tasks[resolved_session_id] = task
-            task.add_done_callback(lambda finished, sid=resolved_session_id: self._turn_finished(sid, finished))
+            self._broadcast(queued)
+            self._start_project_worker(project_name)
             return {"session": self._public_session(session_row), "turn": turn}
 
+    async def workspace(self, project_name: str, user_id: str) -> AgentWorkspace:
+        async with self._project_locks.setdefault(f"workspace:{project_name}", asyncio.Lock()):
+            try:
+                project_path = await asyncio.to_thread(self._project_manager.get_project_path, project_name)
+                return await asyncio.to_thread(AgentWorkspace, self._layout, project_path, project_name, user_id)
+            except FileNotFoundError as exc:
+                raise NotFoundError("project_not_found", name=project_name) from exc
+            except ValueError as exc:
+                raise ConflictError("claude_workspace_unavailable") from exc
+
+    async def send_action(self, project_name: str, action: ClaudeAction, *, user_id: str) -> dict[str, Any]:
+        rendered = render_action(action)
+        async with self._project_locks.setdefault(f"action:{project_name}", asyncio.Lock()):
+            workspace = await self.workspace(project_name, user_id)
+            session_id = workspace.main_session(user_id)
+            if session_id is None:
+                sessions = await self.list_sessions(project_name, user_id=user_id)
+                session_id = sessions[-1]["id"] if sessions else None
+            result = await self.send_message(
+                project_name=project_name,
+                content=rendered.content,
+                session_id=session_id,
+                client_key=action.client_key,
+                user_id=user_id,
+                action=rendered.provenance,
+            )
+            await asyncio.to_thread(workspace.set_main_session, result["session"]["id"], user_id)
+            return result
+
+    def _start_project_worker(self, project_name: str) -> None:
+        key = project_name
+        task = self._project_tasks.get(key)
+        if not self._stopping and (task is None or task.done()):
+            worker = asyncio.create_task(self._drain_project(project_name))
+            self._project_tasks[key] = worker
+            worker.add_done_callback(lambda finished: self._worker_done(project_name, finished))
+
+    def _worker_done(self, project_name: str, task: asyncio.Task[None]) -> None:
+        with contextlib.suppress(asyncio.CancelledError):
+            if task.exception() is not None:
+                logger.error("Project agent worker failed", exc_info=task.exception())
+                return
+        if not self._stopping:
+            maintenance = asyncio.create_task(self._restart_pending(project_name))
+            self._maintenance_tasks.add(maintenance)
+            maintenance.add_done_callback(self._maintenance_tasks.discard)
+
+    async def _restart_pending(self, project_name: str) -> None:
+        async with self._session_factory() as db:
+            pending = await AgentTurnRepository(db).pending(project_name)
+        if pending:
+            self._start_project_worker(project_name)
+
+    async def _drain_project(self, project_name: str) -> None:
+        while not self._stopping:
+            async with self._session_factory() as db:
+                pending = await AgentTurnRepository(db).pending(project_name)
+            if not pending:
+                return
+            item = pending[0]
+            user_id = item["user_id"]
+            session = await self.require_session(item["session_id"], project_name=project_name, user_id=user_id)
+            try:
+                workspace = await self.workspace(project_name, user_id)
+            except (NotFoundError, ConflictError):
+                await self._fail_turn(session["id"], item["turn"]["id"], "workspace_unavailable", user_id=user_id)
+                continue
+            task = asyncio.current_task()
+            assert task is not None
+            self._active_tasks[session["id"]] = task
+            try:
+                await self._run_turn(
+                    session=session,
+                    turn=item["turn"],
+                    prompt=item["prompt"],
+                    project_path=workspace.cwd,
+                    user_id=user_id,
+                )
+            finally:
+                self._active_tasks.pop(session["id"], None)
+
     async def interrupt(self, session_id: str, *, project_name: str, user_id: str = DEFAULT_USER_ID) -> bool:
-        await self._require_session(session_id, project_name=project_name, user_id=user_id)
+        await self.require_session(session_id, project_name=project_name, user_id=user_id)
+        async with self._session_factory() as db:
+            repo = AgentTurnRepository(db)
+            queued = [
+                turn
+                for turn in await repo.list_for_session(session_id, user_id=user_id)
+                if turn["status"] == "accepted"
+            ]
+            for turn in queued:
+                await repo.fail(turn["id"], error_code="interrupted", error_message="interrupted")
+            await db.commit()
+        for turn in queued:
+            await self._append_event(
+                session_id, "turn_error", {"turn_id": turn["id"], "code": "interrupted"}, user_id=user_id
+            )
         client = self._active_clients.get(session_id)
         if client is None:
-            return False
+            return bool(queued)
         await client.interrupt()
         return True
 
@@ -203,7 +352,7 @@ class ClaudeSessionService:
         project_name: str,
         user_id: str = DEFAULT_USER_ID,
     ) -> None:
-        await self._require_session(session_id, project_name=project_name, user_id=user_id)
+        await self.require_session(session_id, project_name=project_name, user_id=user_id)
         pending = self._permission_waiters.get(request_id)
         if pending is None or pending[0] != session_id:
             raise PermissionRequestNotFoundError(request_id)
@@ -219,9 +368,16 @@ class ClaudeSessionService:
         after_seq: int = 0,
         user_id: str = DEFAULT_USER_ID,
     ) -> list[dict[str, Any]]:
-        await self._require_session(session_id, project_name=project_name, user_id=user_id)
+        await self.require_session(session_id, project_name=project_name, user_id=user_id)
         async with self._session_factory() as db:
-            return await AgentEventRepository(db).list_after(session_id, after_seq, user_id=user_id)
+            events = []
+            cursor = after_seq
+            while True:
+                page = await AgentEventRepository(db).list_after(session_id, cursor, user_id=user_id)
+                events.extend(page)
+                if len(page) < 1000:
+                    return events
+                cursor = page[-1]["seq"]
 
     async def turns(
         self,
@@ -230,7 +386,7 @@ class ClaudeSessionService:
         project_name: str,
         user_id: str = DEFAULT_USER_ID,
     ) -> dict[str, Any]:
-        await self._require_session(session_id, project_name=project_name, user_id=user_id)
+        await self.require_session(session_id, project_name=project_name, user_id=user_id)
         async with self._session_factory() as db:
             turns = await AgentTurnRepository(db).list_for_session(session_id, user_id=user_id)
         token_fields = (
@@ -253,7 +409,7 @@ class ClaudeSessionService:
         user_id: str = DEFAULT_USER_ID,
         idle_timeout: float = 15.0,
     ) -> AsyncGenerator[AsyncIterator[dict[str, Any] | object]]:
-        await self._require_session(session_id, project_name=project_name, user_id=user_id)
+        await self.require_session(session_id, project_name=project_name, user_id=user_id)
         channel = self._channel(session_id)
         queue = channel.subscribe()
         history = await self.events(
@@ -282,7 +438,8 @@ class ClaudeSessionService:
             await channel.unsubscribe(queue)
 
     async def wait_for_idle(self, session_id: str) -> None:
-        task = self._active_tasks.get(session_id)
+        session = await self.require_session(session_id, user_id=DEFAULT_USER_ID)
+        task = self._project_tasks.get(session["project_name"])
         if task is not None:
             await asyncio.shield(task)
 
@@ -298,6 +455,7 @@ class ClaudeSessionService:
         session_id = session["id"]
         turn_id = turn["id"]
         result_failed = False
+        result_received = False
         try:
             async with self._session_factory() as db:
                 turn_repo = AgentTurnRepository(db)
@@ -312,6 +470,7 @@ class ClaudeSessionService:
                 user_id=user_id,
                 resume=session_id not in self._unstarted_sessions,
             )
+            await self._append_event(session_id, "turn_running", {"turn_id": turn_id}, user_id=user_id)
             client = self._client_factory(options)
             async with client:
                 self._active_clients[session_id] = client
@@ -328,6 +487,7 @@ class ClaudeSessionService:
                         user_id=user_id,
                     )
                     if isinstance(message, ResultMessage):
+                        result_received = True
                         result_failed = message.is_error
                         await self._complete_turn(
                             session_id=session_id,
@@ -336,6 +496,8 @@ class ClaudeSessionService:
                             previous=previous,
                             user_id=user_id,
                         )
+            if not result_received:
+                raise RuntimeError("Claude response ended without a result")
             async with self._session_factory() as db:
                 await SessionRepository(db).update_status_by_id(
                     session_id,
@@ -343,6 +505,7 @@ class ClaudeSessionService:
                     user_id=user_id,
                 )
                 await db.commit()
+            await self._append_event(session_id, "turn_finished", {"turn_id": turn_id}, user_id=user_id)
         except asyncio.CancelledError:
             await self._fail_turn(session_id, turn_id, "interrupted", user_id=user_id)
             raise
@@ -368,6 +531,8 @@ class ClaudeSessionService:
         resume: bool,
     ) -> ClaudeAgentOptions:
         env: dict[str, str] = {}
+        if self._container_runtime:
+            env["IS_SANDBOX"] = "1"
         model: str | None = None
         credential = None
         if self._auth_manager is None or not await self._auth_manager.is_logged_in():
@@ -379,13 +544,10 @@ class ClaudeSessionService:
                 env["ANTHROPIC_BASE_URL"] = credential.base_url
             model = credential.model or credential.sonnet_model
 
-        async def can_use_tool(
-            tool_name: str,
-            tool_input: dict[str, Any],
-            context: ToolPermissionContext,
-        ) -> PermissionResultAllow | PermissionResultDeny:
-            return await self._request_permission(session["id"], tool_name, tool_input, context, user_id=user_id)
-
+        workspace = await self.workspace(session["project_name"], user_id)
+        if resume:
+            history = await self.events(session["id"], user_id=user_id)
+            resume = any(event["type"] == "sdk_message" for event in history)
         sdk_id = session["sdk_session_id"]
         return ClaudeAgentOptions(
             cwd=project_path,
@@ -393,15 +555,21 @@ class ClaudeSessionService:
             resume=sdk_id if resume else None,
             model=model,
             env=env,
-            setting_sources=["project"],
-            allowed_tools=["Read", "Glob", "Grep"],
-            permission_mode="default",
-            can_use_tool=can_use_tool,
+            setting_sources=["user", "project", "local"],
+            tools={"type": "preset", "preset": "claude_code"},
+            permission_mode="bypassPermissions",
+            mcp_servers={"arcreel": project_mcp(self._project_manager, session["project_name"], user_id)},
+            settings=json.dumps({"autoMemoryEnabled": True, "autoMemoryDirectory": str(workspace.memory_dir)}),
+            add_dirs=[workspace.memory_dir],
             include_partial_messages=True,
+            include_hook_events=True,
+            forward_subagent_text=True,
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
-                "append": "Work only inside the current ArcReel project and explain consequential edits.",
+                "append": f"You are the persistent agent for ArcReel project {session['project_name']}. "
+                "Use project skills and the project-bound ArcReel MCP tools to manage its artifacts. "
+                f"Keep cross-session notes in {workspace.memory_dir}. Explain consequential edits.",
             },
         )
 
@@ -493,7 +661,7 @@ class ClaudeSessionService:
         *,
         user_id: str,
     ) -> dict[str, Any]:
-        async with self._session_factory() as db:
+        async with self._event_locks.setdefault(session_id, asyncio.Lock()), self._session_factory() as db:
             event = await AgentEventRepository(db).append(
                 session_id=session_id,
                 entry_type=event_type,
@@ -504,7 +672,7 @@ class ClaudeSessionService:
         self._broadcast(event)
         return event
 
-    async def _require_session(
+    async def require_session(
         self,
         session_id: str,
         *,

@@ -135,7 +135,6 @@ _ARTIFACT_BY_STEP: dict[str, str] = {
 
 _TASK_STEP: dict[str, str] = {
     "text_episode_plan": "episode_plan",
-    "text_screenplay": "screenplay",
     "text_drama_script_plan": "script_plan_content",
     "text_narration_script_plan": "script_plan_content",
     "text_reference_script_plan": "script_plan_content",

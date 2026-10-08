@@ -15,6 +15,7 @@ import { useProjectsStore } from "@/stores/projects-store";
 import { errMsg } from "@/utils/async";
 import { rejectIfAssetBusy } from "./assetBusyGuard";
 import { CharacterDerivativesButton } from "./CharacterDerivativesButton";
+import { CharacterFaceSection } from "./CharacterFaceSection";
 import { EditableAssetName } from "./EditableAssetName";
 import { VoiceSampleButton } from "./VoiceSampleButton";
 import type { Character, CharacterVoiceBinding } from "@/types";
@@ -309,7 +310,6 @@ export function CharacterCard({
     : null;
 
   const displayedReferenceUrl = referencePreview ?? savedReferenceUrl;
-  const hasSavedReference = Boolean(savedReferenceUrl) && !referencePreview;
 
   const savedAudioUrl = character.reference_audio
     ? API.getFileUrl(projectName, character.reference_audio, audioFp)
@@ -356,8 +356,9 @@ export function CharacterCard({
         }}
       />
 
-      {/* ---- Header: 单排 icon + name + icon-only 工具栏 ---- */}
-      <div className="mb-4 flex items-center gap-2.5">
+      {/* ---- Header: icon + name 独占一行，icon-only 工具栏在其下 ---- */}
+      <div className="mb-4">
+      <div className="flex items-center gap-2.5">
         <span
           aria-hidden
           className="grid h-7 w-7 shrink-0 place-items-center rounded-md"
@@ -378,8 +379,9 @@ export function CharacterCard({
              因此改名比兄弟控件多禁用一档，把卡片本地的在途标志也算进占用态。 */
           busy={generating || uploadingSheet || saving || deletingAudio}
         />
+      </div>
         {readOnly ? null : (
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div className="mt-2 flex flex-wrap items-center gap-0.5">
           <button
             type="button"
             onClick={() => sheetInputRef.current?.click()}
@@ -469,12 +471,23 @@ export function CharacterCard({
           </div>
         </div>
 
+        <div className="@container grid grid-cols-2 items-start gap-3">
+        <CharacterFaceSection
+          projectName={projectName}
+          characterName={name}
+          derivatives={character.derivatives ?? {}}
+          ownerHasSheet={Boolean(character.character_sheet)}
+          busy={generating || uploadingSheet || saving || deletingAudio}
+          readOnly={readOnly}
+          onReload={onReload}
+        />
+
         {/* 只读且没有参考图时整块不渲染：留一个不能用的上传框只是噪声 */}
         {readOnly && !displayedReferenceUrl ? null : (
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center justify-between">
             <CapsLabel>{t("reference_image")}</CapsLabel>
-            {!readOnly && (referenceFile || hasSavedReference) && (
+            {!readOnly && referenceFile && (
               <button
                 type="button"
                 onClick={() =>
@@ -484,7 +497,7 @@ export function CharacterCard({
                 }
                 className="focus-ring text-[11px] text-[var(--color-text-3)] transition-colors hover:text-[var(--color-text)]"
               >
-                {referenceFile ? t("cancel_pending") : t("replace")}
+                {t("cancel_pending")}
               </button>
             )}
           </div>
@@ -502,7 +515,7 @@ export function CharacterCard({
                 <img
                   src={displayedReferenceUrl}
                   alt={`${name} ${t("reference_image")}`}
-                  className="h-28 w-full object-cover"
+                  className="aspect-square w-full object-cover"
                 />
                 <div
                   className="absolute inset-x-0 bottom-0 flex items-center justify-between px-3 py-2"
@@ -512,17 +525,20 @@ export function CharacterCard({
                   }}
                 >
                   <span
-                    className="flex items-center gap-1.5 text-[11px]"
+                    className="flex min-w-0 items-center gap-1.5 text-[11px]"
                     style={{ color: "var(--color-text)" }}
+                    title={referenceFile ? t("unsaved_reference") : t("saved_reference")}
                   >
-                    <ImagePlus className="h-3.5 w-3.5" />
-                    {referenceFile ? t("unsaved_reference") : t("saved_reference")}
+                    <ImagePlus className="h-3.5 w-3.5 shrink-0" />
+                    <span className="hidden truncate @[26rem]:inline">
+                      {referenceFile ? t("unsaved_reference") : t("saved_reference")}
+                    </span>
                   </span>
                   {readOnly ? null : (
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="focus-ring rounded px-2 py-0.5 text-[11px] transition-colors"
+                    className="focus-ring shrink-0 rounded px-2 py-0.5 text-[11px] transition-colors"
                     style={{
                       background: "oklch(0 0 0 / 0.5)",
                       color: "var(--color-text)",
@@ -556,6 +572,7 @@ export function CharacterCard({
           />
         </div>
         )}
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-2">

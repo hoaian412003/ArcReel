@@ -71,7 +71,7 @@ def dub_audio_resource_id(unit_id: str, index: int) -> str:
 
 
 #: 项目没指定音色时各性别优先选用的音色（VieNeu 预设里风格中性自然的一对）；目录里没有时才取该性别的第一个。
-PREFERRED_DUB_VOICES: dict[str, str] = {"male": "Hải Đăng", "female": "Mai Anh"}
+PREFERRED_DUB_VOICES: dict[str, str] = {"male": "Hải Đăng", "female": "Ngọc Trân"}
 
 
 def resolve_dub_voice(project: dict, gender: str, voices: tuple[Any, ...], fallback: str) -> str:

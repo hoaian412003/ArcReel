@@ -108,3 +108,39 @@ def test_only_detected_lines_can_be_delayed():
     )
 
     assert [s.delayed_seconds for s in slots] == [0.0, 0.0, 0.0]
+
+
+def test_planned_start_is_used_when_nothing_else_places_the_line():
+    slots = schedule_dub_lines(
+        [
+            DubTimingInput("a", audio_duration=2.0, planned_start=1.0),
+            DubTimingInput("b", audio_duration=2.0, planned_start=5.0),
+        ]
+    )
+
+    assert [s.start_seconds for s in slots] == [1.0, 5.0]
+    assert [s.source for s in slots] == ["planned", "planned"]
+
+
+def test_the_directors_planned_start_outranks_the_detected_start():
+    (slot,) = schedule_dub_lines([DubTimingInput("a", audio_duration=1.0, detected_start=3.0, planned_start=1.0)])
+
+    assert (slot.start_seconds, slot.source) == (1.0, "planned")
+
+
+def test_manual_override_outranks_the_directors_planned_start():
+    (slot,) = schedule_dub_lines([DubTimingInput("a", audio_duration=1.0, start_override=2.0, planned_start=1.0)])
+
+    assert (slot.start_seconds, slot.source) == (2.0, "manual")
+
+
+def test_planned_start_is_pushed_back_when_the_previous_line_is_still_running():
+    slots = schedule_dub_lines(
+        [
+            DubTimingInput("a", audio_duration=4.0, planned_start=1.0),
+            DubTimingInput("b", audio_duration=1.0, planned_start=3.0),
+        ]
+    )
+
+    assert slots[1].start_seconds == pytest.approx(5.0 + DUB_LINE_GAP_SECONDS)
+    assert slots[1].delayed_seconds == pytest.approx(2.0 + DUB_LINE_GAP_SECONDS)

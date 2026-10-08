@@ -12,6 +12,7 @@ from lib.project.asset_types import DERIVATIVES_FIELD
 from lib.project.project_manager import ProjectManager, get_project_manager
 from lib.project.resource_paths import (
     CHARACTER_DERIVATIVE_RESOURCE_TYPE,
+    KEYFRAME_SHEET_RESOURCE_TYPE,
     RESOURCE_TYPES,
     resource_relative_path,
 )
@@ -24,6 +25,7 @@ _RESOURCE_IDS = {
     CHARACTER_DERIVATIVE_RESOURCE_TYPE: _DERIVATIVE_ID,
     "products": _PRODUCT_ID,
     "grids": "grid_0123456789ab",
+    KEYFRAME_SHEET_RESOURCE_TYPE: "episode_1/S1",
 }
 
 

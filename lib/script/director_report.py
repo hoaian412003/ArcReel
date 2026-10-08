@@ -241,6 +241,7 @@ def _reference_row(unit: Mapping[str, Any]) -> dict[str, Any]:
         "id": str(unit.get("unit_id")),
         "description": text if len(text) <= DESCRIPTION_MAX_CHARS else text[:DESCRIPTION_MAX_CHARS].rstrip() + "…",
         "duration_seconds": unit.get("duration_seconds") if isinstance(unit.get("duration_seconds"), int) else 0,
+        "direction": _text(unit.get("direction")),
         "unit_type": _text(unit.get("unit_type")),
         "brief": _text(unit.get("brief")),
         "shots": shots,
@@ -276,7 +277,7 @@ def _build_reference_report(script: Mapping[str, Any]) -> dict[str, Any] | None:
     raw_plan = script.get("director_plan")
     plan: Mapping[str, Any] | None = raw_plan if isinstance(raw_plan, Mapping) else None
     rows = [_reference_row(unit) for unit in units]
-    directed = [bool(row["brief"]) and bool(row["shots"]) for row in rows]
+    directed = [bool(row["direction"]) or (bool(row["brief"]) and bool(row["shots"])) for row in rows]
     if plan is None and not any(directed):
         return None
 
@@ -298,6 +299,9 @@ def _build_reference_report(script: Mapping[str, Any]) -> dict[str, Any] | None:
     for index in range(1, len(rows)):
         previous, row = rows[index - 1], rows[index]
         if not (directed[index - 1] and directed[index]):
+            continue
+        # 自由文本导演说明里的衔接是文字，没有可比对的结构化字段，不做机械衔接判定
+        if previous["direction"] or row["direction"]:
             continue
         if not continuity_connects(previous["continuity_out"], row["continuity_in"]):
             warnings.append(

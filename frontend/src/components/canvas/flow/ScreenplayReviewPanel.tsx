@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { Check, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { API, ApiRequestError } from "@/api";
 import type { Screenplay, ScreenplayScene } from "@/types/screenplay";
 import { useAppStore } from "@/stores/app-store";
+import { AskAgentButton } from "@/components/claude/AskAgentButton";
+import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { errMsg } from "@/utils/async";
 import { CARD_STYLE, GHOST_BTN_CLS, GHOST_BTN_LG_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
 
@@ -150,6 +152,7 @@ export function ScreenplayReviewPanel({
   episode,
   version,
   onLoaded,
+  onApproved,
 }: {
   projectName: string;
   episode: number;
@@ -157,6 +160,8 @@ export function ScreenplayReviewPanel({
   version: number;
   /** 每次拿到最新剧本状态时回报，供外层用审阅过的指纹发起「通过」。 */
   onLoaded?: (screenplay: Screenplay) => void;
+  /** 审阅通过后通知宿主刷新看板或关闭抽屉；审批本身由本面板完成。 */
+  onApproved?: (screenplay: Screenplay) => void;
 }) {
   const { t } = useTranslation("dashboard");
   const pushToast = useAppStore((s) => s.pushToast);
@@ -227,6 +232,26 @@ export function ScreenplayReviewPanel({
     [screenplay, projectName, episode, target, pushToast, retry, t],
   );
 
+  const approve = useCallback(async () => {
+    if (!screenplay?.fingerprint || dirtyIndexes.length > 0 || screenplay.status === "approved") return;
+    setBusy(true);
+    try {
+      const next = await API.approveScreenplay(projectName, episode, screenplay.fingerprint);
+      setResult({ target, screenplay: next, error: null });
+      pushToast(t("screenplay_approved_toast"), "success");
+      onApproved?.(next);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 409) {
+        pushToast(t("screenplay_conflict_toast"), "warning");
+        retry();
+      } else {
+        pushToast(t("screenplay_approve_failed", { message: errMsg(err) }), "error");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [screenplay, dirtyIndexes.length, projectName, episode, target, pushToast, t, onApproved, retry]);
+
   if (current == null) {
     return <div className="flex h-40 items-center justify-center text-text-4">{t("screenplay_loading")}</div>;
   }
@@ -243,13 +268,23 @@ export function ScreenplayReviewPanel({
     );
   }
   if (!screenplay || screenplay.status === "none") {
-    return <p className="text-[12.5px] text-text-3">{t("screenplay_none")}</p>;
+    return (
+      <div>
+        <p className="text-[12.5px] text-text-3">{t("screenplay_none")}</p>
+        <AskAgentButton projectName={projectName} action={{ action: "create_screenplay", episode }} />
+      </div>
+    );
   }
 
   const structureLocked = dirtyIndexes.length > 0;
 
   return (
     <div className="flex flex-col gap-3">
+      <header className="border-b border-hairline pb-3">
+        <h2 className="text-[15px] font-semibold text-text">{t("screenplay_report_title")}</h2>
+        <p className="mt-1 text-[12px] leading-relaxed text-text-3">{t("screenplay_report_hint")}</p>
+      </header>
+
       <p className="text-[12px] text-text-3" data-testid="screenplay-status">
         {t(`screenplay_status_${screenplay.status}`)}
       </p>
@@ -312,6 +347,21 @@ export function ScreenplayReviewPanel({
           {t("screenplay_add_scene")}
         </button>
       </div>
+
+      <footer className="flex flex-col items-end gap-2 border-t border-hairline pt-3">
+        {structureLocked && <p className="text-[11.5px] text-amber-400">{t("screenplay_unsaved_changes")}</p>}
+        <PrimaryButton
+          disabled={busy || structureLocked || screenplay.status === "approved"}
+          leadingIcon={<Check className="h-3.5 w-3.5" aria-hidden="true" />}
+          onClick={() => void approve()}
+        >
+          {busy
+            ? t("screenplay_approving")
+            : screenplay.status === "approved"
+              ? t("screenplay_status_approved")
+              : t("screenplay_approve")}
+        </PrimaryButton>
+      </footer>
     </div>
   );
 }

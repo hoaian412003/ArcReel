@@ -2,14 +2,13 @@ import { useCallback, useMemo, useRef, type KeyboardEvent } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft } from "lucide-react";
-import { QueueAuditTab } from "@/components/queue/QueueAuditTab";
 import { QueueLimitsTab } from "@/components/queue/QueueLimitsTab";
 import { QueueOverviewTab } from "@/components/queue/QueueOverviewTab";
 import { QueueTasksTab } from "@/components/queue/QueueTasksTab";
 import { ICON_BTN_FILLED_CLS, ambientGlowStyle } from "@/components/ui/darkroom-tokens";
 import { ROUTE_APP_PROJECTS } from "@/app-routes";
 
-const TABS = ["overview", "tasks", "audit", "limits"] as const;
+const TABS = ["overview", "tasks", "limits"] as const;
 type QueueTab = (typeof TABS)[number];
 
 const HEADER_GLOW_STYLE = ambientGlowStyle({ at: "30% 0%", intensity: 0.08 });
@@ -111,7 +110,6 @@ export function QueueMonitorPage() {
         <div role="tabpanel" id="queue-panel" aria-labelledby={`queue-tab-${activeTab}`} tabIndex={0} className="focus-visible:outline-none">
           {activeTab === "overview" && <QueueOverviewTab />}
           {activeTab === "tasks" && <QueueTasksTab />}
-          {activeTab === "audit" && <QueueAuditTab />}
           {activeTab === "limits" && <QueueLimitsTab />}
         </div>
       </main>

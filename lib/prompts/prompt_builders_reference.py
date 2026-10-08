@@ -24,7 +24,6 @@ from lib.prompts.prompt_builders_script import (
 )
 from lib.prompts.prompt_rules.asset_appearance import asset_reference_names
 from lib.prompts.prompt_templates.builtin import builtin_templates
-from lib.script.script_models import REFERENCE_UNIT_TYPE_MEANINGS
 from lib.speech.dub_settings import character_dub_gender
 from lib.speech.speech_rate import speech_rate_units_per_second
 
@@ -182,7 +181,8 @@ def build_reference_dub_lines_prompt(
     """为已有 unit 回填越南语配音台词的 prompt（TRANSLATE_DUB，单次最多一批 unit）。
 
     ``units`` 每项为 ``{"unit_id", "duration_seconds", "text", "utterances": [{"index", "speaker", "text"}]}``，
-    ``utterances`` 是 unit 正文派生出的台词 / 画外音序列（``speaker`` 为 None 即画外音）。
+    ``utterances`` 是 unit 正文派生出的台词 / 画外音序列（``speaker`` 为 None 即画外音）；导演给了时间窗的发声另带
+    ``window_seconds``，译文须在窗内念完。
     只翻译与配音，不改写正文；性别取角色登记值，未登记时由模型依称谓与语境判断。
     """
     narrator = narrator_gender if narrator_gender in ("male", "female") else "male"
@@ -226,7 +226,9 @@ def build_reference_dub_lines_prompt(
         for item in utterances:
             speaker = item.get("speaker")
             label = f"{speaker}" if speaker else "画外音"
-            lines.append(f"- [{item['index']}] {_neutralize_tags(str(label))}：{item['text']}")
+            window = item.get("window_seconds")
+            note = f"（导演定的时间窗 {window:g} 秒，译文须在窗内念完）" if window else ""
+            lines.append(f"- [{item['index']}] {_neutralize_tags(str(label))}：{item['text']}{note}")
     return "\n".join(lines)
 
 
@@ -263,9 +265,13 @@ def _camera_phrase(camera: object) -> str:
 def _render_unit_direction(unit: dict) -> str:
     """unit 的导演说明渲染成逐行要点；没有任何导演内容（存量 script_plan）时返回空串。
 
+    导演写的是自由文本 ``direction`` 时原样返回（它就是完整的导演说明）；下面是存量分项字段的渲染。
+
     导演步骤的镜头表按「序号 · 切入秒数 · 取景 · 运镜 · 动作」逐镜列出，台词标出所在镜头；存量单元只有
     ``beats`` 时把 ``at_pct`` 连同时长换算成秒数给出，提示词编写据此定镜头切点，不必自己做算术。
     """
+    if text := _direction_text(unit.get("direction")):
+        return text
     duration = int(unit.get("duration_seconds") or 0)
     lines: list[str] = []
     if unit_type := _direction_text(unit.get("unit_type")):
@@ -329,7 +335,7 @@ def _render_unit_direction(unit: dict) -> str:
 
 
 def render_reference_director_units(units: list[dict], *, target_ids: list[str] | None = None) -> str:
-    """把全集单元渲染为导演步骤的输入块：序号、单元 id、时长、正文，已有导演说明时一并列出。
+    """把全集单元渲染为导演步骤的输入块：序号、单元 id、时长、正文、带序号的发声列表，已有导演说明与 speech_cues 时一并列出。
 
     ``target_ids`` 非空时，本次要重做的单元带「（本次重做）」标记，其余单元的现有导演说明作前后文参照。
     """
@@ -342,6 +348,18 @@ def render_reference_director_units(units: list[dict], *, target_ids: list[str] 
         mark = "（本次重做）" if unit_id in targeted else ""
         duration = int(unit.get("duration_seconds") or 0)
         block = f"### {index}. {_neutralize_tags(unit_id)}（时长 {duration} 秒）{mark}\n{unit.get('text') or ''}"
+        if utterances := unit.get("utterances"):
+            numbered = "\n".join(
+                f"- [{item['index']}] {_neutralize_tags(str(item.get('speaker') or '画外音'))}：{item['text']}"
+                for item in utterances
+            )
+            block += f"\n\n发声序号（speech_cues 的 index，台词与画外音按正文出现顺序）：\n{numbered}"
+        if cues := unit.get("speech_cues"):
+            rendered = "；".join(
+                f"[{cue['index']}] {cue['start_seconds']:g}–{cue['end_seconds']:g}s {cue.get('gender') or '-'}"
+                for cue in cues
+            )
+            block += f"\n\n现有 speech_cues：{rendered}"
         if direction := _render_unit_direction(unit):
             block += f"\n\n现有导演说明：\n{direction}"
         blocks.append(block)
@@ -361,7 +379,7 @@ def build_reference_director_prompt(
     target_language: str = "中文",
     instructions: str | None = None,
 ) -> str:
-    """参考生视频导演步骤 prompt：全集单元 + 资产外观 → 集级导演规划与逐单元导演说明（``ReferenceDirectorEpisodeOutput``）。
+    """参考生视频导演步骤 prompt：全集单元 + 资产外观 → 导演子智能体的写作简报（集级导演规划 + 逐单元自由文本导演说明）。
 
     ``target_ids`` 非空表示只修订这些单元（其余单元的现有说明作参照）；``revision_note`` 是审阅者的修改意见。
     """
@@ -374,7 +392,6 @@ def build_reference_director_prompt(
         episode=episode,
         total_units=len(units),
         target_unit_ids=list(target_ids) if target_ids else None,
-        unit_types=[{"value": value, "meaning": meaning} for value, meaning in REFERENCE_UNIT_TYPE_MEANINGS.items()],
         revision_note=revision_note.strip() if isinstance(revision_note, str) and revision_note.strip() else None,
         instructions=instructions or None,
     )

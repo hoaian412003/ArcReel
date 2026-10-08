@@ -21,6 +21,7 @@ import { tierProblemText } from "./unit-tier-problem";
 import { ReferenceSplitAlert } from "./ReferenceSplitAlert";
 import { EpisodeHeader } from "./EpisodeHeader";
 import { H3RegenerateAllButton } from "./H3PromptControls";
+import { KeyframeBoardPanel } from "./KeyframeBoardPanel";
 import { ReferenceDurationConfirmDialog } from "./ReferenceDurationConfirmDialog";
 import { CreateVoiceoverButton } from "./CreateVoiceoverButton";
 import { ReferenceBatchAdmissionDialog } from "./ReferenceBatchAdmissionDialog";
@@ -832,8 +833,12 @@ export function ReferenceVideoCanvas({
   // Reset tab to units on project/episode change (render-time derived-state pattern).
   // 初始值按 hasScript 走 GridImageToVideoCanvas 同款判定：prompt_authoring 剧本未生成时（仅 segmented）
   // units 面板无脚本可读、请求会 404，应先落到内容确认。
-  const [tab, setTab] = useState<"units" | "preproc">(
+  const [tab, setTab] = useState<"units" | "preproc" | "keyframes">(
     hasScript || !showPreprocess ? "units" : "preproc",
+  );
+  // 起始帧只对采用 H3 提示词档的项目有意义；该档的单元才有 H3 载荷状态。
+  const isH3Project = useReferenceVideoStore(
+    (s) => Object.keys(s.h3PromptStatusByEpisode[referenceVideoCacheKey(projectName, episode)] ?? {}).length > 0,
   );
   const [lastEpisode, setLastEpisode] = useState(episode);
   const [lastProject, setLastProject] = useState(projectName);
@@ -1006,6 +1011,25 @@ export function ReferenceVideoCanvas({
               />
             )}
           </button>
+          {isH3Project && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "keyframes"}
+              onClick={() => setTab("keyframes")}
+              className={`focus-ring relative px-3.5 py-2.5 text-[12.5px] font-medium ${
+                tab === "keyframes" ? "text-[var(--color-text)]" : "text-[var(--color-text-3)]"
+              }`}
+            >
+              {t("reference_tab_keyframes")}
+              {tab === "keyframes" && (
+                <span
+                  aria-hidden="true"
+                  className="absolute -bottom-px left-2.5 right-2.5 h-0.5 rounded bg-[var(--color-accent)]"
+                />
+              )}
+            </button>
+          )}
         </div>
         <span className="flex-1" />
         {tab === "units" && (
@@ -1053,7 +1077,13 @@ export function ReferenceVideoCanvas({
         </p>
       )}
 
-      {tab === "preproc" ? (
+      {tab === "keyframes" ? (
+        <div className="min-h-0 flex-1 overflow-auto bg-[oklch(0.18_0.011_250_/_0.25)]">
+          <div className="mx-auto w-full max-w-5xl px-6 py-5">
+            <KeyframeBoardPanel key={`${projectName}:${episode}`} projectName={projectName} episode={episode} />
+          </div>
+        </div>
+      ) : tab === "preproc" ? (
         <div className="min-h-0 flex-1 overflow-auto bg-[oklch(0.18_0.011_250_/_0.25)]">
           <div className="mx-auto w-full max-w-3xl px-6 py-5">
             <ReferenceScriptPlanPreviewPanel

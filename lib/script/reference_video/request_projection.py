@@ -30,6 +30,7 @@ from lib.generation.video_request_facts import (
 )
 from lib.infra.path_safety import PathTraversalError, safe_join
 from lib.infra.schema_guards import is_int
+from lib.keyframes.consume import KEYFRAME_REFERENCE_NAME, approved_keyframe
 from lib.project.asset_types import AssetSpec, asset_name_comparison_key
 from lib.prompts.video_prompt_profile import is_h3_ref2va
 from lib.references.reference_admission import (
@@ -128,6 +129,10 @@ class ReferenceRequestOptions(NarrationDeliveryRequestOptions):
             narration_delivery=durable.narration_delivery,
             confirmed_request_duration_seconds=durable.confirmed_request_duration_seconds,
         )
+
+
+#: ``ResolvedReferenceAsset.kind`` 的取值之一：起始帧。只受文件存在性约束，不进产物清单。
+KEYFRAME_KIND = "keyframe"
 
 
 @dataclass(frozen=True)
@@ -322,7 +327,10 @@ def hydrate_reference_assets(
     """把候选按声明范围过滤并给出实际可用图片与缺图逻辑引用。"""
 
     declared_keys = {(ref.type, asset_name_comparison_key(ref.name)) for ref in declared}
-    candidates = tuple(asset for asset in resolved_assets if _asset_key(asset) in declared_keys)
+    # 起始帧不由正文声明、只由看板派生：它随候选进来，但缺失不算「缺图」（是可选增强，不阻断）。
+    candidates = tuple(
+        asset for asset in resolved_assets if asset.kind == KEYFRAME_KIND or _asset_key(asset) in declared_keys
+    )
     available = tuple(asset for asset in candidates if availability.is_available(asset))
     available_keys = {_asset_key(asset) for asset in available}
     missing = tuple(ref for ref in declared if (ref.type, asset_name_comparison_key(ref.name)) not in available_keys)
@@ -491,6 +499,17 @@ def resolve_reference_assets(project: dict, project_path: Path, unit: dict) -> t
             original = _candidate_path(project_path, raw_path)
             if original is not None:
                 result.append(ResolvedReferenceAsset(path=original, reference=reference, kind="original"))
+    if is_h3_ref2va(project):
+        found = approved_keyframe(project_path, unit)
+        if found is not None:
+            # 排在资产参考图之后：超出模型上限时先丢它，不挤掉角色图。
+            result.append(
+                ResolvedReferenceAsset(
+                    path=found[1],
+                    reference=ReferenceResource(type="keyframe", name=KEYFRAME_REFERENCE_NAME),
+                    kind=KEYFRAME_KIND,
+                )
+            )
     return tuple(result)
 
 

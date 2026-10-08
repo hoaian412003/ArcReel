@@ -327,10 +327,10 @@ async def test_drama_faithful_split_is_written_without_scene_numbers_and_confirm
 
 
 async def test_reference_video_dialogue_marks_must_come_from_the_approved_screenplay(
-    fake_ctx: ToolHarness, monkeypatch: pytest.MonkeyPatch, video_request_facts, confirmations: list[int]
+    fake_ctx: ToolHarness, video_request_facts, confirmations: list[int]
 ) -> None:
-    from server.text_generation import generate_reference_script_plan
-    from tests.integration.server.agent_tool_support import rv_director_plan, rv_source, rv_unit
+    from server.text_generation import submit_reference_script_plan
+    from tests.integration.server.agent_tool_support import rv_source, rv_unit
 
     rv_source(fake_ctx)
     _approve_two_scene_screenplay(fake_ctx, ("**张三**：我在等人。", "张三在村口等人。"))
@@ -338,18 +338,16 @@ async def test_reference_video_dialogue_marks_must_come_from_the_approved_screen
         {**rv_unit("@[张三] 站在村口。\n@[张三]{我在等人。}"), "scene_no": 1},
         {**rv_unit("@[张三] 望向远方。\n@[张三]{这句不在剧本里}"), "scene_no": 2},
     ]
-    generator = _JsonGenerator({"director_plan": rv_director_plan(2), "units": units})
-    _use(monkeypatch, generator)
 
     with pytest.raises(TextGenerationError, match="这句不在剧本里"):
-        await generate_reference_script_plan(
-            TextGenerationRequest(episode=1),
+        await submit_reference_script_plan(
+            units,
+            episode=1,
             project_name="demo",
             projects=fake_ctx.pm,
             config_resolver=fake_ctx.config_resolver,
         )
 
-    assert "已确认剧本" in generator.prompts[0]
     assert (fake_ctx.project_path / "drafts" / "episode_1" / "script_plan_reference_units.invalid.json").exists()
     assert confirmations == []
 

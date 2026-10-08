@@ -1,4 +1,8 @@
 MESSAGES = {
+    "claude_workspace_unavailable": "Workspace đã lưu của agent đã bị di chuyển hoặc không khả dụng",
+    "claude_action_invalid": "Tác vụ agent thiếu thông tin cần thiết",
+    "claude_memory_invalid": "Không thể lưu hoặc chuyển tệp bộ nhớ thành quy tắc",
+    "claude_auth_required": "Kết nối Claude trong Cài đặt trước khi gửi tin nhắn",
     "project_migration_failed": "Dự án '{name}' chưa hoàn tất nâng cấp dữ liệu nên không thể tạo nội dung. Lý do: {reason}. Hãy sửa trong cuộc trò chuyện với tác nhân AI rồi thử nâng cấp lại",
     "project_not_found": "Dự án '{name}' không tồn tại hoặc chưa được khởi tạo",
     "resource_not_found": "Tài nguyên được yêu cầu không tồn tại",
@@ -168,6 +172,7 @@ MESSAGES = {
     "dub_target_language_invalid": "Ngôn ngữ lồng tiếng hiện chỉ hỗ trợ tiếng Việt (vi)",
     "narrator_gender_invalid": "Giới tính giọng dẫn chuyện chỉ có thể là male hoặc female",
     "h3_guide_preset_invalid": "Preset hướng dẫn viết H3 phải là một trong các preset có sẵn",
+    "h3_prompt_language_invalid": "H3 prompt chỉ có thể viết bằng en hoặc zh, và chỉ áp dụng cho dự án reference_video dùng profile H3 Ref2VA",
     "h3_guide_custom_too_long": "Hướng dẫn H3 tùy chỉnh quá dài",
     "h3_authoring_template_invalid": "Mẫu biên soạn prompt H3 không hợp lệ: {detail}",
     "h3_authoring_template_size_invalid": "Mẫu biên soạn prompt H3 phải là văn bản không rỗng, tối đa {max} ký tự",
@@ -426,6 +431,16 @@ MESSAGES = {
     "dub_video_missing": "Đơn vị này chưa có video, hãy tạo video trước",
     "dub_asr_failed": "Không phát hiện được thời điểm bắt đầu từ video: {err_msg}",
     "dub_vieneu_disabled": "Dịch vụ giọng nói cục bộ VieNeu đang tắt. Hãy cho phép ArcReel khởi động nó trong Cài đặt → Nhà cung cấp → VieNeu-TTS",
+    "episode_source_input_required": "Hãy tải lên tệp nguồn hoặc dán văn bản (chọn một trong hai)",
+    "episode_source_invalid_episode": "Số tập phải là số nguyên dương",
+    "episode_source_empty_source": "Nguồn của tập không được để trống",
+    "episode_source_unsupported_mode": "Chỉ dự án kịch (drama) mới hỗ trợ tải lên nguồn theo tập",
+    "episode_delete_confirmation_required": "Tập {episode} đã có kịch bản hoặc sản phẩm ({artifacts} sản phẩm đã đăng ký). Xoá xong không thể khôi phục; hãy thử lại với confirm_products=true để xác nhận",
+    "episode_delete_not_found": "Tập {episode} không tồn tại",
+    "episode_split_source_required": "Hãy chỉ định tệp truyện cần tách (hiện có {count} tệp nguồn)",
+    "episode_split_source_not_found": "Không tìm thấy tệp nguồn '{name}'",
+    "episode_split_no_chapters": "Không nhận ra ít nhất hai tiêu đề chương trong '{name}' (hỗ trợ 第N章, Chương N, Chapter N)",
+    "episode_split_conflict": "Tập {episodes} đã tồn tại; gửi replace=true để thay thế",
     "worker_offline": "Bộ xử lý nền đang ngoại tuyến nên không thể đưa yêu cầu vào hàng đợi. Vui lòng thử lại sau.",
     "script_plan_generate_unsupported": "Dự án quảng cáo / phim ngắn không có kế hoạch kịch bản; hãy viết trực tiếp kịch bản tập",
     "script_plan_already_exists": "Tập {episode} đã có kế hoạch kịch bản; muốn làm lại, hãy nhờ Agent làm lại cả tập",
@@ -469,6 +484,11 @@ MESSAGES = {
     ),
     "ref_warn_unit_without_scene": (
         "Đơn vị này không tham chiếu bối cảnh nào; địa điểm của khung hình sẽ do mô hình tự quyết định"
+    ),
+    "ref_warn_speaker_without_picture": (
+        "Nhân vật '{name}' có lời thoại nhưng không được @ tham chiếu ngoài dấu lời thoại, nên đơn vị này không gửi "
+        "ảnh tham chiếu cho họ: nếu họ xuất hiện trong hình, mô hình sẽ bịa ra khuôn mặt. Hãy viết @[{name}] trong "
+        "phần mô tả hình ảnh (bỏ qua nếu chỉ là giọng ngoài hình)"
     ),
     "ref_warn_silent_model": (
         "Mô hình video hiện tại '{model}' không tạo âm thanh, lời thoại chỉ dùng làm gợi ý cho prompt"
@@ -586,10 +606,32 @@ MESSAGES = {
     "direction_review_not_reviewable": "Kết quả đạo diễn hiện không chờ duyệt: đã được duyệt hoặc đã thay đổi sau đó",
     "direction_review_invalid_decision": "Quyết định không hợp lệ: hãy chọn duyệt, yêu cầu sửa (kèm ghi chú hoặc mã mục) hoặc làm lại",
     "direction_review_unknown_entries": "Một số mã mục không có trong kịch bản của tập này",
+    "keyframe_not_applicable": "Khung đầu chỉ dùng cho dự án tạo video từ tham chiếu có bật chế độ prompt H3 tham chiếu đầy đủ",
+    "keyframe_episode_not_found": "Tập {episode} không tồn tại",
+    "keyframe_board_missing": "Tập này chưa có kế hoạch khung đầu; hãy nhờ Agent lập kế hoạch khung đầu trước",
+    "keyframe_sheet_missing": "Bảng {id} không có trong bảng khung đầu (kế hoạch có thể đã được nộp lại)",
+    "keyframe_cell_missing": "Ô {id} không có trong bảng khung đầu",
+    "keyframe_unit_missing": "Tập này không có đơn vị {id}",
+    "keyframe_cell_has_no_image": "Ô {id} chưa có ảnh; hãy tạo bảng ảnh trước",
+    "keyframe_cell_stale": "Căn cứ của ô {id} đã thay đổi; hãy tạo lại bảng ảnh rồi mới duyệt",
+    "keyframe_characters_not_in_unit": "Nhân vật trong ô {id} không được @ trong nội dung đơn vị này, nên đơn vị không thể dùng ô này",
+    "keyframe_image_provider_unavailable": "Chưa có model ảnh hỗ trợ ảnh sang ảnh (i2i); hãy cấu hình nhà cung cấp ảnh trong cài đặt trước",
     "direction_review_authored": "Prompt của tập này đã được viết xong nên không thể sửa kết quả đạo diễn ở đây nữa",
     "screenplay_not_applicable": "Tập này không áp dụng bước biên kịch (dự án quảng cáo / phim ngắn không có kế hoạch kịch bản)",
     "screenplay_missing": "Tập này chưa có kịch bản; hãy chạy bước biên kịch trước",
     "screenplay_revision_conflict": "Kịch bản đã thay đổi sau khi bạn tải; hãy làm mới và thử lại",
     "screenplay_corrupt": "Tệp kịch bản của tập này bị hỏng, không thể đọc",
     "screenplay_bad_edit": "Chỉnh sửa kịch bản không hợp lệ: hãy kiểm tra số thứ tự cảnh và nội dung các trường",
+    "canvas_node_not_found": "Không tìm thấy node canvas '{id}'",
+    "canvas_edge_not_found": "Không tìm thấy đường nối canvas '{id}'",
+    "canvas_node_busy": "Node canvas '{id}' đang tạo, hãy thử lại sau",
+    "canvas_node_type_invalid": "Loại node canvas không được hỗ trợ: {type}",
+    "canvas_node_not_runnable": "Node canvas '{id}' không thể chạy",
+    "canvas_invalid_connection": "Hai điểm nối này khác kiểu dữ liệu nên không thể nối",
+    "canvas_prompt_required": "Hãy nối ít nhất một node văn bản có nội dung vào node nhà cung cấp làm prompt trước",
+    "canvas_upload_ext_unsupported": "Định dạng ảnh không được hỗ trợ; chỉ hỗ trợ: {allowed}",
+    "canvas_h3_writer_no_units": "Hãy nối ít nhất một đơn vị video vào node viết H3 trước",
+    "canvas_h3_profile_required": "Node viết H3 chỉ áp dụng cho dự án dùng chế độ prompt H3 Ref2VA",
+    "canvas_run_failed": "{message}",
+    "canvas_worker_offline": "Dịch vụ hàng đợi chưa chạy nên không thể gửi tác vụ tạo",
 }

@@ -57,6 +57,17 @@ class TestBuildAndFill:
         assert [line["source_text"] for line in lines] == ["你好", ""]
         assert lines[0]["gender"] == "female"
 
+    def test_directors_cue_gender_overrides_the_models_guess(self) -> None:
+        drafts = [
+            DubLineDraft(index=0, speaker="甲", gender="male", text_vi="Chào anh."),
+            DubLineDraft(index=1, speaker=None, gender="male", text_vi="Trời tối rồi."),
+        ]
+        cues = [{"index": 1, "start_seconds": 5.0, "end_seconds": 8.0, "gender": "female"}]
+
+        lines = build_dub_lines_from_drafts(TEXT, drafts, cues)
+
+        assert [line["gender"] for line in lines] == ["male", "female"]
+
     def test_fill_only_completes_missing_source_text(self) -> None:
         unit = {
             "text": TEXT,

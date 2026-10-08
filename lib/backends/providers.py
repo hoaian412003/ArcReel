@@ -43,18 +43,20 @@ class CallStatus(StrEnum):
 
 
 class CallPurpose(StrEnum):
-    """一次供应商调用被发起的原因（CONTEXT「来源（purpose）」词条的七个取值）。
+    """一次供应商调用被发起的原因（CONTEXT「来源（purpose）」词条的九个取值）。
 
-    生成任务经 ``api_calls.task_id`` 回指它服务的任务，其余六个是无任务的调用各自的来源。
+    生成任务经 ``api_calls.task_id`` 回指它服务的任务，其余八个是无任务的调用各自的来源。
     """
 
     SCRIPT_GENERATION = "script_generation"
     EPISODE_PLANNING = "episode_planning"
     PROJECT_OVERVIEW = "project_overview"
+    ASSET_ANALYSIS = "asset_analysis"
     STYLE_ANALYSIS = "style_analysis"
     ASSISTANT_SESSION = "assistant_session"
     ENDPOINT_TRIAL = "endpoint_trial"
     GENERATION_TASK = "generation_task"
+    REVIEW_SUMMARY = "review_summary"
 
 
 def require_provider_pair(kind: str, backend: object | None, provider_id: str | None) -> None:

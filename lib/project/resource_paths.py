@@ -39,6 +39,13 @@ END_FRAME_RESOURCE_TYPE = "end_frames"
 #: 产物规划共用一个字面量。
 CHARACTER_DERIVATIVE_RESOURCE_TYPE = "character_derivatives"
 
+#: 起始帧联合图的资源类型名。资源 id 写作 ``episode_N/S1``（集目录 + 联合图编号），落盘为
+#: ``keyframes/episode_N/S1.png``；与格子图 ``keyframes/episode_N/K01.png`` 同目录。
+KEYFRAME_SHEET_RESOURCE_TYPE = "keyframe_sheets"
+
+#: 画布图片输出的资源类型名。资源 id 是画布上的图片节点 id，落盘为 ``canvas/images/{id}.png``。
+CANVAS_IMAGE_RESOURCE_TYPE = "canvas_images"
+
 _PATTERNS: dict[str, ResourcePattern] = {
     "storyboards": ResourcePattern("storyboards", ".png", prefix="scene_"),
     # 尾帧快照与分镜图、分镜视频同按分镜 id 命名，故共用 scene_ 前缀。
@@ -52,6 +59,8 @@ _PATTERNS: dict[str, ResourcePattern] = {
     "reference_videos": ResourcePattern("reference_videos", ".mp4"),
     "audio": ResourcePattern("audio", ".wav", prefix="segment_"),
     CHARACTER_DERIVATIVE_RESOURCE_TYPE: ResourcePattern("characters/derivatives", ".png", id_segments=2),
+    KEYFRAME_SHEET_RESOURCE_TYPE: ResourcePattern("keyframes", ".png", id_segments=2),
+    CANVAS_IMAGE_RESOURCE_TYPE: ResourcePattern("canvas/images", ".png"),
 }
 
 RESOURCE_TYPES: tuple[str, ...] = tuple(_PATTERNS)

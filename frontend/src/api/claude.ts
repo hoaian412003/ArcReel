@@ -1,4 +1,4 @@
-import { API_BASE, parseSseJson, requestJson, sseErrorHandler, sseHeaders } from "@/api/transport";
+import { API_BASE, parseSseJson, requestJson, sseErrorHandler, sseHeaders, withAuth, throwIfNotOk } from "@/api/transport";
 import { openSseStream, type SseStreamError, type SseStreamHandle } from "@/utils/sse-stream";
 
 export interface ClaudeSession {
@@ -48,6 +48,28 @@ export interface ClaudeAuthStatus {
   subscription_type: string | null;
 }
 
+export interface ClaudeActionInput {
+  action: "create_screenplay" | "create_direction" | "continue_episode" | "redo_episode" | "author_shot" | "author_video_unit" | "repair_project" | "remember" | "canvas_assist";
+  episode?: number;
+  resource_id?: string;
+  script_file?: string;
+  note?: string;
+}
+
+export interface ProjectClaudeAgent {
+  agent_id: string;
+  main_session_id: string | null;
+  workspace: string;
+  memory_path: string;
+  memory_enabled: boolean;
+  logged_in: boolean;
+  mcp_available: boolean;
+  skills: string[];
+  sessions: ClaudeSession[];
+}
+
+export interface ClaudeMemoryFile { name: string; content: string }
+
 export interface ClaudeLoginStart {
   login_id: string;
   authorization_url: string;
@@ -56,6 +78,32 @@ export interface ClaudeLoginStart {
 const base = (projectName: string) => `/projects/${encodeURIComponent(projectName)}/claude`;
 
 export const ClaudeAPI = {
+  getAgent(projectName: string) {
+    return requestJson<ProjectClaudeAgent>(`${base(projectName)}/agent`);
+  },
+  sendAction(projectName: string, action: ClaudeActionInput, clientKey: string) {
+    return requestJson<{ session: ClaudeSession; turn: ClaudeTurn }>(`${base(projectName)}/actions`, {
+      method: "POST", body: JSON.stringify({ ...action, client_key: clientKey }),
+    });
+  },
+  getMemory(projectName: string) {
+    return requestJson<{ files: ClaudeMemoryFile[] }>(`${base(projectName)}/memory`);
+  },
+  saveMemory(projectName: string, file: ClaudeMemoryFile) {
+    return requestJson(`${base(projectName)}/memory`, { method: "PUT", body: JSON.stringify(file) });
+  },
+  promoteMemory(projectName: string, name: string) {
+    return requestJson(`${base(projectName)}/memory/promote`, { method: "POST", body: JSON.stringify({ name }) });
+  },
+  resetMemory(projectName: string) {
+    return requestJson(`${base(projectName)}/memory/reset`, { method: "POST" });
+  },
+  async exportAgent(projectName: string) {
+    const endpoint = `${base(projectName)}/export`;
+    const response = await fetch(`${API_BASE}${endpoint}`, withAuth(endpoint));
+    await throwIfNotOk(response, response.statusText);
+    return response.blob();
+  },
   authStatus() {
     return requestJson<ClaudeAuthStatus>("/claude/auth/status");
   },
@@ -78,6 +126,10 @@ export const ClaudeAPI = {
   async listSessions(projectName: string): Promise<ClaudeSession[]> {
     const data = await requestJson<{ sessions: ClaudeSession[] }>(`${base(projectName)}/sessions`);
     return data.sessions;
+  },
+
+  clearSessions(projectName: string) {
+    return requestJson<{ deleted: number }>(`${base(projectName)}/sessions`, { method: "DELETE" });
   },
 
   sendMessage(projectName: string, content: string, sessionId: string | null, clientKey: string) {

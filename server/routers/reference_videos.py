@@ -71,6 +71,7 @@ from lib.script.script_models import (
     ReferencePerformance,
     ReferenceShot,
     ReferenceUnitType,
+    SpeechCue,
 )
 from lib.speech.dub_settings import project_dub_target_language
 from lib.speech.narration_delivery import (
@@ -451,6 +452,7 @@ class PatchUnitRequest(BaseModel):
     note: str | None = None
 
     # 导演说明：未传（None）= 不改；传空串 / 空数组 = 清空该字段。字段集与形状见 ``ReferenceUnitDirection``。
+    direction: str | None = None
     unit_type: ReferenceUnitType | None = None
     brief: str | None = None
     beats: list[DirectorBeat] | None = None
@@ -464,6 +466,8 @@ class PatchUnitRequest(BaseModel):
     lines: list[ReferenceLine] | None = None
     sounds: str | None = None
     music: str | None = None
+    # 导演给每条发声定的时间窗与配音性别；整体替换（空数组 = 清空）。
+    speech_cues: list[SpeechCue] | None = None
 
 
 #: 解析预览「导演指南」可写的导演字段：存量字段与导演步骤的新字段的并集。
@@ -502,6 +506,8 @@ async def patch_unit(
         fields["transition_to_next"] = req.transition_to_next
     if req.note is not None:
         fields["note"] = req.note
+    if req.speech_cues is not None:
+        fields["speech_cues"] = [cue.model_dump() for cue in req.speech_cues]
     for direction_field in _EDITABLE_DIRECTION_FIELDS:
         value = getattr(req, direction_field)
         if value is not None:

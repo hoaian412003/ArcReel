@@ -6,12 +6,14 @@ import {
   ChevronRight,
   Clapperboard,
   Columns3,
+  Workflow,
   LayoutDashboard,
   BookOpen,
   Users,
   Landmark,
   Package,
   Plus,
+  Scissors,
   Search,
   ShoppingBag,
 } from "lucide-react";
@@ -23,6 +25,10 @@ import { useDemoWorkbench } from "@/onboarding/use-demo-workbench";
 import { isDemoProject } from "@/onboarding/demo-project";
 import { normalizeRoute } from "@/utils/generation-mode";
 import { EpisodeCard } from "./EpisodeCard";
+import { EpisodeSourceDialog } from "./EpisodeSourceDialog";
+import { NovelSplitDialog } from "./NovelSplitDialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { deleteEpisode } from "@/actions/assets";
 import { useEpisodeVideoExport } from "./use-episode-video-export";
 
 interface AssetSidebarProps {
@@ -50,6 +56,10 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
   const [location, setLocation] = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState("");
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const { exportEpisodeVideo, exporting } = useEpisodeVideoExport(currentProjectName);
 
   const characterCount = Object.keys(currentProjectData?.characters ?? {}).length;
@@ -65,6 +75,8 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
 
   // 演示项目没有服务端侧数据，源文件计数跳过（导航与分集列表照常渲染）
   const demoMode = useDemoWorkbench();
+  // drama 不经分集规划：分集由用户逐集上传源文创建
+  const canAddEpisode = currentProjectData?.content_mode === "drama" && !demoMode;
 
   useEffect(() => {
     if (currentProjectName) debouncedFetchCost(currentProjectName);
@@ -99,7 +111,8 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
     ...(demoMode
       ? []
       : [
-          { key: "flow", path: "/flow", label: t("dashboard:flow_nav_label"), icon: Columns3 },
+          { key: "reviews", path: "/reviews", label: t("dashboard:review_inbox_nav"), icon: Columns3 },
+          { key: "node-canvas", path: "/canvas", label: t("dashboard:node_canvas_nav"), icon: Workflow },
           {
             key: "source",
             path: "/source",
@@ -254,16 +267,29 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
                   {episodes.length}
                 </span>
                 <span className="flex-1" />
+                {canAddEpisode ? (
+                  <button
+                    type="button"
+                    onClick={() => setSplitOpen(true)}
+                    className="grid h-5 w-5 place-items-center rounded focus-ring"
+                    style={{ background: "oklch(0.28 0.012 250 / 0.6)", color: "var(--color-text-3)" }}
+                    title={t("dashboard:novel_split_button")}
+                    aria-label={t("dashboard:novel_split_button")}
+                  >
+                    <Scissors className="h-3 w-3" />
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  disabled
-                  aria-disabled="true"
+                  disabled={!canAddEpisode}
+                  aria-disabled={!canAddEpisode}
+                  onClick={canAddEpisode ? () => setUploadOpen(true) : undefined}
                   className="grid h-5 w-5 place-items-center rounded focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                   style={{
                     background: "oklch(0.28 0.012 250 / 0.6)",
                     color: "var(--color-text-3)",
                   }}
-                  title={t("dashboard:add_episode_unavailable")}
+                  title={canAddEpisode ? t("dashboard:add_episode") : t("dashboard:add_episode_unavailable")}
                   aria-label={t("dashboard:add_episode")}
                 >
                   <Plus className="h-3 w-3" />
@@ -320,6 +346,7 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
                   route={normalizeRoute(currentProjectData?.generation_mode)}
                   onExportVideo={() => void exportEpisodeVideo(ep.episode)}
                   exportingVideo={exporting.has(ep.episode)}
+                  onDelete={canAddEpisode ? () => setDeleteTarget(ep.episode) : undefined}
                 />
               ))
             )}
@@ -356,6 +383,44 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
           })}
         </div>
       )}
+
+      {canAddEpisode && currentProjectName ? (
+        <EpisodeSourceDialog
+          open={uploadOpen}
+          projectName={currentProjectName}
+          episodes={episodes}
+          onClose={() => setUploadOpen(false)}
+        />
+      ) : null}
+
+      {canAddEpisode && currentProjectName ? (
+        <NovelSplitDialog open={splitOpen} projectName={currentProjectName} onClose={() => setSplitOpen(false)} />
+      ) : null}
+
+      {canAddEpisode && currentProjectName ? (
+        <ConfirmDialog
+          open={deleteTarget !== null}
+          tone="danger"
+          title={t("dashboard:episode_delete_title", { episode: deleteTarget ?? 0 })}
+          description={t("dashboard:episode_delete_desc")}
+          confirmLabel={t("dashboard:episode_delete")}
+          loading={deleting}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={async () => {
+            if (deleteTarget === null) return;
+            setDeleting(true);
+            try {
+              await deleteEpisode(currentProjectName, deleteTarget);
+              if (activeEp === deleteTarget) setLocation("/");
+              setDeleteTarget(null);
+            } catch (err) {
+              useAppStore.getState().pushToast(err instanceof Error ? err.message : String(err), "error");
+            } finally {
+              setDeleting(false);
+            }
+          }}
+        />
+      ) : null}
 
       {/* ---- Collapse footer ---- */}
       <div

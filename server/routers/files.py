@@ -82,6 +82,8 @@ PUBLIC_MEDIA_DIRS: frozenset[str] = frozenset(
         "props",
         "products",
         "grids",
+        "keyframes",
+        "canvas",
         "audio",
         "final_cuts",
     }

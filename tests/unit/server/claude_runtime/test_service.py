@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, TextBlock, UserMessage
 from claude_agent_sdk.types import ToolResultBlock, ToolUseBlock
 from sqlalchemy import select
 
 from lib.db.models.agent_turn import AgentTurn
+from server.claude_runtime.actions import ClaudeAction
 from server.claude_runtime.service import ClaudeSessionService
 
 
@@ -141,6 +145,10 @@ async def test_service_persists_replayable_events_and_turn_usage_delta(
     )
     assert options_seen[0].resume is None
     assert options_seen[1].resume == options_seen[0].session_id
+    assert options_seen[0].tools == {"type": "preset", "preset": "claude_code"}
+    assert options_seen[0].permission_mode == "bypassPermissions"
+    assert "arcreel" in options_seen[0].mcp_servers
+    assert json.loads(options_seen[0].settings)["autoMemoryEnabled"] is True
 
     rows = (
         (
@@ -169,3 +177,129 @@ async def test_service_persists_replayable_events_and_turn_usage_delta(
     }
 
     await service.shutdown()
+
+
+async def test_actions_reuse_project_main_session_and_retry_without_duplicate_turn(tmp_path, db_factory) -> None:
+    project = tmp_path / "projects" / "demo"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text('{"name":"demo"}', encoding="utf-8")
+    clients = []
+
+    def factory(options):
+        client = FakeClaudeClient(options, call_number=len(clients) + 1)
+        clients.append(client)
+        return client
+
+    service = ClaudeSessionService(data_root=tmp_path, session_factory=db_factory, client_factory=factory)
+    action = ClaudeAction(action="create_screenplay", episode=4, client_key="create-ep04")
+    first = await service.send_action("demo", action, user_id="default")
+    await service.wait_for_idle(first["session"]["id"])
+    retry = await service.send_action("demo", action, user_id="default")
+    assert retry["turn"]["id"] == first["turn"]["id"]
+    assert len(clients) == 1
+    assert clients[0].prompt.startswith("Create the screenplay for episode EP04.")
+    events = await service.events(first["session"]["id"], user_id="default")
+    assert events[0]["payload"]["action"]["prompt_version"] == 1
+    await service.shutdown()
+
+    restored = ClaudeSessionService(data_root=tmp_path, session_factory=db_factory, client_factory=factory)
+    second = await restored.send_action(
+        "demo", ClaudeAction(action="create_screenplay", episode=5, client_key="ep05"), user_id="default"
+    )
+    await restored.wait_for_idle(second["session"]["id"])
+    assert second["session"]["id"] == first["session"]["id"]
+    assert clients[1].options.resume == clients[0].options.session_id
+    assert clients[1].options.cwd == clients[0].options.cwd
+    await restored.shutdown()
+
+
+async def test_clear_sessions_only_removes_requested_project_history_and_keeps_memory(tmp_path, db_factory) -> None:
+    for project_name in ("demo", "other"):
+        project = tmp_path / "projects" / project_name
+        project.mkdir(parents=True)
+        (project / "project.json").write_text(f'{{"name":"{project_name}"}}', encoding="utf-8")
+
+    service = ClaudeSessionService(
+        data_root=tmp_path,
+        session_factory=db_factory,
+        client_factory=lambda options: FakeClaudeClient(options, call_number=1),
+    )
+    demo = await service.send_action(
+        "demo", ClaudeAction(action="create_screenplay", episode=1, client_key="demo-1"), user_id="default"
+    )
+    await service.wait_for_idle(demo["session"]["id"])
+    other = await service.send_message(project_name="other", content="Keep me", session_id=None, client_key="other-1")
+    await service.wait_for_idle(other["session"]["id"])
+    workspace = await service.workspace("demo", "default")
+    workspace.write_memory("MEMORY.md", "Keep project memory")
+
+    assert await service.clear_sessions("demo", user_id="default") == 1
+    assert await service.list_sessions("demo", user_id="default") == []
+    assert [session["id"] for session in await service.list_sessions("other", user_id="default")] == [
+        other["session"]["id"]
+    ]
+    restored_workspace = await service.workspace("demo", "default")
+    assert restored_workspace.main_session("default") is None
+    assert workspace.memory() == [{"name": "MEMORY.md", "content": "Keep project memory"}]
+    with pytest.raises(FileNotFoundError):
+        await service.events(demo["session"]["id"], project_name="demo", user_id="default")
+    await service.shutdown()
+
+
+async def test_project_queue_serializes_different_sessions(tmp_path, db_factory) -> None:
+    project = tmp_path / "projects" / "demo"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text('{"name":"demo"}', encoding="utf-8")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    prompts = []
+
+    class BlockedClient(FakeClaudeClient):
+        async def receive_response(self):
+            prompts.append(self.prompt)
+            if len(prompts) == 1:
+                started.set()
+                await release.wait()
+            async for message in super().receive_response():
+                yield message
+
+    service = ClaudeSessionService(
+        data_root=tmp_path,
+        session_factory=db_factory,
+        client_factory=lambda options: BlockedClient(options, call_number=1),
+    )
+    first = await service.send_message(project_name="demo", content="First", session_id=None, client_key="first")
+    await asyncio.wait_for(started.wait(), timeout=3)
+    second = await service.send_message(project_name="demo", content="Second", session_id=None, client_key="second")
+    assert first["session"]["id"] != second["session"]["id"]
+    assert prompts == ["First"]
+    second_usage = await service.turns(second["session"]["id"], project_name="demo")
+    assert second_usage["turns"][0]["status"] == "accepted"
+    release.set()
+    await service.wait_for_idle(first["session"]["id"])
+    assert prompts == ["First", "Second"]
+    assert (await service.turns(second["session"]["id"], project_name="demo"))["turns"][0]["status"] == "completed"
+    await service.shutdown()
+
+
+async def test_accepted_queue_recovers_after_service_restart(tmp_path, db_factory) -> None:
+    project = tmp_path / "projects" / "demo"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text('{"name":"demo"}', encoding="utf-8")
+    stopped = ClaudeSessionService(data_root=tmp_path, session_factory=db_factory)
+    await stopped.shutdown()
+    queued = await stopped.send_message(
+        project_name="demo", content="Recover me", session_id=None, client_key="durable"
+    )
+    restored = ClaudeSessionService(
+        data_root=tmp_path,
+        session_factory=db_factory,
+        client_factory=lambda options: FakeClaudeClient(options, call_number=1),
+    )
+    await restored.startup()
+    await restored.wait_for_idle(queued["session"]["id"])
+    turns = await restored.turns(queued["session"]["id"], project_name="demo")
+    assert turns["turns"][0]["status"] == "completed"
+    events = await restored.events(queued["session"]["id"], user_id="default")
+    assert [event["payload"]["content"] for event in events if event["type"] == "user_message"] == ["Recover me"]
+    await restored.shutdown()

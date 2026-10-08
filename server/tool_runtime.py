@@ -12,6 +12,7 @@ import os
 import re
 import stat
 import tempfile
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -88,6 +89,8 @@ from lib.infra.content_digest import prefixed, prefixed_canonical_json_digest
 from lib.infra.data_root_layout import DataRootLayout
 from lib.infra.path_safety import safe_join
 from lib.infra.schema_guards import is_str
+from lib.keyframes.planning import PlannedCell
+from lib.project.asset_analysis import AssetAnalysisError, AssetAnalyzer
 from lib.project.asset_inventory import (
     AssetInventoryError,
     AssetInventoryInvalidRequest,
@@ -108,7 +111,9 @@ from lib.project.project_migration_guard import project_migration_failure
 from lib.project.project_migrations import migrate_project_with_verdict
 from lib.project.source_revision import SourceScope
 from lib.prompts.h3_guide_preset import MAX_CUSTOM_GUIDE_CHARS, VALID_H3_GUIDE_PRESETS
-from lib.prompts.video_prompt_profile import VALID_VIDEO_PROMPT_PROFILES
+from lib.prompts.video_prompt_profile import VALID_VIDEO_PROMPT_PROFILES, is_h3_ref2va
+from lib.script import screenplay
+from lib.script.screenplay_authoring import ScreenplaySubmission, compile_submission
 from lib.script.script_batch_edit import (
     ScriptBatchEditCommand,
     ScriptBatchEditLocation,
@@ -125,6 +130,7 @@ from lib.script.script_editor import (
     resolve_items,
     split_segment,
 )
+from lib.script.script_models import DirectorArcBeat, ReferenceScriptPlanContentFlatUnit, SpeechCue
 from lib.script.script_review import (
     ScriptPlanRebuildCompletionError,
     complete_stale_script_plan_rebuild,
@@ -143,6 +149,7 @@ from lib.speech.character_voice import VALID_CHARACTER_VOICE_BINDINGS
 from lib.speech.dub_settings import SUPPORTED_DUB_LANGUAGES, VALID_DUB_GENDERS
 from lib.speech.narration_delivery import TtsSettingsResolver
 from lib.speech.speech_composition import SpeechProblemCode
+from lib.speech.speech_rate import project_speech_rate_override
 from lib.workflow.workflow_plan import WorkflowPlan, WorkflowPlanRequest
 from lib.workflow.workflow_state import WorkflowRequestError
 from server.draft_workflow import (
@@ -157,6 +164,7 @@ from server.draft_workflow import (
 )
 from server.services.admission.prompt_preview import ItemPromptPreview, ScriptItemNotFound, preview_item_prompts
 from server.services.project.direction_review import DirectionReviewError, DirectionReviewService
+from server.services.project.keyframe_plan import KeyframePlanError, KeyframePlanService
 from server.services.project.screenplay_review import ScreenplayReviewError, ScreenplayReviewService
 from server.services.project.workflow_planner import WorkflowPlanner
 from server.services.tasks.video_caps import (
@@ -175,8 +183,14 @@ from server.text_generation import (
     generate_drama_script_plan,
     generate_narration_script_plan,
     generate_reference_dub_lines_task,
-    generate_reference_script_plan,
+    load_novel_source,
     prompt_authoring_preflight,
+    reference_director_brief,
+    reference_prompt_authoring_brief,
+    reference_script_plan_brief,
+    submit_reference_director_plan,
+    submit_reference_prompts,
+    submit_reference_script_plan,
 )
 from server.text_generation import (
     confirm_script_review as confirm_script_review_handler,
@@ -186,9 +200,6 @@ from server.text_generation import (
 )
 from server.text_generation import (
     generate_episode_script as generate_episode_script_handler,
-)
-from server.text_generation import (
-    generate_screenplay as generate_screenplay_handler,
 )
 
 
@@ -554,17 +565,15 @@ _TEXT_EPISODE_SCRIPT = "text_episode_script"
 TEXT_EPISODE_SCRIPT_TASK_TYPE = _TEXT_EPISODE_SCRIPT
 _TEXT_DRAMA_SCRIPT_PLAN = "text_drama_script_plan"
 _TEXT_NARRATION_SCRIPT_PLAN = "text_narration_script_plan"
-_TEXT_REFERENCE_SCRIPT_PLAN = "text_reference_script_plan"
 _TEXT_DIRECTOR_PLAN = "text_director_plan"
-_TEXT_SCREENPLAY = "text_screenplay"
 
 
 def script_plan_task_type(project: dict[str, Any]) -> str | None:
-    """该项目的 script_plan 文本任务类型；没有 script_plan 的项目（广告 / 短片）为 None。"""
+    """该项目的 script_plan 文本任务类型；没有服务端生成路径的项目为 None（广告 / 短片无 script_plan，参考生视频由子智能体提交）。"""
     if project.get("content_mode", "narration") == "ad":
         return None
     if is_reference_video_project(project):
-        return _TEXT_REFERENCE_SCRIPT_PLAN
+        return None
     if project.get("content_mode", "narration") == "narration":
         return _TEXT_NARRATION_SCRIPT_PLAN
     return _TEXT_DRAMA_SCRIPT_PLAN
@@ -573,6 +582,8 @@ def script_plan_task_type(project: dict[str, Any]) -> str | None:
 #: WebUI 的「生成 / 补全越南语配音台词」文本任务类型。
 TEXT_REFERENCE_DUB_LINES_TASK_TYPE = "text_reference_dub_lines"
 _TEXT_EPISODE_PLAN = "text_episode_plan"
+#: WebUI 上传分集源文后入队的资产分析任务（只出现在任务面板，不是工作流步骤挂载的任务）。
+TEXT_ASSET_ANALYSIS_TASK_TYPE = "text_asset_analysis"
 #: 嵌入式宿主在本进程内提交、并在本进程内等待的文本任务：worker 沿用提交方的数据根与服务。
 #: 只在内存里，不进任务载荷；没有登记的任务（MCP 提交、重启后的存量任务）按当前配置解析。
 _TEXT_TASK_SERVICES: dict[tuple[str, str, str], tuple[ProjectScope, Services]] = {}
@@ -780,6 +791,17 @@ async def generate_episode_script(
     services: Services,
 ) -> ToolOutcome[Any]:
     text_request = request.value.text_request()
+    try:
+        project = await asyncio.to_thread(services.projects.load_project, scope.project_name)
+        if is_h3_ref2va(project):
+            raise TextGenerationError(
+                "H3 Ref2VA 项目的提示词由 create-episode-script 子智能体亲自撰写：先 get_prompt_authoring_brief 取写作简报，"
+                "写好后 submit_h3_prompts 提交；服务端不再调用文本模型生成"
+            )
+    except TextGenerationError as exc:
+        return ToolOutcome(problem=ToolProblem("generation_refused", str(exc)))
+    except Exception as exc:
+        return ToolOutcome(problem=ToolProblem("internal_error", f"generate_episode_script 失败: {exc}"))
     if text_request.dry_run:
         return await _execute_text_handler(
             "generate_episode_script", generate_episode_script_handler, text_request, scope, services
@@ -818,8 +840,11 @@ async def generate_script_plan(
         if content_mode == "ad":
             raise TextGenerationError("广告/短片项目无 script_plan，请直接调用 generate_episode_script")
         if is_reference_video_project(project):
-            handler, task_type = generate_reference_script_plan, _TEXT_REFERENCE_SCRIPT_PLAN
-        elif content_mode == "narration":
+            raise TextGenerationError(
+                "参考生视频项目的单元拆解由 split-reference-video-units 子智能体亲自撰写：先 get_script_plan_brief 取写作简报，"
+                "写好后 submit_script_plan 提交；服务端不再调用文本模型生成"
+            )
+        if content_mode == "narration":
             handler, task_type = generate_narration_script_plan, _TEXT_NARRATION_SCRIPT_PLAN
         elif content_mode == "drama":
             handler, task_type = generate_drama_script_plan, _TEXT_DRAMA_SCRIPT_PLAN
@@ -839,6 +864,91 @@ async def generate_script_plan(
         scope=scope,
         caller=_caller,
         services=services,
+    )
+
+
+class GetScriptPlanBriefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    source: str | SkipJsonSchema[None] = Field(
+        default=None, description="可选的项目内源文件相对路径；缺省读取本集派生源文 source/episode_N.txt"
+    )
+    instructions: _TextInstructions | SkipJsonSchema[None] = None
+
+
+class SubmitScriptPlanRequest(BaseModel):
+    """单元拆解提交：units 由子智能体自己写，服务端只做机械校验并落盘。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    source: str | SkipJsonSchema[None] = Field(
+        default=None, description="可选的项目内源文件相对路径；缺省读取本集派生源文 source/episode_N.txt"
+    )
+    units: list[ReferenceScriptPlanContentFlatUnit] = Field(
+        min_length=1, description="按叙事顺序排列的视频单元；unit_id 由服务端按顺序编号，不要自己写"
+    )
+
+
+async def _reference_script_plan_gate(scope: ProjectScope, services: Services) -> ToolProblem | None:
+    try:
+        project = await asyncio.to_thread(services.projects.load_project, scope.project_name)
+    except Exception as exc:
+        return _unexpected("script_plan", exc)
+    if not is_reference_video_project(project):
+        return ToolProblem(
+            "generation_refused",
+            "只有参考生视频项目的单元拆解由子智能体撰写；剧情分镜 / 旁白分镜项目请调用 generate_script_plan",
+        )
+    return None
+
+
+async def get_script_plan_brief(
+    request: ToolRequest[GetScriptPlanBriefRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[TextGenerationResult]:
+    problem = await _reference_script_plan_gate(scope, services)
+    if problem is not None:
+        return ToolOutcome(problem=problem)
+    value = request.value
+    return await _run_text_generation(
+        "get_script_plan_brief",
+        reference_script_plan_brief(
+            episode=value.episode,
+            source=value.source,
+            instructions=value.instructions,
+            project_name=scope.project_name,
+            projects=services.projects,
+            config_resolver=services.capabilities,
+        ),
+    )
+
+
+async def submit_script_plan(
+    request: ToolRequest[SubmitScriptPlanRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[TextGenerationResult]:
+    problem = await _reference_script_plan_gate(scope, services)
+    if problem is not None:
+        return ToolOutcome(problem=problem)
+    value = request.value
+    # scene_no 在模型里 exclude=True（不进落盘形状），但与已通过剧本的对齐判定要读它，故显式带上
+    units = [{**unit.model_dump(), "scene_no": unit.scene_no} for unit in value.units]
+    return await _run_text_generation(
+        "submit_script_plan",
+        submit_reference_script_plan(
+            units,
+            episode=value.episode,
+            source=value.source,
+            project_name=scope.project_name,
+            projects=services.projects,
+            config_resolver=services.capabilities,
+        ),
     )
 
 
@@ -869,6 +979,17 @@ async def generate_director_plan(
     services: Services,
 ) -> ToolOutcome[Any]:
     text_request = request.value.text_request()
+    try:
+        project = await asyncio.to_thread(services.projects.load_project, scope.project_name)
+        if is_reference_video_project(project):
+            raise TextGenerationError(
+                "参考生视频项目的导演说明由 direct-episode 子智能体亲自撰写：先 get_director_brief 取写作简报，"
+                "写好后 submit_director_plan 提交；服务端不再调用文本模型生成"
+            )
+    except TextGenerationError as exc:
+        return ToolOutcome(problem=ToolProblem("generation_refused", str(exc)))
+    except Exception as exc:
+        return ToolOutcome(problem=ToolProblem("internal_error", f"generate_director_plan 失败: {exc}"))
     if text_request.dry_run:
         return await _execute_text_handler(
             "generate_director_plan", generate_director_plan_handler, text_request, scope, services
@@ -890,37 +1011,259 @@ async def generate_director_plan(
     )
 
 
-class WriteScreenplayRequest(GenerateScriptPlanRequest):
-    """编剧步骤：参数与脚本规划一致（集号、可选源文、附加指令、dry_run）。"""
+class GetPromptAuthoringBriefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    entry_ids: list[Annotated[str, Field(min_length=1)]] | SkipJsonSchema[None] = Field(
+        default=None, description="只为这些单元写（不论是否待编写）；省略时取全部待编写单元"
+    )
+    instructions: _TextInstructions | SkipJsonSchema[None] = None
 
 
-async def write_screenplay(
-    request: ToolRequest[WriteScreenplayRequest],
+class H3PromptSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    unit_id: str = Field(min_length=1, description="单元 id，逐字取自简报，如 E1U01")
+    subject_definitions: str = Field(min_length=1, description="subject_definitions 段（英文）")
+    summary: str = Field(min_length=1, description="summary 段（英文）")
+    retention_analysis: str = Field(min_length=1, description="retention_analysis 段（英文）")
+    detailed_description: str = Field(min_length=1, description="detailed_description 段（英文，逐镜）")
+    overall_soundscape: str = Field(min_length=1, description="overall_soundscape 段（英文）")
+    non_diegetic_music: str = Field(min_length=1, description="non_diegetic_music 段（英文；没有配乐写 N/A）")
+
+
+class SubmitH3PromptsRequest(BaseModel):
+    """提示词编写提交：若干单元的 H3 六段载荷，由提示词编写子智能体自己写。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    units: list[H3PromptSubmission] = Field(min_length=1, description="本次提交的单元；可分批，未提交的单元保持原样")
+
+
+async def get_prompt_authoring_brief(
+    request: ToolRequest[GetPromptAuthoringBriefRequest],
     scope: ProjectScope,
     _caller: CallerContext,
     services: Services,
-) -> ToolOutcome[Any]:
-    text_request = request.value.text_request()
+) -> ToolOutcome[TextGenerationResult]:
+    value = request.value
+    return await _run_text_generation(
+        "get_prompt_authoring_brief",
+        reference_prompt_authoring_brief(
+            episode=value.episode,
+            entry_ids=tuple(value.entry_ids or ()),
+            instructions=value.instructions,
+            project_name=scope.project_name,
+            projects=services.projects,
+            config_resolver=services.capabilities,
+        ),
+    )
+
+
+async def submit_h3_prompts(
+    request: ToolRequest[SubmitH3PromptsRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[TextGenerationResult]:
+    value = request.value
+    duplicated = [uid for uid, n in Counter(unit.unit_id for unit in value.units).items() if n > 1]
+    if duplicated:
+        return ToolOutcome(problem=ToolProblem("generation_refused", f"❌ 单元重复提交: {duplicated}"))
+    prompts = {unit.unit_id: unit.model_dump(exclude={"unit_id"}) for unit in value.units}
+    return await _run_text_generation(
+        "submit_h3_prompts",
+        submit_reference_prompts(
+            episode=value.episode,
+            prompts=prompts,
+            project_name=scope.project_name,
+            projects=services.projects,
+            config_resolver=services.capabilities,
+        ),
+    )
+
+
+class GetDirectorBriefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    entry_ids: list[Annotated[str, Field(min_length=1)]] | SkipJsonSchema[None] = Field(
+        default=None, description="只修订这些单元的导演说明时点名（须该集已有完整导演结果）；省略时整集导演"
+    )
+    instructions: _TextInstructions | SkipJsonSchema[None] = None
+
+
+class DirectorUnitSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    unit_id: str = Field(min_length=1, description="单元 id，逐字取自简报，如 E1U01")
+    direction: str = Field(
+        description="这个单元的导演说明：自由文本，写成给人读的几段话（镜头、表演与声音、台词落位、同期声与配乐、末帧与衔接）"
+    )
+    speech_cues: list[SpeechCue] | None = Field(
+        default=None,
+        description=(
+            "这个单元每条发声（台词与画外音合并，按正文出现顺序从 0 起编号）的时间窗与配音性别："
+            "index、start_seconds、end_seconds（相对单元起点）、gender（male / female）。"
+            "项目启用配音且单元有画外音 `{…}` 时必填，并须覆盖每一条画外音；角色台词可选。不给则保持该单元已有的 cues"
+        ),
+    )
+
+
+class DirectorPlanSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode_intent: str = Field(description="本集要让观众知道、感受或期待什么，一到两句")
+    arc: list[DirectorArcBeat] = Field(description="按顺序排列的情绪弧线，至少两拍（含一次转折）")
+    tone: str = Field(description="整集基调及其变化，一句")
+    motifs: list[str] = Field(default_factory=list, description="贯穿多个单元的意象、声音或道具，1-4 个，可为空")
+
+
+class SubmitDirectorPlanRequest(BaseModel):
+    """导演提交：集级导演规划 + 若干单元的自由文本导演说明，由导演子智能体自己写。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    director_plan: DirectorPlanSubmission | SkipJsonSchema[None] = Field(
+        default=None, description="集级导演规划，整份替换；只在首次或需要改规划时提供"
+    )
+    units: list[DirectorUnitSubmission] = Field(
+        default_factory=list, description="本次提交的单元导演说明，可分批；未提交的单元保持原样"
+    )
+
+
+async def _reference_director_gate(scope: ProjectScope, services: Services) -> ToolProblem | None:
+    try:
+        project = await asyncio.to_thread(services.projects.load_project, scope.project_name)
+    except Exception as exc:
+        return _unexpected("director", exc)
+    if not is_reference_video_project(project) or project.get("content_mode") == "ad":
+        return ToolProblem(
+            "generation_refused",
+            "只有参考生视频项目的导演由子智能体撰写；分镜路线请调用 generate_director_plan",
+        )
+    return None
+
+
+async def get_director_brief(
+    request: ToolRequest[GetDirectorBriefRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[TextGenerationResult]:
+    problem = await _reference_director_gate(scope, services)
+    if problem is not None:
+        return ToolOutcome(problem=problem)
+    value = request.value
+    return await _run_text_generation(
+        "get_director_brief",
+        reference_director_brief(
+            episode=value.episode,
+            entry_ids=tuple(value.entry_ids or ()),
+            instructions=value.instructions,
+            project_name=scope.project_name,
+            projects=services.projects,
+        ),
+    )
+
+
+async def submit_director_plan(
+    request: ToolRequest[SubmitDirectorPlanRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[TextGenerationResult]:
+    problem = await _reference_director_gate(scope, services)
+    if problem is not None:
+        return ToolOutcome(problem=problem)
+    value = request.value
+    return await _run_text_generation(
+        "submit_director_plan",
+        submit_reference_director_plan(
+            episode=value.episode,
+            director_plan=value.director_plan.model_dump() if value.director_plan is not None else None,
+            units=[unit.model_dump() for unit in value.units],
+            project_name=scope.project_name,
+            projects=services.projects,
+        ),
+    )
+
+
+class SubmitScreenplayRequest(ScreenplaySubmission):
+    """编剧提交：本集剧本由编剧 Agent 自己写成「场 + 有类型的节拍」，服务端渲染存盘并做质量检查。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+
+
+class SubmitScreenplayResult(BaseModel):
+    message: str
+    scenes: int
+    total_seconds: int
+    warnings: list[str]
+
+
+async def submit_screenplay(
+    request: ToolRequest[SubmitScreenplayRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[SubmitScreenplayResult]:
+    value = request.value
+    episode = value.episode
     try:
         project = await asyncio.to_thread(services.projects.load_project, scope.project_name)
         if project.get("content_mode", "narration") == "ad":
-            raise TextGenerationError("广告/短片项目没有剧本规划，不走编剧步骤，请直接调用 generate_episode_script")
-    except TextGenerationError as exc:
-        return ToolOutcome(problem=ToolProblem("generation_refused", str(exc)))
-    except Exception as exc:
-        return ToolOutcome(problem=ToolProblem("internal_error", f"write_screenplay 失败: {exc}"))
-    if text_request.dry_run:
-        return await _execute_text_handler(
-            "write_screenplay", generate_screenplay_handler, text_request, scope, services
+            return ToolOutcome(
+                problem=ToolProblem(
+                    "generation_refused", "广告/短片项目没有剧本规划，不走编剧步骤，请直接调用 generate_episode_script"
+                )
+            )
+        project_path = services.projects.get_project_path(scope.project_name)
+        try:
+            source_text = await asyncio.to_thread(load_novel_source, project_path, None, episode=episode)
+        except ValueError as exc:
+            return ToolOutcome(problem=ToolProblem("generation_refused", f"❌ {exc}"))
+        language = project.get("source_language")
+        target = project.get("episode_target_duration")
+        characters = project.get("characters")
+        compiled = compile_submission(
+            ScreenplaySubmission.model_validate(value.model_dump(exclude={"episode"})),
+            language=language if isinstance(language, str) else None,
+            speech_rate_override=project_speech_rate_override(project),
+            character_names=list(characters) if isinstance(characters, dict) else (),
+            target_seconds=target if isinstance(target, int) and not isinstance(target, bool) else None,
         )
-    return await _submit_text_task(
-        task_type=_TEXT_SCREENPLAY,
-        operation="write_screenplay",
-        unit_id=f"episode-{text_request.episode}",
-        payload=text_request.to_payload(),
-        scope=scope,
-        caller=_caller,
-        services=services,
+        if compiled.errors:
+            reasons = "\n".join(f"- {gate.message}" for gate in compiled.errors)
+            return ToolOutcome(
+                problem=ToolProblem("screenplay_rejected", f"❌ 剧本未写入，请修正后重新提交：\n{reasons}")
+            )
+        await asyncio.to_thread(
+            screenplay.write_screenplay, project_path, episode, compiled.draft, source_text=source_text
+        )
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("submit_screenplay", exc))
+    warnings = [gate.message for gate in compiled.warnings]
+    message = (
+        f"✅ 第 {episode} 集剧本已写入：《{compiled.draft.title}》，共 {len(compiled.draft.scenes)} 场，"
+        f"预计总时长约 {compiled.total_seconds} 秒。剧本待人工审阅，通过后再进入单元拆解。"
+    )
+    if warnings:
+        message += "\n以下质量检查未通过（已落盘）：按质量要求修改后可重新提交整份剧本：\n" + "\n".join(
+            f"- {warning}" for warning in warnings
+        )
+    return ToolOutcome(
+        value=SubmitScreenplayResult(
+            message=message,
+            scenes=len(compiled.draft.scenes),
+            total_seconds=compiled.total_seconds,
+            warnings=warnings,
+        )
     )
 
 
@@ -1031,6 +1374,114 @@ async def approve_screenplay(
     except Exception as exc:
         return ToolOutcome(problem=_unexpected("approve_screenplay", exc))
     return ToolOutcome(value=ScreenplayState.model_validate(state))
+
+
+class KeyframeBriefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+
+
+class KeyframeCellInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    label: str = Field(min_length=1, description="审阅界面显示的简称，如「Vương 近景」")
+    scene: str = Field(min_length=1, description="发生地的场景资产名，须是简报 scenes 里已登记的名字")
+    staging: str = Field(
+        min_length=1, description="站位：谁在哪一侧（左 / 右 / 靠窗）、坐或站、朝向、手中物件、服装；写得能让画师直接画"
+    )
+    framing: str = Field(
+        min_length=1, description="这一格的起始景别：景别、机位角度、画面主体；须与使用它的单元第一镜一致"
+    )
+    characters: list[str] = Field(
+        default_factory=list,
+        description="出镜角色的引用名，须是简报 characters 里已登记的名字（衍生写 本体/衍生）；每个人都必须在使用该格的单元正文里被 @ 引用",
+    )
+    unit_ids: list[str] = Field(min_length=1, description="以这一格作首帧的视频单元；一个单元至多属于一格")
+
+
+class SubmitKeyframePlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: PositiveEpisode = Field(description="剧集编号")
+    cells: list[KeyframeCellInput] = Field(
+        min_length=1, description="本集的起始帧格子清单；整份替换，内容未变的格子沿用已有图与审核状态"
+    )
+    base_fingerprint: str | SkipJsonSchema[None] = Field(
+        default=None, description="读取简报时拿到的 plan_fingerprint；单元内容在这之后变了就按冲突拒绝"
+    )
+
+
+class KeyframeUnitBrief(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    unit_id: str
+    text: str
+    direction: str = ""
+    duration_seconds: int | float | None = None
+
+
+class KeyframeBrief(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    episode: int
+    plan_fingerprint: str
+    units: list[KeyframeUnitBrief]
+    characters: list[dict[str, Any]]
+    scenes: list[dict[str, Any]]
+    cells_per_sheet: int
+    existing_board: dict[str, Any] | None = None
+
+
+class KeyframePlanState(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    episode: int
+    plan_fingerprint: str
+    stale: bool
+    sheets: list[dict[str, Any]]
+    uncovered_unit_ids: list[str] = []
+
+
+def _keyframe_problem(exc: KeyframePlanError) -> ToolProblem:
+    params = {"problems": exc.problems} if exc.problems else {}
+    return ToolProblem(f"keyframe_{exc.code}", exc.message, params=params)
+
+
+async def get_keyframe_brief(
+    request: ToolRequest[KeyframeBriefRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[KeyframeBrief]:
+    try:
+        brief = await KeyframePlanService(services.projects).get_brief(scope.project_name, request.value.episode)
+    except KeyframePlanError as exc:
+        return ToolOutcome(problem=_keyframe_problem(exc))
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("get_keyframe_brief", exc))
+    return ToolOutcome(value=KeyframeBrief.model_validate(brief))
+
+
+async def submit_keyframe_plan(
+    request: ToolRequest[SubmitKeyframePlanRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[KeyframePlanState]:
+    value = request.value
+    try:
+        state = await KeyframePlanService(services.projects).submit(
+            scope.project_name,
+            value.episode,
+            [PlannedCell.model_validate(cell.model_dump()) for cell in value.cells],
+            base_fingerprint=value.base_fingerprint,
+        )
+    except KeyframePlanError as exc:
+        return ToolOutcome(problem=_keyframe_problem(exc))
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("submit_keyframe_plan", exc))
+    return ToolOutcome(value=KeyframePlanState.model_validate(state))
 
 
 class DirectionReportRequest(BaseModel):
@@ -2447,6 +2898,17 @@ async def _execute_plan_episodes(
     return ToolOutcome(value=value)
 
 
+async def _manual_episode_problem(scope: ProjectScope, services: Services) -> ToolProblem | None:
+    """drama 项目的分集由用户在界面逐集上传、不经规划：拒绝规划并指路上传。"""
+    project = await asyncio.to_thread(services.projects.load_project, scope.project_name)
+    if project.get("content_mode") != "drama":
+        return None
+    return ToolProblem(
+        "episode_planning_unsupported",
+        "❌ 剧情演绎（drama）项目不做分集规划：请让用户在分集界面逐集上传源文，上传后服务端自动分析资产。",
+    )
+
+
 async def plan_episodes(
     request: ToolRequest[PlanEpisodesRequest],
     scope: ProjectScope,
@@ -2456,6 +2918,8 @@ async def plan_episodes(
     planner_cls: type[EpisodePlanner] = EpisodePlanner,
 ) -> ToolOutcome[Any]:
     if problem := await migration_gate(scope, services):
+        return ToolOutcome(problem=problem)
+    if problem := await _manual_episode_problem(scope, services):
         return ToolOutcome(problem=problem)
     if planner_cls is not EpisodePlanner:
         return await _execute_plan_episodes(request, scope, services, planner_cls=planner_cls)
@@ -2478,8 +2942,28 @@ def _text_result_payload(value: TextGenerationResult) -> dict[str, Any]:
     return payload
 
 
+async def _execute_asset_analysis(
+    scope: ProjectScope,
+    services: Services,
+    *,
+    analyzer_cls: type[AssetAnalyzer] = AssetAnalyzer,
+) -> ToolOutcome[Any]:
+    if problem := await migration_gate(scope, services):
+        return ToolOutcome(problem=problem)
+    try:
+        analyzer = await analyzer_cls.create(services.projects, scope.project_name)
+        return ToolOutcome(value=await analyzer.analyze())
+    except (AssetAnalysisError, FileNotFoundError) as exc:
+        return ToolOutcome(problem=ToolProblem("asset_analysis_failed", f"❌ 资产分析失败：{exc}"))
+    except Exception as exc:
+        return ToolOutcome(problem=_unexpected("asset_analysis", exc))
+
+
 async def execute_queued_text_task(
-    task: dict[str, Any], *, planner_cls: type[EpisodePlanner] = EpisodePlanner
+    task: dict[str, Any],
+    *,
+    planner_cls: type[EpisodePlanner] = EpisodePlanner,
+    analyzer_cls: type[AssetAnalyzer] = AssetAnalyzer,
 ) -> dict[str, Any]:
     """Execute one durable text task through the same host-independent handlers."""
     payload = task.get("payload") or {}
@@ -2499,6 +2983,8 @@ async def execute_queued_text_task(
             services,
             planner_cls=planner_cls,
         )
+    elif task_type == TEXT_ASSET_ANALYSIS_TASK_TYPE:
+        outcome = await _execute_asset_analysis(scope, services, analyzer_cls=analyzer_cls)
     else:
         request = TextGenerationRequest(
             episode=payload["episode"],
@@ -2512,9 +2998,7 @@ async def execute_queued_text_task(
             _TEXT_EPISODE_SCRIPT: ("generate_episode_script", generate_episode_script_handler),
             _TEXT_DRAMA_SCRIPT_PLAN: ("generate_script_plan", generate_drama_script_plan),
             _TEXT_NARRATION_SCRIPT_PLAN: ("generate_script_plan", generate_narration_script_plan),
-            _TEXT_REFERENCE_SCRIPT_PLAN: ("generate_script_plan", generate_reference_script_plan),
             _TEXT_DIRECTOR_PLAN: ("generate_director_plan", generate_director_plan_handler),
-            _TEXT_SCREENPLAY: ("write_screenplay", generate_screenplay_handler),
             TEXT_REFERENCE_DUB_LINES_TASK_TYPE: ("generate_dub_lines", generate_reference_dub_lines_task),
         }
         try:
@@ -3035,6 +3519,9 @@ __all__ = [
     "GenerateEpisodeScriptRequest",
     "GenerateScriptPlanRequest",
     "GenerationBatchToolRequest",
+    "KeyframeBrief",
+    "KeyframeBriefRequest",
+    "KeyframePlanState",
     "NoArguments",
     "PatchDraftRequest",
     "PatchEpisodeMetaRequest",
@@ -3063,6 +3550,9 @@ __all__ = [
     "SourceFilesContent",
     "SourceTextContent",
     "SourceTextRequest",
+    "SubmitKeyframePlanRequest",
+    "SubmitScreenplayRequest",
+    "SubmitScreenplayResult",
     "TextGenerationError",
     "TextGenerationRequest",
     "TextGenerationResult",
@@ -3070,7 +3560,6 @@ __all__ = [
     "ToolProblem",
     "ToolRequest",
     "UploadSourceRequest",
-    "WriteScreenplayRequest",
     "approve_screenplay",
     "cancel_generation_batch",
     "complete_asset_inventory",
@@ -3085,6 +3574,7 @@ __all__ = [
     "get_direction_report",
     "get_episode_script",
     "get_generation_batch",
+    "get_keyframe_brief",
     "get_project_content",
     "get_prompt_preview",
     "get_screenplay",
@@ -3107,6 +3597,7 @@ __all__ = [
     "rename_asset",
     "reset_episode_planning",
     "retry_project_migration",
+    "submit_keyframe_plan",
+    "submit_screenplay",
     "upload_source",
-    "write_screenplay",
 ]

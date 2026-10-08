@@ -77,4 +77,21 @@ describe("DirectionReviewPanel · 参考生视频", () => {
     expect(screen.getByText("运镜分布")).toBeInTheDocument();
     expect(screen.queryByText("机位分布")).not.toBeInTheDocument();
   });
+
+  it("导演写的是自由文本时只展示这段文字，不再拆成镜头表与表演", async () => {
+    const row = {
+      ...REFERENCE_REVIEW.report!.rows[0],
+      direction: "第 0 秒全景，阿离推开山门。\n第 4 秒切近景，她低声说「我回来了。」",
+    };
+    vi.spyOn(API, "getDirectionReview").mockResolvedValue({
+      ...REFERENCE_REVIEW,
+      report: { ...REFERENCE_REVIEW.report!, rows: [row] } as never,
+    });
+    render(<DirectionReviewPanel projectName="demo" episode={1} version={0} />);
+
+    const unit = await screen.findByTestId("flow-dr-unit-E1U01");
+    expect(within(unit).getByText(/第 0 秒全景，阿离推开山门。/)).toBeInTheDocument();
+    expect(within(unit).queryByText("push_in (small, slow)")).not.toBeInTheDocument();
+    expect(within(unit).queryByText("无配乐")).not.toBeInTheDocument();
+  });
 });

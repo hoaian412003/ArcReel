@@ -119,6 +119,55 @@ export interface ProjectStatus {
   episodes_summary: EpisodesSummary;
 }
 
+/** 资产分析任务的入队结果：`worker_offline` 表示执行器离线、尚未入队。 */
+export interface AssetAnalysisQueued {
+  status: "queued" | "worker_offline";
+  task_id: string | null;
+  deduped?: boolean;
+}
+
+export interface EpisodeSourceUploadResult {
+  episode: number;
+  title: string;
+  /** false 表示替换了已有集的源文 */
+  created: boolean;
+  /** 被替换的集已有下游产物，已标 stale（产物不删除） */
+  stale: boolean;
+  characters: number;
+  analysis: AssetAnalysisQueued;
+}
+
+export interface NovelSplitEpisode {
+  episode: number;
+  title: string;
+  chars: number;
+  /** 本集由整本书中的哪几章拼成 */
+  chapters: number[];
+}
+
+/** 按章节标题切分整本小说的结果；`created` 为 false 时只是预览，未写任何东西。 */
+export interface NovelSplitResult {
+  source: string;
+  /** 命中的标题族：zh / vi / en */
+  pattern: "zh" | "vi" | "en" | null;
+  chapter_count: number;
+  preface_chars: number;
+  /** short_chapters:1,2 / long_chapters:3 / duplicate_headings 等，可带冒号后的章号清单 */
+  warnings: string[];
+  /** 已存在、会被本次切分覆盖的集号 */
+  conflicts: number[];
+  episodes: NovelSplitEpisode[];
+  created: boolean;
+  analysis: AssetAnalysisQueued | null;
+}
+
+export interface NovelSplitOptions {
+  source?: string;
+  chaptersPerEpisode: number;
+  startEpisode?: number;
+  replace?: boolean;
+}
+
 export interface EpisodeMeta {
   episode: number;
   title: string;

@@ -255,6 +255,36 @@ class TestProjectsRouter:
             assert resp.status_code == 422
             assert "video_prompt_profile" not in fake_pm.project_data["ready"]
 
+    def test_update_project_persists_h3_prompt_language_for_reference_video_project(self, tmp_path, monkeypatch):
+        """PATCH H3 提示词语言：zh 写入 project.json，en / 空值移除（回落英文）。"""
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.project_data["ready"].update({"generation_mode": "reference_video", "content_mode": "drama"})
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"h3_prompt_language": "zh"})
+            assert resp.status_code == 200
+            assert fake_pm.project_data["ready"]["h3_prompt_language"] == "zh"
+
+            resp = client.patch("/api/v1/projects/ready", json={"h3_prompt_language": "en"})
+            assert resp.status_code == 200
+            assert "h3_prompt_language" not in fake_pm.project_data["ready"]
+
+    @pytest.mark.parametrize(
+        ("overrides", "language"),
+        [
+            ({"generation_mode": "reference_video", "content_mode": "drama"}, "fr"),
+            ({"generation_mode": "storyboard", "content_mode": "drama"}, "zh"),
+        ],
+    )
+    def test_update_project_rejects_unsupported_h3_prompt_language(self, tmp_path, monkeypatch, overrides, language):
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.project_data["ready"].update(overrides)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"h3_prompt_language": language})
+            assert resp.status_code == 422
+            assert "h3_prompt_language" not in fake_pm.project_data["ready"]
+
     def test_update_project_rejects_non_positive_narration_speed(self, tmp_path, monkeypatch):
         """语速 0/负数应 422，且不写回 project.json。"""
         fake_pm = _FakePM(tmp_path)

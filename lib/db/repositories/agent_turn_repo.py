@@ -20,6 +20,7 @@ def _turn_dict(row: AgentTurn) -> dict[str, Any]:
         "session_id": row.session_id,
         "client_key": row.client_key,
         "status": row.status,
+        "action": row.action,
         "error_code": row.error_code,
         "error_message": row.error_message,
         "input_tokens": row.input_tokens,
@@ -74,6 +75,8 @@ class AgentTurnRepository(BaseRepository):
         session_id: str,
         client_key: str,
         user_id: str = DEFAULT_USER_ID,
+        prompt: str | None = None,
+        action: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         row = AgentTurn(
@@ -81,6 +84,8 @@ class AgentTurnRepository(BaseRepository):
             session_id=session_id,
             client_key=client_key,
             status="accepted",
+            prompt=prompt,
+            action=action,
             user_id=user_id,
             created_at=now,
             updated_at=now,
@@ -135,6 +140,38 @@ class AgentTurnRepository(BaseRepository):
 
     async def mark_running(self, turn_id: str) -> bool:
         return await self._set(turn_id, status="running")
+
+    async def pending(self, project_name: str | None = None, *, user_id: str | None = None) -> list[dict[str, Any]]:
+        statement = (
+            select(AgentTurn, AgentSession)
+            .join(AgentSession, AgentSession.id == AgentTurn.session_id)
+            .where(AgentTurn.status == "accepted", AgentTurn.prompt.is_not(None))
+            .order_by(AgentTurn.created_at, AgentTurn.id)
+        )
+        if project_name is not None:
+            statement = statement.where(AgentSession.project_name == project_name)
+        if user_id is not None:
+            statement = statement.where(AgentTurn.user_id == user_id)
+        result = await self.session.execute(statement)
+        return [
+            {
+                "turn": _turn_dict(turn),
+                "prompt": turn.prompt,
+                "project_name": session.project_name,
+                "session_id": session.id,
+                "user_id": turn.user_id,
+            }
+            for turn, session in result.all()
+        ]
+
+    async def recover_running(self) -> None:
+        await self.session.execute(
+            update(AgentTurn)
+            .where(AgentTurn.status == "running")
+            .values(
+                status="error", error_code="server_restarted", error_message="server_restarted", updated_at=utc_now()
+            )
+        )
 
     async def complete(
         self,

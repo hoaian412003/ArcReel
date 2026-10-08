@@ -1,4 +1,8 @@
 MESSAGES = {
+    "claude_workspace_unavailable": "The saved agent workspace has moved or is unavailable",
+    "claude_action_invalid": "This agent action is missing required context",
+    "claude_memory_invalid": "This memory file could not be saved or promoted",
+    "claude_auth_required": "Connect Claude in Settings before sending a message",
     "project_migration_failed": "Project '{name}' has not finished its data upgrade, so generation is unavailable. Reason: {reason}. Repair it in the agent conversation, then retry the upgrade",
     "project_not_found": "Project '{name}' does not exist or is not initialized",
     "resource_not_found": "The requested resource does not exist",
@@ -168,6 +172,7 @@ MESSAGES = {
     "dub_target_language_invalid": "Dub target language currently supports only Vietnamese (vi)",
     "narrator_gender_invalid": "Narrator dub gender must be male or female",
     "h3_guide_preset_invalid": "H3 guide preset must be one of the built-in presets",
+    "h3_prompt_language_invalid": "H3 prompt language must be en or zh, and only applies to reference-video projects using the H3 Ref2VA profile",
     "h3_guide_custom_too_long": "The custom H3 guide is too long",
     "h3_authoring_template_invalid": "The H3 authoring template is invalid: {detail}",
     "h3_authoring_template_size_invalid": "The H3 authoring template must be non-empty text of at most {max} characters",
@@ -429,6 +434,16 @@ MESSAGES = {
     "dub_video_missing": "This unit has no video yet; generate the video first",
     "dub_asr_failed": "Could not detect the start times from the video: {err_msg}",
     "dub_vieneu_disabled": "The local VieNeu voice service is turned off. Allow ArcReel to start it in Settings → Providers → VieNeu-TTS",
+    "episode_source_input_required": "Provide either a source file or pasted text (one of them)",
+    "episode_source_invalid_episode": "The episode number must be a positive integer",
+    "episode_source_empty_source": "The episode source cannot be empty",
+    "episode_source_unsupported_mode": "Only drama projects support uploading episode sources",
+    "episode_delete_confirmation_required": "Episode {episode} already has scripts or products ({artifacts} registered artifacts). Deleting it cannot be undone; retry with confirm_products=true to confirm",
+    "episode_delete_not_found": "Episode {episode} does not exist",
+    "episode_split_source_required": "Specify which novel file to split ({count} usable sources found)",
+    "episode_split_source_not_found": "Source file '{name}' was not found",
+    "episode_split_no_chapters": "No chapter headings were recognised in '{name}' (needs at least two: 第N章, Chương N or Chapter N)",
+    "episode_split_conflict": "Episode(s) {episodes} already exist; send replace=true to replace them",
     "worker_offline": "The background worker is offline, so the request could not be queued. Try again in a moment.",
     "script_plan_generate_unsupported": "Ad / short-film projects have no script plan; write the episode script directly",
     "script_plan_already_exists": "Episode {episode} already has a script plan; ask the Agent to redo it if you want to start over",
@@ -470,6 +485,11 @@ MESSAGES = {
     ),
     "ref_warn_unit_without_scene": (
         "This unit references no scene; the model decides the location of the shot on its own"
+    ),
+    "ref_warn_speaker_without_picture": (
+        "Character '{name}' speaks but is not @-referenced outside the dialogue mark, so this unit sends no "
+        "reference image for them: if they appear on screen the model invents their face. Write @[{name}] in "
+        "the visual description (ignore for pure off-screen voices)"
     ),
     "ref_warn_silent_model": (
         "The current video model '{model}' generates no audio; dialogue is used only as prompt context"
@@ -585,10 +605,32 @@ MESSAGES = {
     "direction_review_not_reviewable": "The director output is not awaiting approval; it is already approved or has changed since",
     "direction_review_invalid_decision": "Invalid decision: choose approve, changes (with a note or entry ids) or redo",
     "direction_review_unknown_entries": "Some entry ids do not exist in this episode's script",
+    "keyframe_not_applicable": "Keyframes only apply to reference-video projects that use the H3 full-reference prompt profile",
+    "keyframe_episode_not_found": "Episode {episode} does not exist",
+    "keyframe_board_missing": "This episode has no keyframe plan yet; ask the agent to plan keyframes first",
+    "keyframe_sheet_missing": "Sheet {id} is not on the board (the plan may have been resubmitted)",
+    "keyframe_cell_missing": "Cell {id} is not on the board",
+    "keyframe_unit_missing": "This episode has no unit {id}",
+    "keyframe_cell_has_no_image": "Cell {id} has no image yet; generate its sheet first",
+    "keyframe_cell_stale": "The inputs behind cell {id} have changed; regenerate its sheet before approving",
+    "keyframe_characters_not_in_unit": "The characters in cell {id} are not @-referenced in this unit's text, so the unit cannot use this cell",
+    "keyframe_image_provider_unavailable": "No image-to-image model is available; configure an image provider in settings first",
     "direction_review_authored": "Prompts for this episode are already written, so the director output can no longer be changed here",
     "screenplay_not_applicable": "The screenwriter step does not apply to this episode (ad projects have no script plan)",
     "screenplay_missing": "This episode has no screenplay yet; run the screenwriter step first",
     "screenplay_revision_conflict": "The screenplay changed after you loaded it; refresh and try again",
     "screenplay_corrupt": "This episode's screenplay file is corrupt and cannot be read",
     "screenplay_bad_edit": "The screenplay edit is invalid: check the scene index and field values",
+    "canvas_node_not_found": "Canvas node '{id}' does not exist",
+    "canvas_edge_not_found": "Canvas edge '{id}' does not exist",
+    "canvas_node_busy": "Canvas node '{id}' is generating; try again later",
+    "canvas_node_type_invalid": "Unsupported canvas node type: {type}",
+    "canvas_node_not_runnable": "Canvas node '{id}' cannot be run",
+    "canvas_invalid_connection": "These two handles carry different data types and cannot be connected",
+    "canvas_prompt_required": "Connect at least one non-empty text node to the provider node as its prompt first",
+    "canvas_upload_ext_unsupported": "Unsupported image format; allowed: {allowed}",
+    "canvas_h3_writer_no_units": "Connect at least one video unit to the H3 writer first",
+    "canvas_h3_profile_required": "The H3 writer only applies to projects that use the H3 Ref2VA prompt profile",
+    "canvas_run_failed": "{message}",
+    "canvas_worker_offline": "The task queue service is not running; cannot submit generation tasks",
 }

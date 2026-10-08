@@ -982,11 +982,12 @@ class ReferenceResource(BaseModel):
 
     执行期派生物，不落盘：视频单元只持久化正文，参考图由正文的 ``@[名称]`` 在渲染与请求
     投影时解析（见 :func:`lib.script.reference_video.text_parser.derive_references_from_text`）。
+    ``keyframe`` 是例外来源：它不由正文引用，而由起始帧看板按单元派生（见 ``docs/adr/0096``）。
     """
 
     model_config = _STRICT_CONFIG
 
-    type: Literal["product", "character", "scene", "prop"] = Field(description="引用的资源类型")
+    type: Literal["product", "character", "scene", "prop", "keyframe"] = Field(description="引用的资源类型")
     name: str = Field(description="商品/角色/场景/道具名称，必须在 project.json 对应 bucket 中已注册")
 
 
@@ -1010,6 +1011,27 @@ class H3Prompt(BaseModel):
 
 
 DubGender = Literal["male", "female"]
+
+
+class SpeechCue(BaseModel):
+    """导演为 unit 内第 ``index`` 条发声（台词与画外音合并计序）定的发声时间窗与配音性别。
+
+    画外音没有成片里的口型可对，开始时间只能来自导演；有角色在画面里说的台词，成片识别不到时
+    也以它为估计。``gender`` 决定这一条的配音音色，画外音必填。
+    """
+
+    model_config = _STRICT_CONFIG
+
+    index: int = Field(ge=0, description="对应 unit 正文派生出的第几条发声（从 0 起）")
+    start_seconds: float = Field(ge=0, description="开始时间（相对 unit 起点，秒）")
+    end_seconds: float = Field(gt=0, description="结束时间（相对 unit 起点，秒），晚于开始时间")
+    gender: DubGender | None = Field(default=None, description="配音音色性别：male / female")
+
+    @model_validator(mode="after")
+    def _validate_window(self) -> "SpeechCue":
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("speech cue 的 end_seconds 必须晚于 start_seconds")
+        return self
 
 
 class DubLine(BaseModel):
@@ -1138,6 +1160,10 @@ class DirectorBeat(BaseModel):
 class ReferenceUnitDirection(BaseModel):
     """unit 级导演说明的字段集，script_plan 的扁平产出单元与落盘单元共用。"""
 
+    direction: str = Field(
+        default="",
+        description="导演说明（自由文本，给人读的一整段）：这一段怎么演、怎么拍、听到什么；有它时不再使用下面的分项字段",
+    )
     unit_type: Annotated[ReferenceUnitType | None, BeforeValidator(_coerce_unit_type)] = Field(
         default=None, description="单元类型"
     )
@@ -1301,6 +1327,9 @@ class ReferenceVideoUnit(BaseModel):
     dub_lines: SkipJsonSchema[list[DubLine]] = Field(default_factory=list, description="越南语配音台词")
     # 导演说明：脚本规划随 unit 一并产出、内容确认时透传，创作者可在解析预览里改。字段集见
     # ``ReferenceUnitDirection``；对 LLM 隐藏（提示词编写用独立输出模型，只读不写），落盘只在有内容时出现。
+    direction: SkipJsonSchema[str] = Field(default="", description="导演说明（自由文本）")
+    # 导演给每条发声定的时间窗与配音性别；对 LLM 隐藏，落盘只在有内容时出现。
+    speech_cues: SkipJsonSchema[list[SpeechCue]] = Field(default_factory=list, description="发声时间窗")
     unit_type: SkipJsonSchema[ReferenceUnitType | None] = Field(default=None, description="单元类型")
     brief: SkipJsonSchema[str] = Field(default="", description="导演说明")
     beats: SkipJsonSchema[list[DirectorBeat]] = Field(default_factory=list, description="可观察动作节点")
@@ -1467,7 +1496,7 @@ class ReferenceScriptPlanContentFlatUnit(BaseModel):
         default=None,
         ge=1,
         exclude=True,
-        description="所属剧本场次的序号（从 1 起）；仅在提示词提供了已确认剧本时填写，否则省略",
+        description="所属剧本场次的序号（从 1 起）；本集有已通过审阅的剧本时必填（该单元对应剧本的第几场），没有剧本时省略",
     )
 
 

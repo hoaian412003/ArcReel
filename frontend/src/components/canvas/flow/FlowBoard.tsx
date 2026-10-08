@@ -178,6 +178,7 @@ export function FlowBoard({ projectName }: { projectName: string }) {
           decision: "redo",
           ...(note ? { note } : {}),
         });
+        await useClaudeStore.getState().ask(projectName, { action: "redo_episode", episode: card.episode, note });
         pushToast(t("flow_redo_done_toast", { episode: card.episode }), "success");
         setRedoTarget(null);
         refresh();
@@ -342,3 +343,4 @@ export function FlowBoard({ projectName }: { projectName: string }) {
     </div>
   );
 }
+import { useClaudeStore } from "@/stores/claude-store";

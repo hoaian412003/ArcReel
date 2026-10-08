@@ -164,6 +164,10 @@ protected: false
 - 同一个资产在六段里始终用同一个占位名。
 - `h3_prompt` 的事件、台词、出场资产与 `text` 一致；不要在 `h3_prompt` 里引入 `text` 没有引用的资产。
 - 整个 `h3_prompt`（六段加起来）控制在 6000 个字符以内。
+- 空间与座位要跨 unit 锁死：视频模型看不到相邻 unit，凡多人同处一个空间（车厢、桌边、房间），每个 unit 的 `[Shot 1]`
+  都要写明谁在谁的哪一侧（如「Vương Tử Bác sits on the left of frame, Trần Hán Thăng by the window on the right」）、
+  朝向与手里的物件，且与上一个 unit 的「末帧 / 衔接结束状态」一致，下一个 unit 只在导演说明写了移动时才改变站位。
+  反应镜头里的对方同样要写明他在画面里的位置与朝向，不能只写「另一个人」。
 
 `title` 给本集拟一个简短标题。请按 script_plan_units 顺序逐 unit 产出。
 

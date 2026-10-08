@@ -31,6 +31,26 @@ function Field({ label, value }: { label: string; value: string | null }) {
   );
 }
 
+function DataBlock({ label, value, emptyText }: { label: string; value: unknown; emptyText: string }) {
+  const empty = value === null || value === undefined;
+  const content = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+
+  return (
+    <section>
+      <h3 className="mb-2 text-[12px] font-semibold text-text">{label}</h3>
+      {empty ? (
+        <p className="rounded-xl border border-dashed border-hairline px-3 py-4 text-[12px] text-text-4">
+          {emptyText}
+        </p>
+      ) : (
+        <pre className="max-h-72 overflow-auto rounded-xl bg-black/25 p-3 font-mono text-[11.5px] leading-5 text-text-2 ring-1 ring-inset ring-hairline-soft">
+          <code>{content}</code>
+        </pre>
+      )}
+    </section>
+  );
+}
+
 function DrawerBody({ taskId, onClose, onChanged }: Omit<TaskDetailDrawerProps, "taskId"> & { taskId: string }) {
   const { t } = useTranslation("queue");
   const titleId = useId();
@@ -116,6 +136,11 @@ function DrawerBody({ taskId, onClose, onChanged }: Omit<TaskDetailDrawerProps, 
                 <p className="whitespace-pre-wrap break-words">{data.task.error_message}</p>
               </div>
             )}
+
+            <div className="space-y-5">
+              <DataBlock label={t("detail.input")} value={data.task.input} emptyText={t("detail.input_empty")} />
+              <DataBlock label={t("detail.output")} value={data.task.output} emptyText={t("detail.output_empty")} />
+            </div>
 
             <section>
               <h3 className="mb-2 text-[12px] font-semibold text-text">{t("detail.summary")}</h3>

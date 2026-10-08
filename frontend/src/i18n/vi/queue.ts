@@ -2,7 +2,7 @@ import type enQueue from '../en/queue';
 
 export default {
   "title": "Giám sát hàng đợi",
-  "subtitle": "Worker tạo nội dung, làn đồng thời, tác vụ và nhật ký kiểm toán",
+  "subtitle": "Worker tạo nội dung, làn đồng thời và tác vụ",
   "back": "Quay lại danh sách dự án",
   "open_monitor": "Giám sát hàng đợi",
   "tabs_label": "Các phần giám sát hàng đợi",
@@ -81,6 +81,10 @@ export default {
   "detail.close": "Đóng",
   "detail.summary": "Tóm tắt",
   "detail.error": "Lỗi",
+  "detail.input": "Đầu vào",
+  "detail.input_empty": "Chưa ghi nhận đầu vào",
+  "detail.output": "Đầu ra",
+  "detail.output_empty": "Chưa ghi nhận đầu ra",
   "detail.events": "Dòng thời gian sự kiện",
   "detail.events_empty": "Chưa có sự kiện nào",
   "detail.api_calls": "Lệnh gọi API",

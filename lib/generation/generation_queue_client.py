@@ -27,6 +27,7 @@ from lib.generation.generation_queue import (
     get_generation_queue,
     read_queue_poll_interval,
 )
+from lib.keyframes.task_types import KEYFRAME_SHEET_RESOURCE_TYPE, KEYFRAME_SHEET_TASK_TYPE
 from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE
 from lib.project.asset_types import ASSET_SPECS
 from lib.project.resource_paths import CHARACTER_DERIVATIVE_RESOURCE_TYPE, resource_id_segments
@@ -326,7 +327,8 @@ _IMAGE_STRUCTURED_TASK_TYPES = frozenset({"storyboard"})
 # 显式传入时必须是非空字符串（作为待合成文本覆盖）。
 _TTS_TASK_TYPES = frozenset({"tts"})
 # 资产图任务：描述由执行层从项目里存储的条目读取，入队不收 prompt、载荷不存快照。
-_ASSET_SHEET_TASK_TYPES = frozenset(ASSET_SPECS)
+# 起始帧联合图同理：提示词由执行层按当前看板装配，入队不收 prompt。
+_ASSET_SHEET_TASK_TYPES = frozenset(ASSET_SPECS) | {KEYFRAME_SHEET_TASK_TYPE}
 
 
 def _validate_prompt(task_type: str, prompt: str | dict[str, Any] | None) -> None:
@@ -405,7 +407,8 @@ class TaskSpecValidationError(ValueError):
 #: ``本体名/衍生名``，落盘为 ``characters/derivatives/{本体}/{衍生}.png``，两段各自是
 #: 一段合法资产名。
 _HIERARCHICAL_RESOURCE_ID_SEGMENTS: dict[str, int] = {
-    DERIVATIVE_TASK_TYPE: resource_id_segments(CHARACTER_DERIVATIVE_RESOURCE_TYPE)
+    DERIVATIVE_TASK_TYPE: resource_id_segments(CHARACTER_DERIVATIVE_RESOURCE_TYPE),
+    KEYFRAME_SHEET_TASK_TYPE: resource_id_segments(KEYFRAME_SHEET_RESOURCE_TYPE),
 }
 
 

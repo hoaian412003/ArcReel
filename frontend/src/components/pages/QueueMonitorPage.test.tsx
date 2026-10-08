@@ -42,7 +42,16 @@ function task(overrides: Partial<QueueTaskRow> = {}): QueueTaskRow {
 }
 
 function detail(row: QueueTaskRow): QueueTaskDetail {
-  return { task: { ...row, input_digest: "abc123" }, events: [], api_calls: [] };
+  return {
+    task: {
+      ...row,
+      input_digest: "abc123",
+      input: { prompt: "fly over the city", duration: 6 },
+      output: { path: "videos/final.mp4" },
+    },
+    events: [],
+    api_calls: [],
+  };
 }
 
 function renderPage(path = "/app/queue") {
@@ -92,6 +101,18 @@ describe("QueueMonitorPage", () => {
         expect.anything(),
       ),
     );
+  });
+
+  it("removes audit navigation and shows task input and output in the drawer", async () => {
+    renderPage("/app/queue?tab=tasks");
+    expect(screen.queryByRole("tab", { name: "审计" })).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "打开任务 task-1" }));
+    const drawer = await screen.findByRole("dialog", { name: "任务详情" });
+    expect(within(drawer).getByText("输入")).toBeInTheDocument();
+    expect(within(drawer).getByText(/fly over the city/)).toBeInTheDocument();
+    expect(within(drawer).getByText("输出")).toBeInTheDocument();
+    expect(within(drawer).getByText(/videos\/final\.mp4/)).toBeInTheDocument();
   });
 
   it("cancels a queued task from the drawer only after confirmation", async () => {

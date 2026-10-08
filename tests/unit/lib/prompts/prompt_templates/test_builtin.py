@@ -80,6 +80,7 @@ def test_builtin_templates_declare_stage_and_trigger_and_lock_structural_partial
     # 引用方含经由资产图变体间接引用的模版，按注册顺序排列。
     assert catalog["shared/media_style"].referenced_by == [
         "asset/sheet",
+        "reference_video/keyframe_sheet",
         "reference_video/unit",
         "storyboard/grid",
         "storyboard/image",

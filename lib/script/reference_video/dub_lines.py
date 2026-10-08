@@ -99,9 +99,15 @@ def dub_lines_need_regeneration(unit_text: str, dub_lines: Sequence[DubLine]) ->
     return any(item.status != "current" for item in align_dub_lines(unit_text, dub_lines))
 
 
-def build_dub_lines_from_drafts(unit_text: str, drafts: Sequence[DubLineDraft]) -> list[dict[str, Any]]:
-    """把 LLM 产出的配音行补全 ``source_text``（取现行发声原文），序号越界的行 ``source_text`` 留空。"""
+def build_dub_lines_from_drafts(
+    unit_text: str, drafts: Sequence[DubLineDraft], cues: Sequence[Mapping[str, Any]] = ()
+) -> list[dict[str, Any]]:
+    """把 LLM 产出的配音行补全 ``source_text``（取现行发声原文），序号越界的行 ``source_text`` 留空。
+
+    导演在 ``cues`` 里给了某条发声的配音性别时以导演为准：模型只看译文上下文，导演才知道这句是女声还是男声。
+    """
     utterances = unit_utterances(unit_text)
+    cue_gender = {cue.get("index"): cue.get("gender") for cue in cues if cue.get("gender")}
     lines: list[dict[str, Any]] = []
     for draft in drafts:
         source = utterances[draft.index].text if 0 <= draft.index < len(utterances) else ""
@@ -109,7 +115,7 @@ def build_dub_lines_from_drafts(unit_text: str, drafts: Sequence[DubLineDraft]) 
             {
                 "index": draft.index,
                 "speaker": draft.speaker,
-                "gender": draft.gender,
+                "gender": cue_gender.get(draft.index, draft.gender),
                 "source_text": source,
                 "text_vi": draft.text_vi,
             }

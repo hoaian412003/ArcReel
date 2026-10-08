@@ -76,6 +76,7 @@ export default {
   "derivative_description_of": "「{{name}}」的外观变化",
   "derivative_description_placeholder": "换上黑色重甲，其余保持不变",
   "derivative_add": "新增衍生",
+  "face_add": "新增脸部特写",
   "derivative_rename": "重命名衍生",
   "derivative_rename_confirm": "确认重命名",
   "derivative_delete": "删除衍生「{{name}}」",

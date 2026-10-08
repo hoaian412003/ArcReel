@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import UTC, datetime, timedelta
@@ -82,6 +83,16 @@ def _aware(value: datetime) -> datetime:
 
 def _counts(rows: Any) -> dict[str, int]:
     return {status: int(count) for status, count in rows}
+
+
+def _json_value(value: str | None) -> object | None:
+    """Return persisted task JSON as structured data, preserving malformed legacy values."""
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return value
 
 
 def _cost_subquery():
@@ -272,7 +283,11 @@ async def list_tasks(
 async def task_detail(task_id: str, _t: Translator) -> dict[str, Any]:
     task = await _load_task_row(task_id, _t)
     async with safe_session_factory() as session:
-        digest = (await session.execute(select(Task.input_digest).where(Task.task_id == task_id))).scalar()
+        stored = (
+            await session.execute(
+                select(Task.input_digest, Task.payload_json, Task.result_json).where(Task.task_id == task_id)
+            )
+        ).one()
         events = (
             (await session.execute(select(TaskEvent).where(TaskEvent.task_id == task_id).order_by(TaskEvent.id.asc())))
             .scalars()
@@ -288,7 +303,12 @@ async def task_detail(task_id: str, _t: Translator) -> dict[str, Any]:
             .all()
         )
     return {
-        "task": {**task, "input_digest": digest},
+        "task": {
+            **task,
+            "input_digest": stored.input_digest,
+            "input": _json_value(stored.payload_json),
+            "output": _json_value(stored.result_json),
+        },
         "events": [
             {
                 "id": e.id,

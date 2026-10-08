@@ -1080,6 +1080,7 @@ export function ShotDetail({
           }}
         >
           {t("detail_pending_authoring_hint")}
+          <AskAgentButton projectName={projectName} action={{ action: "author_shot", resource_id: segmentId, script_file: scriptFile }} />
         </div>
       )}
 
@@ -1501,3 +1502,4 @@ export function ShotDetail({
     </div>
   );
 }
+import { AskAgentButton } from "@/components/claude/AskAgentButton";

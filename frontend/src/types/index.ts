@@ -13,3 +13,4 @@ export * from "./market";
 export * from "./cost";
 export * from "./reference-video";
 export * from "./workflow";
+export * from "./keyframe";

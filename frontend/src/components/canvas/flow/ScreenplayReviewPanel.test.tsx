@@ -43,12 +43,34 @@ describe("ScreenplayReviewPanel", () => {
     await renderPanel(onLoaded);
 
     expect(screen.getByText("边关来信")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "编剧报告" })).toBeInTheDocument();
     expect(screen.getByText("一封信带来谜团")).toBeInTheDocument();
     expect(screen.getByTestId("screenplay-total")).toHaveTextContent("20 秒");
     expect(screen.getByTestId("screenplay-total")).toHaveTextContent("2 场");
     expect(screen.getByTestId("screenplay-status")).toHaveTextContent("待审阅");
     expect(within(screen.getByTestId("screenplay-scene-2")).getByDisplayValue("外景 · 官道 · 夜")).toBeInTheDocument();
     expect(onLoaded).toHaveBeenCalledWith(expect.objectContaining({ fingerprint: "fp1" }));
+  });
+
+  it("在报告末尾通过当前审阅版本，并把最新状态回报给宿主", async () => {
+    const approved = makeScreenplay({ status: "approved", approved_at: "2026-10-05T00:00:00Z" });
+    const approve = vi.spyOn(API, "approveScreenplay").mockResolvedValue(approved);
+    const onApproved = vi.fn();
+    render(
+      <ScreenplayReviewPanel
+        projectName="demo"
+        episode={1}
+        version={0}
+        onApproved={onApproved}
+      />,
+    );
+    await screen.findByTestId("screenplay-scene-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "通过剧本" }));
+
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("demo", 1, "fp1"));
+    await waitFor(() => expect(onApproved).toHaveBeenCalledWith(approved));
+    expect(screen.getByRole("button", { name: "已通过" })).toBeDisabled();
   });
 
   it("尚未编写时给出提示，加载失败时给出错误与重试", async () => {

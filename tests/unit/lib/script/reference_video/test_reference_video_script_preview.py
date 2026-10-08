@@ -13,6 +13,7 @@ from lib.script.reference_video.script_preview import (
     WARN_SPEAKER_AUDIO_NEEDS_IMAGE,
     WARN_SPEAKER_AUDIO_UNAVAILABLE,
     WARN_SPEAKER_WITHOUT_AUDIO,
+    WARN_SPEAKER_WITHOUT_PICTURE,
     WARN_UNCLOSED_BRACE,
     WARN_UNIT_WITHOUT_SCENE,
     WARN_UNREGISTERED_MENTION,
@@ -20,6 +21,7 @@ from lib.script.reference_video.script_preview import (
     build_script_preview,
     derive_utterances,
     derive_voice_bindings,
+    speakers_without_picture,
 )
 from lib.script.reference_video.text_parser import (
     derive_references_from_text,
@@ -52,7 +54,8 @@ _SOFT = VoiceRenderSettings()
 
 
 def keys(preview) -> list[str]:
-    return [w["key"] for w in preview.warnings]
+    """除「说话人没有被 @ 引用」之外的 warning key；那一条由文末专门的用例断言。"""
+    return [w["key"] for w in preview.warnings if w["key"] != WARN_SPEAKER_WITHOUT_PICTURE]
 
 
 # ---------- 行内记号匹配原语 ----------
@@ -178,7 +181,7 @@ def test_padded_speaker_uses_registered_character_without_warning():
     )
 
     assert [u.speaker for u in preview.utterances] == ["张三"]
-    assert preview.warnings == []
+    assert keys(preview) == []
 
 
 def test_extract_mentions_skips_speaker_position():
@@ -557,3 +560,17 @@ def test_warning_messages_render_in_all_locales(locale: str, key: str):
 def test_zh_braces_warning_shows_literal_syntax_example():
     text = _(WARN_BRACES_NOT_SPEECH, locale="zh", line=2)
     assert "@[角色]{台词}" in text
+
+
+class TestSpeakerWithoutPicture:
+    def test_speaker_only_in_the_speech_slot_is_named(self):
+        preview = build_script_preview("中景。@[张三]{我来了}", PROJECT, _SOFT)
+        assert {"key": WARN_SPEAKER_WITHOUT_PICTURE, "params": {"name": "张三"}} in preview.warnings
+
+    def test_a_visual_mention_outside_the_slot_clears_it(self):
+        preview = build_script_preview("@[张三] 推门而入。\n@[张三]{我来了}", PROJECT, _SOFT)
+        assert WARN_SPEAKER_WITHOUT_PICTURE not in [w["key"] for w in preview.warnings]
+
+    def test_speakers_without_picture_lists_each_speaker_once_in_order(self):
+        text = "@[张三]{甲} @[李四]{乙} @[张三]{丙}"
+        assert speakers_without_picture(text, PROJECT) == ["张三", "李四"]

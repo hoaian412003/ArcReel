@@ -192,6 +192,8 @@ class DataValidator:
         "output",
         "versions",
         "grids",
+        "keyframes",
+        "canvas",
     }
 
     def __init__(self, projects_dir: str | Path | None = None):

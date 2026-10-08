@@ -67,6 +67,8 @@ description: 将小说转换为短视频的端到端工作流编排器。当用�
 
 **每个子智能体返回后**，主 Agent 展示一段简短摘要，随即刷新计划并按新的 `next_action` 继续，**不使用 AskUserQuestion 停下来等用户确认**。仅在计划给出需要用户输入的动作（如 `collect_project_input`、`review_screenplay`、`confirm_script_plan`、`review_direction`、`choose_narration_delivery`、`confirm_request_duration`、`configure_provider`）或遇到 `blockers` 时才停。
 
+计划刷新后若进入 `review_screenplay`、`confirm_script_plan` 或 `review_direction`，必须先调用 `review-assistant` skill。该 skill 只调用一次 `create_review_summary`，使用 Review Model 生成准确的越南语摘要并交给用户阅读；不得另建子智能体、不得替用户作决定。同一内容的摘要由工具按 fingerprint 复用。
+
 ---
 
 ## `analyze_assets`：全局角色/场景/道具提取
@@ -119,7 +121,7 @@ expected source revision：{next_action.args.expected_source_revision}
 
 **触发**：
 
-- `next_action.type == "write_screenplay"` → dispatch `write-screenplay` 子智能体：传入项目名称、集数；用户给本次编剧的附加要求原文透传。子智能体返回后刷新计划，通常转入 `review_screenplay`。
+- `next_action.type == "write_screenplay"` → dispatch `write-screenplay` 子智能体：传入项目名称、集数；用户给本次编剧的附加要求原文透传。**编剧由子智能体亲自完成**（读源文与项目事实、做改编取舍、写成节拍、经 `submit_screenplay` 提交并按质量检查修改），主 Agent 不替它写，也没有「服务端编剧」工具可调。子智能体返回后刷新计划，通常转入 `review_screenplay`。
 - `next_action.type == "review_screenplay"` → 剧本待用户审阅（需要用户决定，对话中进行；Web 项目页的 Flow 标签页是等价的审阅路径，用户在那里决定后刷新计划即可，不要重复询问）：
   1. 调用 `mcp__arcreel__get_screenplay({"episode": N})`，把 `markdown`（逐场的标题、剧情、预计时长与正文，末尾为本集预计总时长）原样展示给用户，不改写、不补充你自己的评价。
   2. 用 AskUserQuestion 提供：**通过**（推荐）/ **要求修改**（用户说明意见，可点名场次）/ **整集重写**。

@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API, ApiRequestError } from "@/api";
+import { ClaudeAPI } from "@/api/claude";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import type { DirectionReview, FlowBoard as FlowBoardData } from "@/types/flow";
@@ -9,6 +10,12 @@ import { FlowBoard } from "./FlowBoard";
 
 vi.mock("@/components/canvas/timeline/ScriptReviewGate", () => ({
   ScriptReviewGate: ({ episode }: { episode: number }) => <div data-testid="script-review-gate">gate-{episode}</div>,
+}));
+
+vi.mock("@/components/canvas/reference/ReferenceScriptPlanPreviewPanel", () => ({
+  ReferenceScriptPlanPreviewPanel: ({ episode }: { episode: number }) => (
+    <div data-testid="reference-script-plan-panel">units-{episode}</div>
+  ),
 }));
 
 const COLUMN_IDS = [
@@ -79,6 +86,7 @@ function drag(cardEl: HTMLElement, columnId: string) {
 }
 
 beforeEach(() => {
+  vi.spyOn(ClaudeAPI, "sendAction").mockResolvedValue({ session: { id: "claude-main", project_name: "demo", title: "Main", status: "idle", created_at: "", updated_at: "" }, turn: { id: "turn", session_id: "claude-main", client_key: "redo", status: "accepted", input_tokens: null, output_tokens: null, cache_creation_input_tokens: null, cache_read_input_tokens: null, total_cost_usd: null } });
   useProjectsStore.setState({ currentProjectData: { content_mode: "drama" } as never });
   vi.spyOn(API, "getFlowBoard").mockResolvedValue(makeBoard());
   vi.spyOn(API, "getDirectionReview").mockResolvedValue(REVIEW);
@@ -171,6 +179,7 @@ describe("FlowBoard", () => {
     fireEvent.change(note, { target: { value: "开场太静" } });
     fireEvent.click(screen.getByRole("button", { name: "发起重做" }));
     await waitFor(() => expect(decide).toHaveBeenCalledWith("demo", 2, { decision: "redo", note: "开场太静" }));
+    await waitFor(() => expect(ClaudeAPI.sendAction).toHaveBeenCalledWith("demo", { action: "redo_episode", episode: 2, note: "开场太静" }, expect.any(String)));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
@@ -192,6 +201,14 @@ describe("FlowBoard", () => {
     expect(screen.queryByRole("button", { name: "请 Agent 重做" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "通过" }));
     await waitFor(() => expect(confirm).toHaveBeenCalledWith("demo", 1, { overwriteRevision: undefined }));
+  });
+
+  it("参考生视频项目的剧本规划卡片抽屉用单元面板，而不是 drama / narration 审阅面板", async () => {
+    useProjectsStore.setState({ currentProjectData: { content_mode: "drama", generation_mode: "reference_video" } as never });
+    await renderBoard();
+    fireEvent.click(within1("flow-card-1"));
+    expect(await screen.findByTestId("reference-script-plan-panel")).toHaveTextContent("units-1");
+    expect(screen.queryByTestId("script-review-gate")).not.toBeInTheDocument();
   });
 
   it("导演报告抽屉展示意图、镜头意图、表演、衔接、机位分布与警告，按钮可请 Agent 重做", async () => {
@@ -228,7 +245,7 @@ describe("FlowBoard · 剧本审阅", () => {
     expect(await screen.findByTestId("screenplay-scene-1")).toBeInTheDocument();
     expect(screen.queryByTestId("script-review-gate")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "通过" }));
+    fireEvent.click(screen.getByRole("button", { name: "通过剧本" }));
 
     await waitFor(() => expect(approve).toHaveBeenCalledWith("demo", 4, "sp-fp"));
   });

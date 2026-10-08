@@ -25,7 +25,7 @@ from lib.script.draft_quarantine import (
 )
 from lib.script.reference_video.draft_validation import DraftViolation
 from server.draft_workflow import DraftContext, DraftWorkflow
-from server.text_generation import TextGenerationError, TextGenerationRequest, generate_reference_script_plan
+from server.text_generation import TextGenerationError, submit_reference_script_plan
 from tests.integration.server.agent_tool_support import (
     _RV_NOVEL,
     ToolHarness,
@@ -53,7 +53,6 @@ from tests.integration.server.agent_tool_support import (
     run_rv_split,
     rv_directed_unit,
     rv_director_plan,
-    rv_generator_returning,
     rv_project,
     rv_quarantine_path,
     rv_saved_unit,
@@ -142,9 +141,6 @@ async def test_reference_script_plan_write_transaction_does_not_block_event_loop
 ) -> None:
     rv_source(fake_ctx)
     resolver = use_fake_caps(fake_ctx)
-    from server import text_generation as mod
-
-    monkeypatch.setattr(mod.TextGenerator, "create", rv_generator_returning([rv_unit("@[张三] 起身")]))
     started = threading.Event()
     release = threading.Event()
     caller_thread = threading.get_ident()
@@ -156,8 +152,9 @@ async def test_reference_script_plan_write_transaction_does_not_block_event_loop
         release.wait()
 
     generation = asyncio.create_task(
-        generate_reference_script_plan(
-            TextGenerationRequest(episode=1),
+        submit_reference_script_plan(
+            [rv_unit("@[张三] 起身")],
+            episode=1,
             project_name=fake_ctx.project_name,
             projects=fake_ctx.pm,
             config_resolver=resolver,
@@ -402,48 +399,26 @@ async def test_split_violation_quarantine_records_base_fingerprint(fake_ctx: Too
 
 
 async def test_split_violation_keeps_pre_generation_formal_baseline(fake_ctx: ToolHarness, monkeypatch) -> None:
-    from server import text_generation as mod
 
     rv_source(fake_ctx)
     write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 起身")])
     expected = script_review.content_fingerprint(rv_script_plan_path(fake_ctx))
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    class _Generator:
-        async def generate(self, _request, project_name=None):
-            started.set()
-            await release.wait()
-
-            class _Result:
-                text = json.dumps(
-                    {"director_plan": rv_director_plan(1), "units": [rv_unit("@[不存在的人] 出场")]},
-                    ensure_ascii=False,
-                )
-
-            return _Result()
-
-    async def fake_create(_task_type, project_name=None, **_kwargs):
-        return _Generator()
-
     resolver = use_fake_caps(fake_ctx)
-    monkeypatch.setattr(mod.TextGenerator, "create", fake_create)
+
+    def concurrent_save() -> None:
+        # 校验期间另一条通道（如 Web 端保存）改了正式 script_plan
+        write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 在 @[村口] 等候")])
+
     generation = asyncio.create_task(
-        generate_reference_script_plan(
-            TextGenerationRequest(episode=1),
+        submit_reference_script_plan(
+            [rv_unit("@[张三] 起身")],
+            episode=1,
             project_name=fake_ctx.project_name,
             projects=fake_ctx.pm,
             config_resolver=resolver,
+            before_commit=concurrent_save,
         )
     )
-    try:
-        await asyncio.wait_for(started.wait(), timeout=10)
-    except TimeoutError:
-        generation.cancel()
-        await asyncio.gather(generation, return_exceptions=True)
-        raise
-    write_rv_script_plan(fake_ctx, [rv_saved_unit("@[张三] 在 @[村口] 等候")])
-    release.set()
 
     with pytest.raises(TextGenerationError):
         await asyncio.wait_for(generation, timeout=10)

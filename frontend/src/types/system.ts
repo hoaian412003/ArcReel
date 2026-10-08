@@ -13,6 +13,7 @@ export interface SystemConfigSettings {
   narration_speed?: number | null;
   text_backend_simple: string;
   text_backend_complex: string;
+  text_backend_review?: string;
   video_generate_audio: boolean;
   video_poll_timeout_seconds: number;
   anthropic_api_key: { is_set: boolean; masked: string | null };
@@ -98,6 +99,7 @@ export interface SystemConfigPatch {
   narration_speed?: number | null;
   text_backend_simple?: string;
   text_backend_complex?: string;
+  text_backend_review?: string;
   video_generate_audio?: boolean;
   video_poll_timeout_seconds?: number;
   anthropic_api_key?: string;

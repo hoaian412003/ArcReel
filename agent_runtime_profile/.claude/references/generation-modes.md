@@ -14,7 +14,7 @@ ArcReel 把"做什么内容"和"怎么生成视频"拆成两条独立维度。`c
 
 > drama 走两段式（见 ADR 0041）：script_plan（normalize-drama-script）产出**结构化内容** `script_plan_normalized_script.json`（分镜边界 / 出场资产 / 逐字口播 utterances / 原文锚 source_text / 视觉改编描述）；prompt_authoring（create-episode-script）LLM 只出视觉层 `DramaVisualScript`（scene_id + image_prompt + video_prompt），后端按 scene_id 写回正式脚本 `DramaEpisodeScript`。内容确认时脚本规划整集转为正式脚本，之后内容修改在正式脚本上经 `patch_episode_script` 进行。
 >
-> 新一集在脚本规划之前先走编剧步骤（`write-screenplay`）：服务端把源文改编为按场次组织、面向审阅者的可读剧本 `drafts/episode_{N}/screenplay.json`（逐场标题 / 剧情概要 / 预计时长 / 正文，总时长由各场相加得出），用户逐场审阅通过后，上表的脚本规划（单元拆解）以它与源文为依据，成功后自动完成内容确认。三条路线共用同一份剧本；存量集（没有剧本）沿用原路径。
+> 新一集在脚本规划之前先走编剧步骤（`write-screenplay` 子智能体）：编剧 Agent 亲自把源文改编为按场次组织、面向审阅者的可读剧本，经 `submit_screenplay` 提交，服务端渲染为 `drafts/episode_{N}/screenplay.json`（逐场标题 / 剧情概要 / 预计时长 / 正文，时长由台词字数与动作秒数算出、总时长由各场相加得出），用户逐场审阅通过后，上表的脚本规划（单元拆解）以它与源文为依据，成功后自动完成内容确认。三条路线共用同一份剧本；存量集（没有剧本）沿用原路径。
 >
 > script_plan 中间文件统一位于 `drafts/episode_{N}/`。状态检测与内容确认**只认当前项目 generation_mode 对应的那一个文件**：目录中出现其他模式的 `script_plan_*` 文件属历史残留，既不作为脚本规划已完成的依据，也不能当作内容确认的代替输入。drama 旧项目残留的 `script_plan_normalized_script.md`（结构化前自由文本稿）不算有效 script_plan，须重跑 normalize 产出 `.json`。
 

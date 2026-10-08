@@ -13,6 +13,7 @@ describe("ClaudePanel response activity", () => {
       value: vi.fn(),
     });
     vi.spyOn(ClaudeAPI, "listSessions").mockResolvedValue([]);
+    vi.spyOn(ClaudeAPI, "clearSessions").mockResolvedValue({ deleted: 0 });
     vi.spyOn(ClaudeAPI, "getUsage").mockResolvedValue({
       turns: [],
       totals: {
@@ -145,5 +146,27 @@ describe("ClaudePanel response activity", () => {
 
     fireEvent.keyDown(globalThis.window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("groups sessions under the current project and clears only that project after confirmation", async () => {
+    vi.mocked(ClaudeAPI.listSessions).mockResolvedValue([{
+      id: "session-1",
+      project_name: "demo",
+      title: "Demo session",
+      status: "idle",
+      created_at: "2026-10-04T00:00:00Z",
+      updated_at: "2026-10-04T00:00:00Z",
+    }]);
+    vi.mocked(ClaudeAPI.clearSessions).mockResolvedValue({ deleted: 1 });
+
+    render(<ClaudePanel projectName="demo" onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("group", { name: "demo 的会话" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除项目会话" }));
+    expect(screen.getByRole("heading", { name: "清除全部会话？" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除会话" }));
+
+    await waitFor(() => expect(ClaudeAPI.clearSessions).toHaveBeenCalledWith("demo"));
+    expect(screen.queryByRole("option", { name: "Demo session" })).not.toBeInTheDocument();
   });
 });

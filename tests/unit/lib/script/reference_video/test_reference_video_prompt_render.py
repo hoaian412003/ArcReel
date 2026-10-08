@@ -19,6 +19,7 @@ from lib.script.reference_video.script_preview import (
     WARN_SPEAKER_AUDIO_NEEDS_IMAGE,
     WARN_SPEAKER_AUDIO_UNAVAILABLE,
     WARN_SPEAKER_WITHOUT_AUDIO,
+    WARN_SPEAKER_WITHOUT_PICTURE,
     WARN_UNCLOSED_BRACE,
     WARN_UNREGISTERED_MENTION,
     WARN_UNREGISTERED_SPEAKER,
@@ -191,7 +192,8 @@ def test_silent_preview_and_execution_reach_the_same_conclusion(silencing: dict,
     preview = build_script_preview(_TEXT, _project(), settings)
     rendered = render_unit_prompt(_TEXT, _project(), refs, settings)
 
-    assert preview.warnings == [expected]
+    # 「说话人没有被 @ 引用」是只给作者看的编辑提示，执行侧不渲染，与声音结论无关
+    assert [w for w in preview.warnings if w["key"] != WARN_SPEAKER_WITHOUT_PICTURE] == [expected]
     assert rendered.warnings == [expected]
     # 承诺与实付一致：预览说这一集听不到声音，执行侧就不该绑上任何音频段
     assert rendered.audio_speakers == []

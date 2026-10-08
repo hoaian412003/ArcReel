@@ -42,6 +42,7 @@ from lib.generation.task_terminal_events import (
 from lib.generation.task_timeline import record_audit, record_task_event
 from lib.infra.async_thread import run_noninterruptible_async
 from lib.infra.pg_bus import CHANNEL_WAKE, notify
+from lib.keyframes.task_types import KEYFRAME_SHEET_TASK_TYPE
 from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE
 from lib.project.project_migration_guard import assert_project_migration_ok
 
@@ -340,7 +341,7 @@ async def _derive_execution_model_for_enqueue(
 #: 必然走 i2i 且入队即知的图片任务类型（见 ``docs/adr/0001`` 的唯一例外）：图片编辑以当前图
 #: 为唯一输入，衍生资产图以本体资产图为唯一输入。入队派生与 worker 的限流路由据此按 i2i 槽
 #: 精确解析，其余图片任务取 t2i 作代表性 provider。
-I2I_ONLY_TASK_TYPES: frozenset[str] = frozenset({"image_edit", DERIVATIVE_TASK_TYPE})
+I2I_ONLY_TASK_TYPES: frozenset[str] = frozenset({"image_edit", DERIVATIVE_TASK_TYPE, KEYFRAME_SHEET_TASK_TYPE})
 
 ACTIVE_TASK_STATUSES = ("queued", "running")
 TASK_WORKER_LEASE_TTL_SEC = 10.0

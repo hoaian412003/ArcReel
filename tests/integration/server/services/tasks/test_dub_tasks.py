@@ -43,10 +43,10 @@ def test_voice_resolution_prefers_the_neutral_default_pair_when_the_catalog_has_
         VoiceOption(id="Adam bựa", label="Adam bựa", gender="male"),
         VoiceOption(id="Hải Đăng", label="Hải Đăng", gender="male"),
         VoiceOption(id="Trúc Ly", label="Trúc Ly", gender="female"),
-        VoiceOption(id="Mai Anh", label="Mai Anh", gender="female"),
+        VoiceOption(id="Ngọc Trân", label="Ngọc Trân", gender="female"),
     )
     assert resolve_dub_voice({}, "male", catalog, "narrator") == "Hải Đăng"
-    assert resolve_dub_voice({}, "female", catalog, "narrator") == "Mai Anh"
+    assert resolve_dub_voice({}, "female", catalog, "narrator") == "Ngọc Trân"
 
 
 def test_audio_is_current_only_for_same_text_and_voice():

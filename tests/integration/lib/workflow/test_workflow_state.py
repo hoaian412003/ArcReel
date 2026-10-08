@@ -21,6 +21,7 @@ from lib.episode.episode_ledger import (
     discover_sources,
     register_orphan_episode_entries,
 )
+from lib.episode.episode_upload import upload_episode_source
 from lib.infra.json_io import atomic_write_json
 from lib.project.asset_inventory import complete_asset_inventory
 from lib.project.project_manager import ProjectManager
@@ -276,6 +277,34 @@ def test_narration_empty_inventory_completes_and_advances_to_episode_plan(tmp_pa
         "product": {"current_ids": [], "missing_ids": [], "stale_ids": []},
     }
     assert status.next_action.type == "plan_episodes"
+
+
+def test_drama_without_an_uploaded_episode_asks_for_episode_source_instead_of_planning(tmp_path: Path) -> None:
+    pm, project_path = _make_project(tmp_path, "drama")
+    _write_source_and_complete(pm, project_path)
+
+    status = WorkflowStateService(pm).get_status("demo")
+
+    assert status.state == "PROJECT_INPUT"
+    assert status.next_action.type == "collect_project_input"
+
+
+def test_drama_uploaded_episode_goes_to_asset_analysis_then_straight_to_script_planning(tmp_path: Path) -> None:
+    pm, project_path = _make_project(tmp_path, "drama")
+    upload_episode_source(pm, "demo", 1, "李恒在山村得到古玉。")
+
+    before = WorkflowStateService(pm).get_status("demo")
+    scope = SourceScope(kind="all")
+    revision = compute_source_revision(project_path, pm.load_project("demo"), scope).revision
+    assert revision is not None
+    complete_asset_inventory(pm, "demo", scope, revision)
+    after = WorkflowStateService(pm).get_status("demo")
+
+    assert (before.state, before.next_action.type) == ("ASSET_INVENTORY", "analyze_assets")
+    assert after.state != "EPISODE_PLAN"
+    assert after.next_action.type not in {"plan_episodes", "reset_episode_planning"}
+    assert after.target is not None
+    assert after.target.episode == 1
 
 
 def test_drama_target_comes_from_ledger_not_derived_filenames(tmp_path: Path) -> None:

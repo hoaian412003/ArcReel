@@ -38,14 +38,15 @@ TemplateAxis = Literal[
 #: 模版所属的制作步骤；设置页按取值显示步骤名，未列出的取值在加载期 fail loud。
 TemplateStage = Literal[
     "source_overview",
+    "asset_analysis",
     "episode_plan",
-    "screenplay",
     "script_plan",
     "direction",
     "prompt_authoring",
     "asset_sheet",
     "storyboard_image",
     "grid",
+    "keyframe_sheet",
     "storyboard_video",
     "reference_video",
     "style_analysis",
@@ -64,8 +65,9 @@ class AgentToolTrigger(_Trigger):
     kind: Literal["agent_tool"]
     name: Literal[
         "plan_episodes",
-        "write_screenplay",
         "generate_script_plan",
+        "get_script_plan_brief",
+        "get_director_brief",
         "generate_director_plan",
         "generate_episode_script",
     ]
@@ -75,14 +77,14 @@ class UserActionTrigger(_Trigger):
     """用户在界面上的一次操作直接触发渲染；``name`` 是操作名，``agent_session`` 指发起或恢复 Agent 会话。"""
 
     kind: Literal["user_action"]
-    name: Literal["source_overview", "style_analysis", "style_selection", "agent_session"]
+    name: Literal["source_overview", "asset_analysis", "style_analysis", "style_selection", "agent_session"]
 
 
 class GenerationTaskTrigger(_Trigger):
     """生成任务执行时渲染；``name`` 是任务类型，``asset`` 合指角色、场景、道具、商品与角色衍生五种资产图任务。"""
 
     kind: Literal["generation_task"]
-    name: Literal["asset", "storyboard", "video", "reference_video", "grid"]
+    name: Literal["asset", "storyboard", "video", "reference_video", "grid", "keyframe_sheet"]
 
 
 #: 模版的触发方，三类各带一个具体名，取值封闭。

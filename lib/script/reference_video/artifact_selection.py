@@ -14,7 +14,11 @@ from lib.artifacts.artifact_activation import (
     snapshot_usable_artifact_input_claim,
 )
 from lib.artifacts.artifact_manifest import ArtifactKey
-from lib.script.reference_video.request_projection import FilesystemReferenceAssets, ResolvedReferenceAsset
+from lib.script.reference_video.request_projection import (
+    KEYFRAME_KIND,
+    FilesystemReferenceAssets,
+    ResolvedReferenceAsset,
+)
 
 
 class CurrentReferenceAssets:
@@ -32,7 +36,7 @@ class CurrentReferenceAssets:
         self._resolver: ArtifactCurrencyResolver = active_artifact_currency_resolver(project_path, project)
 
     def _claim_for(self, asset: ResolvedReferenceAsset) -> ArtifactInputClaim | None:
-        if asset.kind == "original":
+        if asset.kind in ("original", KEYFRAME_KIND):
             return None
         try:
             artifact_path = asset.path.relative_to(self._project_path).as_posix()

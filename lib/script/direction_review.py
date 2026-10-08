@@ -9,7 +9,7 @@
 条目已全部编写的存量集不走这一步（``not_applicable``），不被新步骤阻塞。广告不适用。
 
 导演说明的存放：分镜路线写在条目的 ``direction`` 对象里；参考生视频沿用单元上扁平的导演字段
-（``brief`` / ``shots`` / ``performance`` …），与解析预览里的「导演指南」编辑同一份数据。
+（自由文本 ``direction``，或存量的 ``brief`` / ``shots`` / ``performance`` …），与解析预览里的「导演指南」编辑同一份数据。
 """
 
 from __future__ import annotations
@@ -63,12 +63,15 @@ def entry_kind(project: Mapping[str, Any]) -> str | None:
 def entry_direction(item: Mapping[str, Any], kind: str) -> dict[str, Any] | None:
     """条目的导演说明；没有时 ``None``。
 
-    参考生视频单元把扁平导演字段收成一个对象：写了 ``brief`` 且有镜头表（``shots``，或存量的 ``beats``）
-    才算导演过。
+    参考生视频单元把扁平导演字段收成一个对象：写了自由文本 ``direction``，或写了 ``brief`` 且有镜头表
+    （``shots``，或存量的 ``beats``）才算导演过；有 ``direction`` 文本时它就是全部导演说明。
     """
     if kind != REFERENCE_KIND:
         direction = item.get("direction")
         return dict(direction) if isinstance(direction, Mapping) else None
+    text = item.get("direction")
+    if isinstance(text, str) and text.strip():
+        return {"direction": text}
     brief = item.get("brief")
     if not (isinstance(brief, str) and brief.strip()) or not (item.get("shots") or item.get("beats")):
         return None

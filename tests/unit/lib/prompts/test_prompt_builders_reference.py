@@ -8,7 +8,6 @@ from lib.prompts.prompt_builders_reference import (
     build_reference_video_prompt,
     render_reference_units_for_prompt_authoring,
 )
-from lib.script.script_models import REFERENCE_UNIT_TYPE_MEANINGS
 
 _SCENE_REFERENCE_RULE = "同一地点的连续单元**逐条重复引用**同一个场景资产，不能只在第一个单元写一次。"
 
@@ -141,22 +140,6 @@ def test_build_reference_units_split_prompt_leaves_direction_to_the_director_ste
     prompt = _split_prompt()
     assert "# 导演规划" not in prompt
     assert "导演步骤" in prompt
-
-
-def test_build_reference_director_prompt_lists_every_unit_type_with_its_meaning():
-    """单元类型取自代码里的单一枚举：导演提示词逐个列出取值与含义，与 schema 不会各说各话。"""
-    from lib.prompts.prompt_builders_reference import build_reference_director_prompt
-
-    prompt = build_reference_director_prompt(
-        project_overview={},
-        characters={},
-        scenes={},
-        props={},
-        units=[{"unit_id": "E1U01", "duration_seconds": 8, "text": "@[阿离] 推门。"}],
-        episode=1,
-    )
-    for value, meaning in REFERENCE_UNIT_TYPE_MEANINGS.items():
-        assert f"- `{value}`：{meaning}" in prompt
 
 
 def test_build_reference_units_split_prompt_speech_rate_override():

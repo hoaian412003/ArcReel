@@ -9,7 +9,10 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, update
 
 from lib.db.base import DEFAULT_USER_ID, dt_to_iso, utc_now
+from lib.db.models.agent_turn import AgentTurn
 from lib.db.models.session import AgentSession
+from lib.db.models.session_event import AgentSessionEventLogEntry
+from lib.db.models.session_message_link import AgentSessionUserMessageLink
 from lib.db.repositories.base import BaseRepository, rowcount
 
 
@@ -106,6 +109,59 @@ class SessionRepository(BaseRepository):
 
         result = await self.session.execute(stmt)
         return [_row_to_dict(row) for row in result.scalars().all()]
+
+    async def list_for_project(
+        self,
+        project_name: str,
+        *,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> list[dict[str, Any]]:
+        """List every session owned by a project, including superseded branches."""
+        result = await self.session.execute(
+            select(AgentSession)
+            .where(AgentSession.project_name == project_name, AgentSession.user_id == user_id)
+            .order_by(AgentSession.updated_at.desc())
+        )
+        return [_row_to_dict(row) for row in result.scalars().all()]
+
+    async def delete_for_project(
+        self,
+        project_name: str,
+        *,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> list[dict[str, Any]]:
+        """Delete a project's complete ArcReel session history in one transaction."""
+        rows = await self.list_for_project(project_name, user_id=user_id)
+        session_ids = [row["id"] for row in rows]
+        if not session_ids:
+            return []
+
+        await self.session.execute(
+            sa_delete(AgentSessionEventLogEntry).where(
+                AgentSessionEventLogEntry.session_id.in_(session_ids),
+                AgentSessionEventLogEntry.user_id == user_id,
+            )
+        )
+        await self.session.execute(
+            sa_delete(AgentSessionUserMessageLink).where(
+                AgentSessionUserMessageLink.session_id.in_(session_ids),
+                AgentSessionUserMessageLink.user_id == user_id,
+            )
+        )
+        await self.session.execute(
+            sa_delete(AgentTurn).where(
+                AgentTurn.session_id.in_(session_ids),
+                AgentTurn.user_id == user_id,
+            )
+        )
+        await self.session.execute(
+            sa_delete(AgentSession).where(
+                AgentSession.id.in_(session_ids),
+                AgentSession.user_id == user_id,
+            )
+        )
+        await self.session.commit()
+        return rows
 
     async def update_status(self, session_id: str, status: str) -> bool:
         now = utc_now()

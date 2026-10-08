@@ -23,6 +23,8 @@ class AgentTurn(TimestampMixin, UserOwnedMixin, Base):
     )
     client_key: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="accepted")
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 

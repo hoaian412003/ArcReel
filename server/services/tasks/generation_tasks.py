@@ -67,6 +67,7 @@ from lib.infra.async_thread import EventLoopBridge, run_noninterruptible_sync
 from lib.infra.path_safety import safe_join, try_safe_join
 from lib.infra.schema_guards import is_int
 from lib.infra.thumbnail import extract_video_thumbnail
+from lib.keyframes.task_types import KEYFRAME_SHEET_TASK_TYPE
 from lib.project.asset_derivatives import DERIVATIVE_ASSET_TYPE, DERIVATIVE_TASK_TYPE
 from lib.project.asset_types import (
     ASSET_SPECS,
@@ -127,6 +128,7 @@ from server.services.currency.video_artifact_currency import (
     complete_video_artifact_commit,
     freeze_video_speech_facts,
 )
+from server.services.tasks.canvas_tasks import CANVAS_IMAGE_TASK_TYPE, execute_canvas_image_task
 from server.services.tasks.derivative_sheet_tasks import execute_character_derivative_task
 from server.services.tasks.dub_tasks import (
     DUB_AUTO_TASK_TYPE,
@@ -151,6 +153,7 @@ from server.services.tasks.generation_context import (
     resolve_generation_context,
 )
 from server.services.tasks.image_edit_tasks import execute_image_edit_task
+from server.services.tasks.keyframe_sheet_tasks import execute_keyframe_sheet_task
 from server.services.tasks.narration_delivery_tasks import (
     CurrentTtsSettingsResolver,
     ResolvedTtsSettingsResolver,
@@ -1905,6 +1908,8 @@ _TASK_EXECUTORS = {
     "reference_video": execute_reference_video_task,
     "image_edit": execute_image_edit_task,
     DERIVATIVE_TASK_TYPE: execute_character_derivative_task,
+    KEYFRAME_SHEET_TASK_TYPE: execute_keyframe_sheet_task,
+    CANVAS_IMAGE_TASK_TYPE: execute_canvas_image_task,
 }
 
 

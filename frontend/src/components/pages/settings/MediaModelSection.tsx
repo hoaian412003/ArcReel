@@ -277,6 +277,7 @@ export function MediaModelSection() {
     simple: draft.text_backend_simple ?? settings.text_backend_simple ?? "",
     complex: draft.text_backend_complex ?? settings.text_backend_complex ?? "",
   };
+  const currentReviewModel = draft.text_backend_review ?? settings.text_backend_review ?? "";
 
   const candidatesSubFieldsError = candidatesError
     ? { onRetry: () => void reloadCandidates(), retrying: candidatesRetrying }
@@ -448,6 +449,7 @@ export function MediaModelSection() {
       {/* Text */}
       <SectionCard kicker="Text Channel" title={t("text_models")} description={t("text_models_desc")}>
         {textBackends.length > 0 ? (
+          <>
           <TextTierFields
             value={textTierValue}
             onChange={(next) =>
@@ -469,6 +471,24 @@ export function MediaModelSection() {
               complex: currentTextDefault || undefined,
             }}
           />
+          <div className="mt-4 border-t border-hairline-soft pt-4">
+            <label className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4">
+              {t("review_model_label")}
+            </label>
+            <ProviderModelSelect
+              value={currentReviewModel}
+              options={textBackends}
+              providerNames={allProviderNames}
+              modelNames={allModelNames}
+              onChange={(v) => setDraft((prev) => ({ ...prev, text_backend_review: v }))}
+              allowDefault
+              defaultLabel={t("review_model_follow_simple")}
+              defaultHint={t("auto")}
+              aria-label={t("review_model_label")}
+            />
+            <p className="mt-1.5 text-[11px] leading-relaxed text-text-4">{t("review_model_hint")}</p>
+          </div>
+          </>
         ) : (
           emptyHint(t("no_text_providers_hint"))
         )}

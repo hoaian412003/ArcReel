@@ -127,6 +127,21 @@ def test_timeline_uses_real_audio_duration_and_honours_start_override(tmp_path: 
     assert second["start_seconds"] == 5.0
 
 
+def test_timeline_places_lines_at_the_directors_speech_cues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    unit = _unit(
+        speech_cues=[
+            {"index": 0, "start_seconds": 1.0, "end_seconds": 4.0},
+            {"index": 1, "start_seconds": 5.0, "end_seconds": 8.0, "gender": "female"},
+        ]
+    )
+    client, _ = _client(tmp_path, monkeypatch, units=[unit])
+
+    first, second = client.get("/api/v1/projects/demo/dub/episodes/1/units/E1U1").json()["lines"]
+
+    assert (first["start_seconds"], first["start_source"]) == (1.0, "planned")
+    assert (second["start_seconds"], second["start_source"]) == (5.0, "planned")
+
+
 def test_audio_is_dropped_when_the_line_text_changed_since_synthesis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     unit = _unit()
     unit["dub_lines"][0].update(audio_path="audio/x.wav", audio_duration_seconds=2.0, audio_text="Câu cũ")

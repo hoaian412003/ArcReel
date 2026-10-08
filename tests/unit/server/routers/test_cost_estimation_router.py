@@ -55,6 +55,7 @@ class TestCostEstimationRouter:
             patch.object(cost_estimation, "CostEstimationService") as MockService,
         ):
             MockService.return_value.compute = AsyncMock(return_value=fake_result)
+            MockService.return_value.compute_text_steps = AsyncMock(return_value=[])
 
             with TestClient(_make_app()) as client:
                 resp = client.get("/api/v1/projects/demo/cost-estimate")
@@ -78,6 +79,7 @@ class TestCostEstimationRouter:
             patch.object(cost_estimation, "CostEstimationService") as mock_service,
         ):
             mock_service.return_value.compute = AsyncMock(return_value={})
+            mock_service.return_value.compute_text_steps = AsyncMock(return_value=[])
             with TestClient(_make_app()) as client:
                 response = client.get(
                     "/api/v1/projects/demo/cost-estimate",
@@ -101,6 +103,7 @@ class TestCostEstimationRouter:
             patch.object(cost_estimation, "CostEstimationService") as mock_service,
         ):
             mock_service.return_value.compute = AsyncMock(return_value={})
+            mock_service.return_value.compute_text_steps = AsyncMock(return_value=[])
             with TestClient(_make_app()) as client:
                 response = client.get(
                     "/api/v1/projects/demo/cost-estimate",

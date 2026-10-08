@@ -10,6 +10,8 @@ import {
   WORKSPACE_ROUTE_PROPS,
   WORKSPACE_ROUTE_PRODUCTS,
   WORKSPACE_ROUTE_FLOW,
+  WORKSPACE_ROUTE_REVIEWS,
+  WORKSPACE_ROUTE_NODE_CANVAS,
   WORKSPACE_ROUTE_EPISODES,
   WORKSPACE_ROUTE_EPISODE_EDIT,
 } from "@/app-routes";
@@ -23,7 +25,8 @@ import { useConfigStatusStore } from "@/stores/config-status-store";
 import { useActiveResourceIds } from "@/stores/tasks-store";
 import { TimelineCanvas } from "./timeline/TimelineCanvas";
 import { OverviewCanvas } from "./OverviewCanvas";
-import { FlowBoard } from "./flow/FlowBoard";
+import { ReviewInbox } from "./reviews/ReviewInbox";
+import { NodeCanvasPage } from "./node-canvas/NodeCanvasPage";
 import { SourceFileViewer } from "./SourceFileViewer";
 import { SourceFilesPage } from "./SourceFilesPage";
 import { CharactersPage } from "./lorebook/CharactersPage";
@@ -34,7 +37,6 @@ import { ReferenceVideoCanvas } from "./reference/ReferenceVideoCanvas";
 import { GridImageToVideoCanvas } from "./grid/GridImageToVideoCanvas";
 import { EpisodeSourceReview } from "./EpisodeSourceReview";
 import { EditTimelineCanvas } from "./edit-timeline/EditTimelineCanvas";
-import { WorkflowPanel } from "@/components/workflow/WorkflowPanel";
 import { API, NarratedVideoDurationError } from "@/api";
 import {
   enqueueCharacter,
@@ -346,55 +348,6 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, currentScripts, ensureAudioProviderConfigured]);
 
-  // ---- Workflow panel callbacks ----
-  // 面板只陈述状态，动作交回既有入口执行：跳转复用 Agent 定位用的同一条 scrollTarget 缝，
-  // 重生复用本组件已有的入队回调。面板不自建播放器，也不自建入队路径。
-  const handleViewWorkflowUnit = useCallback((unitId: string) => {
-    useAppStore.getState().triggerScrollTo({
-      type: normalizeRoute(currentProjectData?.generation_mode) === "reference_video"
-        ? "reference_unit"
-        : "segment",
-      id: unitId,
-    });
-  }, [currentProjectData?.generation_mode]);
-
-  // 剧本文件由调用方按当前剧集给出：多集项目里 currentScripts 装着全部剧集，
-  // 取第一个键会把重生打到别集的剧本上，用户看到的是另一集被重做。
-  const handleWorkflowRegenerate = useCallback(async (
-    stepId: string,
-    unitIds: string[],
-    scriptFile: string,
-  ) => {
-    if (!currentProjectName || !currentScripts) return;
-    for (const unitId of unitIds) {
-      try {
-        if (stepId === "storyboard") {
-          await handleGenerateStoryboard(unitId, scriptFile);
-        } else if (stepId === "video") {
-          await handleGenerateVideo(unitId, scriptFile);
-        } else if (stepId === "narration_delivery") {
-          await handleGenerateNarration(unitId, scriptFile);
-        }
-      } catch (err) {
-        // 时长档位确认只在单元卡自己的确认弹窗里发生，面板不复刻这套流程——
-        // 把用户带到那张卡上完成确认，而不是甩出一句没有下文的裸错误。
-        if (err instanceof NarratedVideoDurationError) {
-          useAppStore.getState().pushToast(tRef.current("workflow_regenerate_needs_confirmation"), "error");
-          handleViewWorkflowUnit(unitId);
-          continue;
-        }
-        useAppStore.getState().pushToast(tRef.current("generate_video_failed", { message: errMsg(err) }), "error");
-      }
-    }
-  }, [
-    currentProjectName,
-    currentScripts,
-    handleGenerateStoryboard,
-    handleGenerateVideo,
-    handleGenerateNarration,
-    handleViewWorkflowUnit,
-  ]);
-
   // ---- Character CRUD callbacks ----
   const handleSaveCharacter = useCallback(async (
     name: string,
@@ -631,7 +584,15 @@ export function StudioCanvasRouter() {
       </Route>
 
       <Route path={`/${WORKSPACE_ROUTE_FLOW}`}>
-        {demoMode ? <Redirect to="/" /> : <FlowBoard key={currentProjectName} projectName={currentProjectName} />}
+        <Redirect to={`/${WORKSPACE_ROUTE_REVIEWS}`} />
+      </Route>
+
+      <Route path={`/${WORKSPACE_ROUTE_NODE_CANVAS}`}>
+        {demoMode ? <Redirect to="/" /> : <NodeCanvasPage key={currentProjectName} projectName={currentProjectName} />}
+      </Route>
+
+      <Route path={`/${WORKSPACE_ROUTE_REVIEWS}`}>
+        {demoMode ? <Redirect to="/" /> : <ReviewInbox key={currentProjectName} projectName={currentProjectName} />}
       </Route>
 
       <Route path={`/${WORKSPACE_ROUTE_LOREBOOK}`}>
@@ -763,23 +724,6 @@ export function StudioCanvasRouter() {
 
           return (
             <div className="flex h-full flex-col">
-              {/* 演示态没有真实项目事实可投影，面板不挂载。 */}
-              {!demoMode && currentProjectName && (
-                <WorkflowPanel
-                  projectName={currentProjectName}
-                  episode={epNum}
-                  onViewUnit={handleViewWorkflowUnit}
-                  // 参考生视频的视频入队由 ReferenceVideoCanvas 自己的整批准入判定路径承担，
-                  // 本组件的逐单元回调对 video_units 剧本解不出提示词、按下去毫无反应。
-                  // 该生成模式只给「查看」跳转，重生入口在跳过去的那张单元卡上。
-                  onRegenerate={
-                    route === "reference_video" || !scriptFile
-                      ? undefined
-                      : (stepId, unitIds) =>
-                          void handleWorkflowRegenerate(stepId, unitIds, scriptFile)
-                  }
-                />
-              )}
               {!demoMode && Boolean(script) && (
                 <div className="flex justify-end px-6 pt-2">
                   <Link

@@ -155,6 +155,7 @@ class TestGetSystemConfig:
             "agent_max_concurrent_sessions",
             "text_backend_simple",
             "text_backend_complex",
+            "text_backend_review",
             "default_audio_backend",
             "narration_voice",
             "h3_guide_preset",
@@ -605,12 +606,14 @@ class TestPatchSystemConfig:
                 json={
                     "text_backend_simple": "gemini-aistudio/gemini-3-flash-preview",
                     "text_backend_complex": "gemini-aistudio/gemini-3.1-pro-preview",
+                    "text_backend_review": "gemini-aistudio/gemini-3-flash-preview",
                 },
             )
         assert res.status_code == 200
         settings = res.json()["settings"]
         assert settings["text_backend_simple"] == "gemini-aistudio/gemini-3-flash-preview"
         assert settings["text_backend_complex"] == "gemini-aistudio/gemini-3.1-pro-preview"
+        assert settings["text_backend_review"] == "gemini-aistudio/gemini-3-flash-preview"
 
     def test_patch_clears_text_tier_backend_with_empty_string(self):
         mock_svc = _make_mock_svc(settings={"text_backend_simple": "gemini-aistudio/gemini-3-flash-preview"})

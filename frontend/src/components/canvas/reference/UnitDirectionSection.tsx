@@ -98,7 +98,7 @@ function toPatch(draft: DirectionDraft): UnitDirectionPatch {
  * H3 提示词——要让改动进入画面，保存后再「重新生成 H3 提示词」。导演步骤的单元按镜头表编辑，存量单元
  * 只有动作节点时仍按节点编辑。
  */
-export function UnitDirectionSection({ projectName, episode, unit, locked = false }: UnitDirectionSectionProps) {
+function StructuredDirectionSection({ projectName, episode, unit, locked = false }: UnitDirectionSectionProps) {
   const { t } = useTranslation("dashboard");
   const patchUnit = useReferenceVideoStore((s) => s.patchUnit);
   const pushToast = useAppStore((s) => s.pushToast);
@@ -527,4 +527,76 @@ export function UnitDirectionSection({ projectName, episode, unit, locked = fals
       <p className="text-[11px] text-[var(--color-text-4)]">{t("unit_direction_apply_hint")}</p>
     </section>
   );
+}
+
+/** 导演写的是自由文本说明时：一块文字，整段编辑。 */
+function TextDirectionSection({ projectName, episode, unit, locked = false }: UnitDirectionSectionProps) {
+  const { t } = useTranslation("dashboard");
+  const patchUnit = useReferenceVideoStore((s) => s.patchUnit);
+  const pushToast = useAppStore((s) => s.pushToast);
+  const saved = unit.direction ?? "";
+  const [draft, setDraft] = useState(saved);
+  const [baseline, setBaseline] = useState(saved);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (baseline !== saved) {
+    const wasClean = draft === baseline;
+    setBaseline(saved);
+    if (wasClean) setDraft(saved);
+  }
+
+  const dirty = draft !== baseline;
+  const disabled = locked || saving;
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await patchUnit(projectName, episode, unit.unit_id, { direction: draft });
+      pushToast(t("unit_direction_saved"), "success");
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section
+      aria-label={t("unit_direction_title")}
+      className="space-y-3 border-b border-[var(--color-hairline-soft)] px-3.5 py-3"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-text-3)]">Director</h3>
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={!dirty || disabled}
+          className="focus-ring inline-flex items-center gap-1.5 rounded-md border border-[var(--color-hairline)] px-2 py-1 text-[11px] text-[var(--color-text-2)] enabled:hover:text-[var(--color-text)] disabled:opacity-40"
+        >
+          {saving ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : <Save className="h-3 w-3" aria-hidden="true" />}
+          {t("unit_direction_save")}
+        </button>
+      </div>
+      <textarea
+        aria-label={t("unit_direction_title")}
+        value={draft}
+        disabled={disabled}
+        rows={12}
+        onChange={(e) => setDraft(e.target.value)}
+        className={`${FIELD_CLASS} leading-relaxed`}
+      />
+      {error && (
+        <p role="alert" className="text-[11.5px] text-red-400">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** 单元的导演说明：导演写了自由文本时按整段文字编辑，否则按存量的分项字段编辑。 */
+export function UnitDirectionSection(props: UnitDirectionSectionProps) {
+  return props.unit.direction?.trim() ? <TextDirectionSection {...props} /> : <StructuredDirectionSection {...props} />;
 }

@@ -63,49 +63,22 @@ description: 将小说转换为短视频的端到端工作流编排器。当用�
 
 **每个子智能体返回后**，主 Agent 展示一段简短摘要，随即刷新计划并按新的 `next_action` 继续，**不使用 AskUserQuestion 停下来等用户确认**。仅在计划给出需要用户输入的动作（如 `collect_project_input`、`review_screenplay`、`confirm_script_plan`、`review_direction`、`choose_narration_delivery`、`confirm_request_duration`、`configure_provider`）或遇到 `blockers` 时才停。
 
----
-
-## `analyze_assets`：全局角色/场景/道具提取
-
-**触发**：`next_action.type == "analyze_assets"`。空 bucket 是合法分析结果，不得凭空 bucket 重跑。
-
-**dispatch `analyze-assets` 子智能体**：
-
-```text
-项目名称：{project_name}
-分析范围：{next_action.args.scope 对应的权威范围；workflow 默认整部小说}
-分析 scope：{next_action.args.scope}
-expected source revision：{next_action.args.expected_source_revision}
-已有角色：{已有角色名列表，或"无"}
-已有场景：{已有场景名列表，或"无"}
-已有道具：{已有道具名列表，或"无"}
-
-请分析小说原文，提取角色 / 场景 / 道具信息，写入 project.json，返回摘要。
-```
+计划刷新后若进入 `review_screenplay`、`confirm_script_plan` 或 `review_direction`，必须先调用 `review-assistant` skill。该 skill 只调用一次 `create_review_summary`，使用 Review Model 生成准确的越南语摘要并交给用户阅读；不得另建子智能体、不得替用户作决定。同一内容的摘要由工具按 fingerprint 复用。
 
 ---
 
-## `plan_episodes` / `reset_episode_planning`：分集规划
+## 分集源文与资产分析：由用户在界面上传、服务端分析
 
-**恢复触发**：`next_action.type` 为 `"reset_episode_planning"` 时，先按 `next_action.args` 调
-`mcp__arcreel__reset_episode_planning`。工具若返回已消费集确认要求，展示影响范围并取得用户明确确认，
-再追加 `confirm_consumed: true` 重试；重置成功后刷新计划，按新的权威动作继续。
+剧情演绎（drama）项目**不做分集规划**：每一集的原文由用户在 Web 的分集列表里逐集上传（`source/episode_N.txt`），
+上传即登记账本条目，服务端随即入队资产分析任务（`text_asset_analysis`），按集增量提取角色 / 场景 / 道具并写入
+`project.json`。**不要**调 `plan_episodes`（工具会拒绝 drama 项目），**不要**自行切分、合并、改名或重排源文，
+**不要**为资产分析 dispatch 子智能体。
 
-**触发**：`next_action.type == "plan_episodes"`
-
-**用户已自行分集时不走本节**：用户把拆好的 `source/episode_N.txt` 直接放进 `source/`（没有整本原文）时，这些文件本身就是源文，账本会按文件自动登记（条目无原文范围记录），计划不会给出 `plan_episodes`，而是逐集直接进入脚本规划。**不要**把它们合并成全本、**不要**调 `plan_episodes` 重切、**不要**改名或重排；`plan_episodes` 对这类账本一律拒绝并指路全量重置，而全量重置会把这些集文件改名留底——只有用户明确要求重新切分时才走那条路，且须事前告知这一后果并取得确认。
-
-分集规划由服务端工具完成：工具内部从 `planning_cursor` 起读一个源文窗口，调用项目配置的文本模型一次规划出窗口内所有剧情弧完整的集（标题/钩子/原文范围 + 分集大纲：故事节点与下集预告），在同一把项目锁内写账本、派生 `source/episode_{N}.txt` 并清理残留派生文件。**主 Agent 只调一次工具、只收摘要**——不读小说原文、不自行选切分点：
-
-1. 规划前快速核对 `project.json`：
-   - `source_language` 是否与源文实际语言一致。优先级：**用户显式配置 > 自动推断**（正常路径由 overview 生成自动落盘）；发现不一致时**提醒用户（WARN）、说明后果并建议修正**（错误配置会使规划的体量度量与语言前提失真），用户未修正时按显式配置继续，不阻塞流程。字段缺失或经用户确认有误时，走 `mcp__arcreel__patch_project({"settings": {"source_language": "en"|"vi"|"zh"}})` 写入
-   - `episode_target_units`（每集目标体量，按 `source_language` 解读为阅读单位）：已设置则直接沿用；缺失且用户在对话中明确给过字数 → 经 `mcp__arcreel__patch_project({"settings": {"episode_target_units": N}})` 写入；缺失但项目设了 `episode_target_duration` 时，工具会按该时长经口播语速折算出每集体量，**不必再问用户字数**；两者都没有也可直接规划（工具会按短视频节奏自行把握体量），无需强制询问
-2. 调用 `mcp__arcreel__plan_episodes({})`。窗口字数与每批集数上限为工具内部默认，项目设置 `planning_window_chars` / `planning_max_episodes` 可覆盖（经 patch_project settings 写入）。**用户在规划前给出分集附加指令时**（如"严格按章节切分，一章一集""每集在某处收尾"），把附加指令原文经 `instructions` 传入：`mcp__arcreel__plan_episodes({"instructions": "附加指令原文"})`；附加指令原样注入规划 prompt 的「附加指令」分节，遵循强度由正文表达——用户明确要求硬性遵循时，把强度措辞一并写进正文（如「必须全部落实：一章一集」）。长篇会分多批规划（每批一次工具调用），该附加指令**不持久化**，须在规划完成前**每一批调用都重复带上同一 `instructions`**
-3. **批级摘要**：把工具返回的账本摘要简要展示给用户，不等待用户审阅，直接继续
-4. 用户提出意见（一句话可同时包含任意多处意见，含全局偏好）→ 走「重置 + 重新规划」：先调用 `mcp__arcreel__reset_episode_planning({"from_episode": N})`，`from_episode` 取意见中最早受影响的集，保留其前的集不受影响
-5. **已消费集警告确认**：重置会波及已消费集（已有 script_plan/剧本/媒体产物）时，工具会返回受影响集清单而不执行——把影响范围告知用户、获得明确确认后，追加 `"confirm_consumed": true` 重新调用；确认执行后这些集的账本条目被清除，产物本身不删除
-6. 重置完成后，全局性意见（如每集体量）先经 `mcp__arcreel__patch_project({"settings": {"episode_target_units": N}})` 显式写入，再带调整后的 `instructions` 重新调用 `mcp__arcreel__plan_episodes` 从 `from_episode` 起分批规划、结果再次展示审阅；若新提交的集号与原消费范围重叠，工具会自动标 stale（产物不删除，需重做下游产物），无需额外确认。**规划完毕后返回会附全局核对材料**（累计集数、体量最小几集、体量中位数、目标体量——目标体量由 `episode_target_duration` 折算而来时会标明来源，核对时按软目标看待）：若用户给过总集数、按章节对齐等结构性偏好，须对照核对，有偏差须向用户明确说明（可引导用户重新走「重置 + 重新规划」修正）
-7. 刷新计划继续，不设批级审阅停顿。
+- `next_action.type == "collect_project_input"` 且原因是尚未上传分集源文：告诉用户去分集列表上传该集原文，
+  上传后刷新计划；用户在对话里直接给出某一集的正文时，也请他在界面上传——Agent 不代为落盘。
+- `next_action.type == "analyze_assets"`：资产分析由服务端完成，通常在上传后自动入队。简短告知用户正在分析、稍后刷新计划；
+  若长时间不变，提示用户在项目概览的「制作流程」点「分析资产」重试（执行器离线、上次失败或源文有变动后都用它），不要自行读源文写资产。
+- 空 bucket 是合法分析结果，不得凭空 bucket 重跑。已登记的资产不会被分析覆盖；要修订描述走 `patch_project`（意图驱动）。
 
 ---
 
@@ -115,7 +88,7 @@ expected source revision：{next_action.args.expected_source_revision}
 
 **触发**：
 
-- `next_action.type == "write_screenplay"` → dispatch `write-screenplay` 子智能体：传入项目名称、集数；用户给本次编剧的附加要求原文透传。子智能体返回后刷新计划，通常转入 `review_screenplay`。
+- `next_action.type == "write_screenplay"` → dispatch `write-screenplay` 子智能体：传入项目名称、集数；用户给本次编剧的附加要求原文透传。**编剧由子智能体亲自完成**（读源文与项目事实、做改编取舍、写成节拍、经 `submit_screenplay` 提交并按质量检查修改），主 Agent 不替它写，也没有「服务端编剧」工具可调。子智能体返回后刷新计划，通常转入 `review_screenplay`。
 - `next_action.type == "review_screenplay"` → 剧本待用户审阅（需要用户决定，对话中进行；Web 项目页的 Flow 标签页是等价的审阅路径，用户在那里决定后刷新计划即可，不要重复询问）：
   1. 调用 `mcp__arcreel__get_screenplay({"episode": N})`，把 `markdown`（逐场的标题、剧情、预计时长与正文，末尾为本集预计总时长）原样展示给用户，不改写、不补充你自己的评价。
   2. 用 AskUserQuestion 提供：**通过**（推荐）/ **要求修改**（用户说明意见，可点名场次）/ **整集重写**。
@@ -372,7 +345,7 @@ revision 重试。改完后按上面的请求选择语义点名重做这些 ID�
 工作流**不强制从头开始**。根据计划结果，自动从正确的动作开始：
 
 - "分析小说角色" → 只执行 `analyze_assets`
-- "创建第2集剧本" → 从 `plan_episodes` 开始（如果角色已有）
+- "创建第2集剧本" → 先确认第 2 集源文已由用户上传，再从 `write_screenplay` / 脚本规划开始（如果角色已有）
 - "继续" → 计划给出第一个未完成动作
 - 指定具体动作（如"生成分镜图"）→ 该动作只是用户意图，仍先查计划：与 `next_action.type` 一致才执行；
   不一致或有 blockers 时不入队，改为说明计划当前要求的动作与原因

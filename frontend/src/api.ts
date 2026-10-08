@@ -6,7 +6,11 @@
  */
 
 import type {
+  AssetAnalysisQueued,
+  NovelSplitOptions,
+  NovelSplitResult,
   CharacterDerivativeStatus,
+  EpisodeSourceUploadResult,
   ProjectData,
   ProjectSummary,
   ImportConflictPolicy,
@@ -111,8 +115,10 @@ import type {
 } from "@/types/presentation";
 import type { Asset, AssetType, AssetCreatePayload, AssetUpdatePayload } from "@/types/asset";
 import type { WorkflowPlan, WorkflowPlanRequest } from "@/types/workflow";
-import type { DirectionReview, DirectionReviewDecision, FlowBoard } from "@/types/flow";
+import type { CanvasEdge, CanvasGraph, CanvasNode, CanvasNodeData, CanvasNodeType, CanvasRunResult } from "@/types/canvas";
+import type { DirectionReview, DirectionReviewDecision, FlowBoard, ReviewTask, ReviewTaskKind, ReviewTasksResponse } from "@/types/flow";
 import type { Screenplay, ScreenplayOperation } from "@/types/screenplay";
+import type { KeyframeBoard, KeyframeSheetEnqueueResponse, KeyframeSheetRequest } from "@/types/keyframe";
 import type {
   QueueAuditFilters,
   QueueAuditList,
@@ -1322,6 +1328,74 @@ class API {
     };
   }
 
+  /**
+   * 上传（或替换）第 `episode` 集源文：`file` 与 `content`（粘贴文本）二选一。
+   * 成功即登记账本并入队资产分析；`analysis.status` 为 `worker_offline` 时上传已落盘，可稍后重试分析。
+   */
+  static async uploadEpisodeSource(
+    projectName: string,
+    episode: number,
+    input: { file?: File; content?: string; title?: string }
+  ): Promise<EpisodeSourceUploadResult> {
+    const formData = new FormData();
+    if (input.file) formData.append("file", input.file);
+    else formData.append("content", input.content ?? "");
+    if (input.title?.trim()) formData.append("title", input.title.trim());
+    const url = `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/source`;
+    const response = await fetch(`${API_BASE}${url}`, withAuth(url, { method: "PUT", body: formData }));
+    await throwIfNotOk(response, "上传失败");
+    return (await response.json()) as EpisodeSourceUploadResult;
+  }
+
+  private static novelSplitRequest(
+    projectName: string,
+    options: NovelSplitOptions,
+    preview: boolean
+  ): Promise<NovelSplitResult> {
+    return this.request(`/projects/${encodeURIComponent(projectName)}/episodes/split-novel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: options.source ?? null,
+        chapters_per_episode: options.chaptersPerEpisode,
+        start_episode: options.startEpisode ?? 1,
+        replace: options.replace ?? false,
+        preview,
+      }),
+    });
+  }
+
+  /** 预览按章节标题切分整本小说的结果（不写任何东西）。 */
+  static async previewNovelSplit(projectName: string, options: NovelSplitOptions): Promise<NovelSplitResult> {
+    return this.novelSplitRequest(projectName, options, true);
+  }
+
+  /** 按章节标题把整本小说切成分集并落盘，随后入队资产分析。 */
+  static async splitNovel(projectName: string, options: NovelSplitOptions): Promise<NovelSplitResult> {
+    return this.novelSplitRequest(projectName, options, false);
+  }
+
+  /**
+   * 删除一集：账本条目与集源文；该集的剧本、草稿与已登记产物经 `confirmProducts` 确认后一并删除且不可恢复。
+   */
+  static async deleteEpisode(
+    projectName: string,
+    episode: number,
+    options: { confirmProducts?: boolean } = {}
+  ): Promise<{ episode: number; removed_files: number; removed_artifacts: number; failed_paths: string[] }> {
+    const qs = options.confirmProducts ? "?confirm_products=true" : "";
+    return this.request(`/projects/${encodeURIComponent(projectName)}/episodes/${episode}${qs}`, {
+      method: "DELETE",
+    });
+  }
+
+  /** 重新入队资产分析（失败、执行器离线或源文有变动后的手动重试）。 */
+  static async analyzeAssets(projectName: string): Promise<AssetAnalysisQueued> {
+    return this.request(`/projects/${encodeURIComponent(projectName)}/assets/analyze`, {
+      method: "POST",
+    });
+  }
+
   /** 单文件 multipart 上传 POST，返回 JSON 响应体。 */
   private static async postFileUpload<T>(url: string, file: File): Promise<T> {
     const formData = new FormData();
@@ -1439,6 +1513,77 @@ class API {
     });
   }
 
+  // ==================== 节点画布 ====================
+
+  private static canvasBase(projectName: string): string {
+    return `/projects/${encodeURIComponent(projectName)}/canvas`;
+  }
+
+  static async getCanvas(projectName: string, options: { signal?: AbortSignal } = {}): Promise<CanvasGraph> {
+    return this.request(this.canvasBase(projectName), { signal: options.signal });
+  }
+
+  static async createCanvasNode(
+    projectName: string,
+    body: { type: CanvasNodeType; position: { x: number; y: number }; data?: CanvasNodeData },
+  ): Promise<{ node: CanvasNode; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/nodes`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  static async updateCanvasNode(
+    projectName: string,
+    nodeId: string,
+    body: { position?: { x: number; y: number }; data?: CanvasNodeData },
+  ): Promise<{ node: CanvasNode; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/nodes/${encodeURIComponent(nodeId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  static async deleteCanvasNode(projectName: string, nodeId: string): Promise<{ revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/nodes/${encodeURIComponent(nodeId)}`, { method: "DELETE" });
+  }
+
+  static async updateCanvasLayout(
+    projectName: string,
+    positions: Record<string, { x: number; y: number }>,
+  ): Promise<{ revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/layout`, {
+      method: "POST",
+      body: JSON.stringify({ positions }),
+    });
+  }
+
+  static async createCanvasEdge(
+    projectName: string,
+    body: { source: string; source_handle: string; target: string; target_handle: string },
+  ): Promise<{ edge: CanvasEdge; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/edges`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  static async setCanvasView(projectName: string, episodes: number[]): Promise<{ revision: number; episodes: number[] }> {
+    return this.request(`${this.canvasBase(projectName)}/view`, { method: "PUT", body: JSON.stringify({ episodes }) });
+  }
+
+  static async deleteCanvasEdge(projectName: string, edgeId: string): Promise<{ revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/edges/${encodeURIComponent(edgeId)}`, { method: "DELETE" });
+  }
+
+  /** 上传图片，直接成为画布上的图片节点。 */
+  static async uploadCanvasImage(
+    projectName: string,
+    file: File,
+    position: { x: number; y: number },
+  ): Promise<{ node: CanvasNode; revision: number }> {
+    return API.postFileUpload(`${this.canvasBase(projectName)}/images?x=${position.x}&y=${position.y}`, file);
+  }
+
+  /** 运行图片供应商节点：服务端挂出输出节点并入队，立即返回。 */
+  static async runCanvasNode(projectName: string, nodeId: string): Promise<CanvasRunResult> {
+    return this.request(`${this.canvasBase(projectName)}/nodes/${encodeURIComponent(nodeId)}/run`, { method: "POST" });
+  }
+
   // ==================== Flow 看板 ====================
 
   /** 各集所处阶段的看板快照：有序列 + 每集一张卡片。 */
@@ -1449,6 +1594,29 @@ class API {
     return this.request(`/projects/${encodeURIComponent(projectName)}/flow-board`, {
       signal: options.signal,
     });
+  }
+
+  /** Project-wide queue containing only work that currently needs a human decision. */
+  static async getReviewTasks(
+    projectName: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ReviewTasksResponse> {
+    return this.request(`/projects/${encodeURIComponent(projectName)}/review-tasks`, {
+      signal: options.signal,
+    });
+  }
+
+  /** Run the configured Review Model once; unchanged content reuses the cached summary. */
+  static async createReviewSummary(
+    projectName: string,
+    kind: ReviewTaskKind,
+    episode: number,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ReviewTask> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/review-tasks/${kind}/${episode}/summary`,
+      { method: "POST", signal: options.signal },
+    );
   }
 
   /** 读取该集分镜导演报告与审阅状态。 */
@@ -1472,6 +1640,79 @@ class API {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/direction-review/decision`,
       { method: "POST", body: JSON.stringify(decision) }
+    );
+  }
+
+  // ==================== 起始帧 ====================
+
+  /** 读取该集起始帧看板：联合图、格子（含是否过期）、单元与格子的对应。 */
+  static async getKeyframeBoard(
+    projectName: string,
+    episode: number,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<KeyframeBoard> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/keyframes`,
+      { signal: options.signal }
+    );
+  }
+
+  /** 读取一张联合图下次生成会发出的提示词与参考图，供生成前核对。 */
+  static async getKeyframeSheetRequest(
+    projectName: string,
+    episode: number,
+    sheetId: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<KeyframeSheetRequest> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/keyframes/sheets/${encodeURIComponent(sheetId)}/request`,
+      { signal: options.signal }
+    );
+  }
+
+  /** 把一张联合图的生成放进队列。入队类方法：组件经 actions/generation 调用，不直调。 */
+  static async generateKeyframeSheet(
+    projectName: string,
+    episode: number,
+    sheetId: string
+  ): Promise<KeyframeSheetEnqueueResponse> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/keyframes/sheets/${encodeURIComponent(sheetId)}/generate`,
+      { method: "POST" }
+    );
+  }
+
+  /** 审核一格：approved=true 通过，false 放回草稿。返回刷新后的看板。 */
+  static async reviewKeyframeCell(
+    projectName: string,
+    episode: number,
+    cellId: string,
+    approved: boolean
+  ): Promise<KeyframeBoard> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/keyframes/cells/${encodeURIComponent(cellId)}/review`,
+      { method: "POST", body: JSON.stringify({ approved }) }
+    );
+  }
+
+  /** 一次审核通过所有已有图且依据未变的格子。返回刷新后的看板。 */
+  static async approveAllKeyframeCells(projectName: string, episode: number): Promise<KeyframeBoard> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/keyframes/approve-all`,
+      { method: "POST" }
+    );
+  }
+
+  /** 把单元改挂到另一格；cellId 为 null 表示该单元不用起始帧。返回刷新后的看板。 */
+  static async assignKeyframeUnit(
+    projectName: string,
+    episode: number,
+    unitId: string,
+    cellId: string | null
+  ): Promise<KeyframeBoard> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/episodes/${episode}/keyframes/units/${encodeURIComponent(unitId)}/cell`,
+      { method: "PUT", body: JSON.stringify({ cell_id: cellId }) }
     );
   }
 

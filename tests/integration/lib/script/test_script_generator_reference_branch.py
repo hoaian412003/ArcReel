@@ -31,7 +31,7 @@ from lib.script.reference_video.h3_prompt import bind_h3_prompt, source_text_has
 from lib.script.reference_video.request_projection import configured_reference_request_facts
 from lib.script.reference_video.text_parser import extract_mentions
 from lib.script.reference_video.unit_capabilities import evaluate_reference_unit_capabilities
-from lib.script.script_generator import PlanningVideoFacts, ScriptGenerator
+from lib.script.script_generator import PlanningVideoFacts, PromptAuthoringTargetError, ScriptGenerator
 from tests.factories import make_video_request_facts
 
 SCRIPT_PLAN_UNIT = {"unit_id": "E1U01", "text": "@[主角] 推开 @[酒馆] 的门", "duration_seconds": 4}
@@ -1610,6 +1610,49 @@ async def test_h3_profile_rejects_a_payload_that_disagrees_with_the_unit_text(re
 
 
 @pytest.mark.asyncio
+async def test_agent_submitted_h3_prompts_are_validated_and_bound_to_the_confirmed_text(reference_project: Path):
+    """子智能体自己写六段：不调模型，正文原样保留，载荷绑定正文并清除待编写标记。"""
+    _enable_h3_profile(reference_project)
+
+    await ScriptGenerator(reference_project).submit_reference_h3_prompts(1, {"E1U01": _h3_sections()})
+
+    unit = _formal_units(reference_project)["E1U01"]
+    assert unit["text"] == SCRIPT_PLAN_UNIT["text"]
+    assert unit["h3_prompt"]["summary"].startswith("[reference generation]")
+    assert unit["h3_prompt"]["source_text_hash"] == source_text_hash(SCRIPT_PLAN_UNIT["text"])
+    assert not unit.get("pending_authoring")
+
+
+@pytest.mark.asyncio
+async def test_agent_submitted_h3_prompts_that_break_the_rules_go_to_the_draft_and_leave_the_script(
+    reference_project: Path,
+):
+    _enable_h3_profile(reference_project)
+    before = _script_path(reference_project).read_bytes()
+    sections = _h3_sections(summary="[reference generation] <Subject 1> opens the door.")
+
+    with pytest.raises(DraftViolation, match="数字标签"):
+        await ScriptGenerator(reference_project).submit_reference_h3_prompts(1, {"E1U01": sections})
+
+    assert _script_path(reference_project).read_bytes() == before
+    assert quarantine_path(reference_project, 1, QUARANTINE_KIND_PROMPT_AUTHORING).exists()
+
+
+@pytest.mark.asyncio
+async def test_agent_submitted_h3_prompts_need_the_h3_profile(reference_project: Path):
+    with pytest.raises(PromptAuthoringTargetError, match="H3"):
+        await ScriptGenerator(reference_project).submit_reference_h3_prompts(1, {"E1U01": _h3_sections()})
+
+
+@pytest.mark.asyncio
+async def test_agent_submitted_h3_prompts_reject_unknown_units(reference_project: Path):
+    _enable_h3_profile(reference_project)
+
+    with pytest.raises(PromptAuthoringTargetError, match="E1U09"):
+        await ScriptGenerator(reference_project).submit_reference_h3_prompts(1, {"E1U09": _h3_sections()})
+
+
+@pytest.mark.asyncio
 async def test_default_profile_drops_a_stale_h3_payload(reference_project: Path):
     stale = bind_h3_prompt(SCRIPT_PLAN_UNIT["text"], _h3_sections()).model_dump()
     _write_formal_units(reference_project, [{**SCRIPT_PLAN_UNIT, "h3_prompt": stale}])
@@ -1655,3 +1698,88 @@ async def test_plan_without_dub_lines_confirms_to_units_without_the_key(tmp_path
     await _materialize(ScriptGenerator(project_dir))
 
     assert "dub_lines" not in _formal_units(project_dir)["E1U01"]
+
+
+@pytest.mark.asyncio
+async def test_prompt_brief_wraps_the_h3_template_and_names_the_submit_tool(reference_project: Path):
+    from lib.prompts.h3_guide_preset import DEFAULT_H3_GUIDE_PRESET
+    from server.text_generation import reference_prompt_authoring_brief
+    from tests.fakes import FakeConfigResolver
+
+    class _H3Resolver(FakeConfigResolver):
+        async def resolve_h3_guide_preset(self, _project):
+            return DEFAULT_H3_GUIDE_PRESET
+
+        async def resolve_h3_guide_custom(self, _project):
+            return None
+
+        async def resolve_h3_authoring_template(self, _project):
+            return None
+
+    _enable_h3_profile(reference_project)
+
+    brief = await reference_prompt_authoring_brief(
+        episode=1,
+        project_name=reference_project.name,
+        projects=ProjectManager.for_project_dir(reference_project),
+        config_resolver=_H3Resolver(),
+    )
+
+    assert "submit_h3_prompts" in brief.message
+    assert "subject_definitions" in brief.message
+    assert "@[主角] 推开 @[酒馆] 的门" in brief.message
+
+
+@pytest.mark.asyncio
+async def test_submit_prompts_reports_what_is_still_pending(reference_project: Path):
+    from server.text_generation import submit_reference_prompts
+    from tests.fakes import FakeConfigResolver
+
+    _enable_h3_profile(reference_project)
+    projects = ProjectManager.for_project_dir(reference_project)
+
+    message = (
+        await submit_reference_prompts(
+            episode=1,
+            prompts={"E1U01": _h3_sections()},
+            project_name=reference_project.name,
+            projects=projects,
+            config_resolver=FakeConfigResolver(),
+        )
+    ).message
+
+    assert "E1U01" in message
+    assert "全部单元提示词已齐" in message
+
+
+@pytest.mark.asyncio
+async def test_prompt_brief_asks_for_chinese_sections_when_the_project_writes_h3_in_chinese(reference_project: Path):
+    from lib.prompts.h3_guide_preset import DEFAULT_H3_GUIDE_PRESET
+    from server.text_generation import reference_prompt_authoring_brief
+    from tests.fakes import FakeConfigResolver
+
+    class _H3Resolver(FakeConfigResolver):
+        async def resolve_h3_guide_preset(self, _project):
+            return DEFAULT_H3_GUIDE_PRESET
+
+        async def resolve_h3_guide_custom(self, _project):
+            return None
+
+        async def resolve_h3_authoring_template(self, _project):
+            return None
+
+    _enable_h3_profile(reference_project)
+    project_file = reference_project / "project.json"
+    project = _json.loads(project_file.read_text(encoding="utf-8"))
+    project["h3_prompt_language"] = "zh"
+    project_file.write_text(_json.dumps(project, ensure_ascii=False), encoding="utf-8")
+
+    brief = await reference_prompt_authoring_brief(
+        episode=1,
+        project_name=reference_project.name,
+        projects=ProjectManager.for_project_dir(reference_project),
+        config_resolver=_H3Resolver(),
+    )
+
+    assert "本项目 H3 提示词用中文书写" in brief.message
+    assert "<d>[中文] 台词</d>" in brief.message

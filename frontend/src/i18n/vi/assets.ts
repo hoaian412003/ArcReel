@@ -76,6 +76,7 @@ export default {
   "derivative_description_of": "Thay đổi diện mạo của \"{{name}}\"",
   "derivative_description_placeholder": "Khoác giáp nặng màu đen, mọi thứ khác giữ nguyên",
   "derivative_add": "Thêm phái sinh",
+  "face_add": "Thêm ảnh cận mặt",
   "derivative_rename": "Đổi tên phái sinh",
   "derivative_rename_confirm": "Xác nhận đổi tên",
   "derivative_delete": "Xóa phái sinh \"{{name}}\"",

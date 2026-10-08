@@ -99,4 +99,21 @@ describe("UnitDirectionSection", () => {
     render(<UnitDirectionSection projectName="p" episode={1} unit={mkUnit({ brief: "x" })} locked />);
     expect(screen.getByPlaceholderText(/What happens|发生什么|Chuyện gì/)).toBeDisabled();
   });
+
+  it("edits a free-text direction as one block and saves only that field", async () => {
+    const patch = vi.spyOn(API, "patchReferenceVideoUnit").mockResolvedValue({
+      unit: mkUnit({ direction: "改过的导演说明" }),
+      unit_capability: {} as never,
+    });
+    render(<UnitDirectionSection projectName="p" episode={1} unit={mkUnit({ direction: "第 0 秒全景，推门。" })} />);
+
+    const box = screen.getByRole("textbox");
+    expect(box).toHaveValue("第 0 秒全景，推门。");
+    expect(screen.queryByRole("button", { name: /Add shot|添加镜头|Thêm shot/ })).not.toBeInTheDocument();
+    fireEvent.change(box, { target: { value: "改过的导演说明" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save notes|保存说明|Lưu ghi chú/ }));
+
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch.mock.calls[0][3]).toEqual({ direction: "改过的导演说明" });
+  });
 });

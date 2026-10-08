@@ -24,7 +24,9 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any
 
+from lib.keyframes.consume import with_opening_frame
 from lib.project.asset_types import asset_name_comparison_key
+from lib.prompts.video_prompt_profile import h3_prompt_language
 from lib.script.draft_violation import DraftViolation
 from lib.script.reference_video.script_preview import derive_utterances
 from lib.script.reference_video.text_parser import extract_mentions, resolve_references
@@ -256,7 +258,7 @@ def validate_h3_prompt(
     _check_dialogue(label, text, sections["detailed_description"])
 
     for field, body in sections.items():
-        if _CJK.search(_english_residue(body)):
+        if h3_prompt_language(project) == "en" and _CJK.search(_english_residue(body)):
             raise DraftViolation(
                 f"{label} 的 {field} 含非英文正文；六段一律写英文，仅 <d> 台词与画面上可见的文字保留原语言",
                 code=CODE_NOT_ENGLISH,
@@ -320,10 +322,14 @@ def render_h3_prompt(
     picture_no = {_key(ref.name): index for index, ref in enumerate(references, start=1)}
     audio_no = {_key(name): index for index, name in enumerate(audio_speakers, start=1)}
 
+    sections = {field: getattr(h3, field) for field in SECTION_FIELDS}
+    if any(ref.type == "keyframe" for ref in references):
+        sections = with_opening_frame(sections)
+
     blocks = []
     for field in SECTION_FIELDS:
         body = _resolve(
-            getattr(h3, field).strip(),
+            sections[field].strip(),
             subject_no=subject_no,
             picture_no=picture_no,
             audio_no=audio_no,

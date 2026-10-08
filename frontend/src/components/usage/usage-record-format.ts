@@ -52,6 +52,7 @@ const PURPOSE_KEYS: Record<string, string> = {
   script_generation: "usage_purpose_script_generation",
   episode_planning: "usage_purpose_episode_planning",
   project_overview: "usage_purpose_project_overview",
+  asset_analysis: "usage_purpose_asset_analysis",
   style_analysis: "usage_purpose_style_analysis",
   assistant_session: "usage_purpose_assistant_session",
   endpoint_trial: "usage_purpose_endpoint_trial",

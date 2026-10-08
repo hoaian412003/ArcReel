@@ -340,6 +340,7 @@ export function ReferenceVideoCard({
           }}
         >
           {t("reference_editor_pending_authoring_hint")}
+          <AskAgentButton projectName={projectName} action={{ action: "author_video_unit", episode, resource_id: unit.unit_id }} />
         </div>
       )}
 
@@ -421,3 +422,4 @@ export function ReferenceVideoCard({
     </div>
   );
 }
+import { AskAgentButton } from "@/components/claude/AskAgentButton";

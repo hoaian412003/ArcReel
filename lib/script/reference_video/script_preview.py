@@ -45,6 +45,7 @@ WARN_SILENT_MODEL = "ref_warn_silent_model"
 WARN_SILENT_EPISODE = "ref_warn_silent_episode"
 WARN_SPEAKER_AUDIO_NEEDS_IMAGE = "ref_warn_speaker_audio_needs_image"
 WARN_UNIT_WITHOUT_SCENE = "ref_warn_unit_without_scene"
+WARN_SPEAKER_WITHOUT_PICTURE = "ref_warn_speaker_without_picture"
 
 
 @dataclass(frozen=True)
@@ -220,6 +221,32 @@ def unit_lacks_scene_reference(text: str, project: dict) -> bool:
     return not any(ref.type == "scene" for ref in references)
 
 
+def speakers_without_picture(text: str, project: dict) -> list[str]:
+    """有台词、却没有在台词记号之外被 ``@`` 引用的已登记角色名（保持说话顺序、去重）。
+
+    台词记号的说话人位只绑定声音、不派生参考图：该角色这个单元没有参考图，若他在画面里，
+    模型会用手头仅有的别的角色长相臆造他。本体与衍生算同一角色——写了 ``@[本体/衍生]``
+    即视为已引用。纯画外音角色同样会被列出，由作者判断是否忽略。
+
+    判据的唯一出口：编辑器预览的读时 warning 与拆分回执的逐 unit 提示都经本函数。
+    """
+    catalog = build_reference_catalog(project)
+    referenced: set[str] = set()
+    references, _missing = derive_references_from_text(text, project)
+    for reference in references:
+        if reference.type != "character":
+            continue
+        entry = catalog.lookup("character", reference.name)
+        referenced.add(entry.asset_name if entry else reference.name)
+    names: list[str] = []
+    for speaker in speech_speaker_references(text):
+        entry = catalog.lookup("character", split_derivative_reference(speaker)[0])
+        if entry is None or entry.asset_name in referenced or entry.asset_name in names:
+            continue
+        names.append(entry.asset_name)
+    return names
+
+
 def build_script_preview(
     text: str,
     project: dict,
@@ -281,5 +308,8 @@ def build_script_preview(
         speakers_with_reference_image=character_image_names,
     )
     warnings.extend(bindings.warnings)
+    warnings.extend(
+        _warning(WARN_SPEAKER_WITHOUT_PICTURE, name=name) for name in speakers_without_picture(text, project)
+    )
 
     return ScriptPreview(utterances=utterances, warnings=warnings)

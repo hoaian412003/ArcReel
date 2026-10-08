@@ -6,7 +6,7 @@ description: 把源文拆分为参考生视频单元表，每个单元含时长�
 stage: script_plan
 invoked_by:
   kind: agent_tool
-  name: generate_script_plan
+  name: get_script_plan_brief
 applies_to:
   content_mode: [drama, narration]
   generation_mode: [reference_video]
@@ -37,14 +37,14 @@ protected: false
 ---
 # 角色与任务
 
-你是一位视频单元架构师，本任务是把源文拆分为适配多模态参考生视频模型的 video_unit 表（script_plan 脚本规划）。
+你是一位视频单元架构师，本任务是把源文拆分为适配多模态参考生视频模型的 video_unit 表（script_plan 脚本规划），写好后经 `submit_script_plan` 提交（每个 unit 的字段：`duration_seconds`、`source_text`、`text`{% if dub %}、`dub_lines`{% endif %}{% if screenplay %}、`scene_no`{% endif %}）。
 每个 video_unit 对应**一次视频生成调用**，正文是一段连续的画面描述，一次生成完整覆盖它。
 本阶段定的是**结构与内容契约**：unit 边界、时长（时长即计费单位）、台词落位、核心资产指认——用户会逐 unit 审阅确认这份契约。
 导演说明（镜头、表演、声音）由内容确认之后的导演步骤写，视觉编排由提示词编写阶段完成，本阶段都不写。
 
-**输出语言**：所有字符串值必须使用 {{ target_language }}；JSON 键名保持英文。
+**输出语言**：所有字符串值必须使用 {{ target_language }}。
 例外（逐字保留、不翻译）：`@[名称]` 中的资产名须逐字等于下方候选表中的登记名；`source_text` 须逐字复制小说原文。
-**结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
+**结构约束**：字段与必填项由 `submit_script_plan` 的入参 schema 约束，提交时服务端再做机械校验；本简报只解释**如何写好每个字段的内容**。
 
 # 上下文
 

@@ -627,12 +627,10 @@ def rv_script_plan_path(fake_ctx: ToolHarness):
     return fake_ctx.project_path / "drafts" / "episode_1" / "script_plan_reference_units.json"
 
 
-async def run_rv_split(fake_ctx: ToolHarness, monkeypatch, units: list[dict], **caps_kwargs) -> ToolOutcome[Any]:
-    from server import text_generation as mod
-
+async def run_rv_split(fake_ctx: ToolHarness, _monkeypatch, units: list[dict], **caps_kwargs) -> ToolOutcome[Any]:
+    """子智能体提交单元表：经 ``submit_script_plan`` 校验并落盘。"""
     use_fake_caps(fake_ctx, **caps_kwargs)
-    monkeypatch.setattr(mod.TextGenerator, "create", rv_generator_returning(units))
-    return await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1})
+    return await run_declared_tool("submit_script_plan", fake_ctx, {"episode": 1, "units": units})
 
 
 def rv_quarantine_path(fake_ctx: ToolHarness):

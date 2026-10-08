@@ -45,6 +45,8 @@ class _FakeImageBackend:
 
 
 class _FakeVideoResult:
+    provider_coins = None
+
     def __init__(self, duration_seconds: int = 8):
         self.video_uri = "video-uri"
         self.usage_tokens = 0

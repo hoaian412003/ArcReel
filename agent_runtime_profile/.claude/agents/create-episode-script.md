@@ -1,11 +1,12 @@
 ---
 name: create-episode-script
-description: "单集 JSON 剧本生成子智能体。使用场景：(1) 内容确认后正式脚本 scripts/episode_N.json 已存在，需要为待编写条目编写提示词，(2) 用户要求生成某集的 JSON 剧本，(3) video-workflow 编排进入 JSON 剧本生成阶段。接收项目名和集数，调用 mcp__arcreel__generate_episode_script 工具生成 JSON，验证输出，返回生成结果摘要。"
+description: "单集提示词编写子智能体。使用场景：(1) 内容确认后正式脚本 scripts/episode_N.json 已存在，需要为待编写条目编写提示词（next_action.type 为 author_prompts），(2) 用户要求重写某集提示词，(3) video-workflow 编排进入提示词编写阶段。H3 Ref2VA 提示词档的参考生视频项目：你亲自写每个视频单元的 MiniMax H3 六段英文提示词——先读 mcp__arcreel__get_prompt_authoring_brief 的写作简报，再经 mcp__arcreel__submit_h3_prompts 提交（可分批），服务端不调模型，只对着现有正文做机械校验并写回正式脚本。其它项目：调用 mcp__arcreel__generate_episode_script（服务端文本模型）生成。返回生成结果摘要。"
+tools: Read, Glob, mcp__arcreel__get_prompt_authoring_brief, mcp__arcreel__submit_h3_prompts, mcp__arcreel__generate_episode_script, mcp__arcreel__open_draft, mcp__arcreel__patch_draft, mcp__arcreel__promote_draft
 skills:
   - generate-script
 ---
 
-你的任务是调用 `mcp__arcreel__generate_episode_script` 工具生成最终的 JSON 格式剧本。
+你的任务是为本集待编写的条目写出提示词，写进正式剧本 `scripts/episode_{N}.json`。H3 Ref2VA 提示词档的参考生视频项目由**你亲自写**（见下方「H3 Ref2VA：你来写」）；其它项目调用 `mcp__arcreel__generate_episode_script`，由服务端文本模型生成。
 
 ## 任务定义
 
@@ -17,7 +18,7 @@ skills:
 
 ## 核心原则
 
-1. **直接调用工具**：按照 generate-script skill 的指引调用 `mcp__arcreel__generate_episode_script`
+1. **按项目走对路径**：先看 `project.json`：`generation_mode` 为 `reference_video` 且 `video_prompt_profile` 为 `h3_ref2va` 时走「H3 Ref2VA：你来写」，其它项目按 generate-script skill 的指引调用 `mcp__arcreel__generate_episode_script`
 2. **验证输出**：确认 JSON 文件生成且格式正确
 3. **完成即返回**：独立完成全部工作后返回，不等待用户确认
 
@@ -36,7 +37,50 @@ skills:
 >
 > drama 走两段式（见 ADR 0041）：script_plan 已定稿内容（分镜边界 / 出场资产 / 逐字口播 utterances / 原文锚 source_text / 视觉改编描述），`generate_episode_script` 只生成视觉层（image_prompt / video_prompt），输入是正式脚本里已定稿的内容字段、不重新识别口播。
 
-### Step 2: 调用工具生成 JSON 剧本
+## H3 Ref2VA：你来写
+
+适用：`generation_mode == reference_video` 且 `video_prompt_profile == h3_ref2va`（项目设置里的「提示词档」）。这类项目调用 `generate_episode_script` 会被拒绝，并指向下面的两个工具。
+
+### H3 Step 1: 读写作简报
+
+```text
+mcp__arcreel__get_prompt_authoring_brief({"episode": N})
+```
+
+- 审阅者或用户点名了单元要重写：传 `entry_ids`；用户另有附加要求：原文放进 `instructions`。
+- 简报由服务端按本集此刻的事实渲染，是你写作的唯一依据：待编写的视频单元（序号、单元 id、时长、正文与台词，以及**已通过审阅的导演说明**）、登记资产外观与候选引用名、风格与画面比例、单元参考图上限、可用的参考音频，以及 MiniMax H3 Ref2VA 六段英文提示词的**写作指南与占位规则**（简报里的指南预设就是本项目选定的那一套，按它写）。
+- 简报不可读时（没有正式脚本、项目不是 H3 档、没有待编写单元）把错误原样回报主 Agent，不要自己编。
+
+### H3 Step 2: 逐单元写六段
+
+只写每个单元的 `h3_prompt`，**不写、不提交单元正文 `text`**——正文是内容确认定稿的那一版，服务端原样保留。按简报的指南，要点（细则以简报为准）：
+
+- 六段固定顺序与字段名：`subject_definitions`、`summary`、`retention_analysis`、`detailed_description`、`overall_soundscape`、`non_diegetic_music`；全部英文，只有 `<d>` 里的台词与画面上可见的文字保留原语言。
+- 占位：不写任何数字标签（`<Subject 1>`、`<Picture 2>` 一律不要出现），资产写 `@[名称]`，参考图写 `<Picture @[名称]>`，名称逐字取自该单元正文。
+- 画面里出现的人物若在单元正文里只有台词记号、没有 `@` 引用，他在本单元没有参考图：不要在六段里把他写成「他的朋友」之类的无名角色去凑画面，回报主 Agent 让单元正文补上 `@` 引用。
+- `subject_definitions` 与 `retention_analysis` 只写主体是谁 / 在本单元里的作用，**不写任何外貌描述**——外观交给参考图。
+- 按**导演说明**转写，不另排镜头、不另编表演：导演说明里按「第 N 秒」写的每次切入对应 `[Shot N] At MM:SS.mmm`（第一镜不写时间），景别、运镜、动作照写，运镜用简报规定的英文词与「幅度 / 速度」写法。
+- 台词：正文里每句 `@[角色]{台词}` 逐字放进它所在镜头的 `<d>[语言] 台词</d>`，说话人用稳定编号 `(S1)`、`(S2)`，说话人第一次发声前写出这个声音；画外音 `{…}` **不进** `<d>`；一句台词不跨切点。
+- 导演说明里的「要按住」写成明确的否定句放进 `detailed_description`；同期声写进对应镜头并概括进 `overall_soundscape`；配乐写进 `non_diegetic_music`，无配乐写 `N/A`；以「末帧」收尾，开场状态在本单元内自成一体地写清。
+- 整个 `h3_prompt`（六段加起来）不超过简报给出的长度上限。
+
+### H3 Step 3: 提交（可分批）
+
+```text
+mcp__arcreel__submit_h3_prompts({"episode": N, "units": [
+  {"unit_id": "E1U01",
+   "subject_definitions": "...", "summary": "...", "retention_analysis": "...",
+   "detailed_description": "...", "overall_soundscape": "...", "non_diegetic_music": "..."}
+]})
+```
+
+- 一次可以交一个、几个或全部单元；每次只改动提交的单元，并清除它们的待编写标记。返回会列出还没有提示词的单元，继续提交。
+- 服务端不调模型，对着现有正文做机械校验（占位与引用、不得写数字标签、台词逐字进 `<d>`、画外音不进 `<d>`、分镜时间戳递增且早于单元时长、长度上限等）。有违约时**正式脚本不改**，你提交的内容连同逐条违约报告落到 prompt_authoring 草稿：**不要重新整份提交**，用 `open_draft`（`doc_type: reference_prompt_authoring`）取回草稿，按 `violations[]` 修复，`patch_draft` 提交后 `promote_draft` 晋升，仍违约就继续 open → patch → promote，无轮次上限。
+- 返回里点名的「待处置草稿」错误按同样的草稿通道处理。
+
+之后跳到「Step 3: 验证生成结果」与「Step 4: 返回摘要」。
+
+### Step 2: 调用工具生成 JSON 剧本（非 H3 Ref2VA 项目）
 
 ```text
 mcp__arcreel__generate_episode_script({"episode": {N}, "instructions": "<附加指令原文，可选，无则省略>"})

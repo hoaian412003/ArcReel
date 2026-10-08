@@ -37,6 +37,17 @@ from server.tool_runtime import (
 from tests.integration.server.agent_tool_support import ToolHarness, run_declared_tool
 
 
+@pytest.fixture
+async def narration_ctx(fake_ctx: ToolHarness) -> ToolHarness:
+    """分集规划只服务 narration：本模块默认把会话项目置为 narration，drama 另有专门用例。"""
+    _set_content_mode(fake_ctx, "narration")
+    return fake_ctx
+
+
+def _set_content_mode(ctx: ToolHarness, content_mode: str) -> None:
+    ctx.pm.project_payload["content_mode"] = content_mode
+
+
 def _fake_planner_cls(result: PlanResult | BaseException, captured: dict[str, Any] | None = None) -> Any:
     """EpisodePlanner 替身：create() 工厂 + plan() 返回预置结果或抛出预置异常。"""
 
@@ -82,7 +93,7 @@ def _plan_value(outcome: ToolOutcome[Any]) -> PlanEpisodesResult:
 # ---------------------------------------------------------------------------
 
 
-async def test_plan_episodes_reports_each_planned_episode_for_boundary_review(fake_ctx: ToolHarness) -> None:
+async def test_plan_episodes_reports_each_planned_episode_for_boundary_review(narration_ctx: ToolHarness) -> None:
     captured: dict[str, Any] = {}
     result = PlanResult(
         episodes=[
@@ -107,7 +118,7 @@ async def test_plan_episodes_reports_each_planned_episode_for_boundary_review(fa
     )
 
     value = _plan_value(
-        await run_declared_tool(PLAN_EPISODES, fake_ctx, {}, planner_cls=_fake_planner_cls(result, captured))
+        await run_declared_tool(PLAN_EPISODES, narration_ctx, {}, planner_cls=_fake_planner_cls(result, captured))
     )
 
     for fragment in (
@@ -120,7 +131,7 @@ async def test_plan_episodes_reports_each_planned_episode_for_boundary_review(fa
     ):
         assert fragment in value.message
     assert [episode["title"] for episode in value.episodes] == ["古玉藏诀", "城门遇袭"]
-    assert captured["project_path"] == fake_ctx.project_path
+    assert captured["project_path"] == narration_ctx.project_path
     assert captured["plan_instructions"] is None
 
 
@@ -133,12 +144,14 @@ async def test_plan_episodes_reports_each_planned_episode_for_boundary_review(fa
     ],
 )
 async def test_plan_episodes_forwards_normalized_instructions_to_the_planner(
-    fake_ctx: ToolHarness, instructions: str, forwarded: str | None
+    narration_ctx: ToolHarness, instructions: str, forwarded: str | None
 ) -> None:
     captured: dict[str, Any] = {}
     planner = _fake_planner_cls(PlanResult(episodes=[_episode(1)], cursor=None), captured)
 
-    _plan_value(await run_declared_tool(PLAN_EPISODES, fake_ctx, {"instructions": instructions}, planner_cls=planner))
+    _plan_value(
+        await run_declared_tool(PLAN_EPISODES, narration_ctx, {"instructions": instructions}, planner_cls=planner)
+    )
 
     assert captured["plan_instructions"] == forwarded
 
@@ -147,11 +160,13 @@ async def test_plan_episodes_forwards_normalized_instructions_to_the_planner(
     "instructions",
     [pytest.param(["按章切"], id="not-a-string"), pytest.param("章" * (MAX_INSTRUCTIONS_LEN + 1), id="too-long")],
 )
-async def test_plan_episodes_rejects_bad_instructions_before_planning(fake_ctx: ToolHarness, instructions: Any) -> None:
+async def test_plan_episodes_rejects_bad_instructions_before_planning(
+    narration_ctx: ToolHarness, instructions: Any
+) -> None:
     captured: dict[str, Any] = {}
     planner = _fake_planner_cls(PlanResult(episodes=[], cursor=None), captured)
 
-    outcome = await run_declared_tool(PLAN_EPISODES, fake_ctx, {"instructions": instructions}, planner_cls=planner)
+    outcome = await run_declared_tool(PLAN_EPISODES, narration_ctx, {"instructions": instructions}, planner_cls=planner)
 
     assert outcome.problem is not None
     assert outcome.problem.code == "invalid_request"
@@ -169,32 +184,36 @@ async def test_plan_episodes_rejects_bad_instructions_before_planning(fake_ctx: 
     ],
 )
 async def test_plan_episodes_reports_planner_failures_without_blaming_the_request(
-    fake_ctx: ToolHarness, raised: BaseException, code: str
+    narration_ctx: ToolHarness, raised: BaseException, code: str
 ) -> None:
-    outcome = await run_declared_tool(PLAN_EPISODES, fake_ctx, {}, planner_cls=_fake_planner_cls(raised))
+    outcome = await run_declared_tool(PLAN_EPISODES, narration_ctx, {}, planner_cls=_fake_planner_cls(raised))
 
     assert outcome.problem is not None
     assert outcome.problem.code == code
     assert str(raised) in outcome.problem.detail
 
 
-async def test_plan_episodes_reports_an_exhausted_source(fake_ctx: ToolHarness) -> None:
+async def test_plan_episodes_reports_an_exhausted_source(narration_ctx: ToolHarness) -> None:
     result = PlanResult(episodes=[], cursor=None, source_exhausted=True)
 
-    value = _plan_value(await run_declared_tool(PLAN_EPISODES, fake_ctx, {}, planner_cls=_fake_planner_cls(result)))
+    value = _plan_value(
+        await run_declared_tool(PLAN_EPISODES, narration_ctx, {}, planner_cls=_fake_planner_cls(result))
+    )
 
     assert value.source_exhausted is True
     assert "全部规划" in value.message
 
 
 async def test_plan_episodes_attaches_global_volume_review_when_the_source_is_exhausted(
-    fake_ctx: ToolHarness,
+    narration_ctx: ToolHarness,
 ) -> None:
     volume = EpisodeTargetVolume(units=800, unit_noun="字", source="units")
     stats = LedgerStats(total_episodes=30, smallest=[(30, 57), (12, 640)], median_units=812, target_volume=volume)
     result = PlanResult(episodes=[], cursor=None, source_exhausted=True, ledger_stats=stats)
 
-    value = _plan_value(await run_declared_tool(PLAN_EPISODES, fake_ctx, {}, planner_cls=_fake_planner_cls(result)))
+    value = _plan_value(
+        await run_declared_tool(PLAN_EPISODES, narration_ctx, {}, planner_cls=_fake_planner_cls(result))
+    )
 
     for fragment in (
         "累计总集数：30",
@@ -212,13 +231,15 @@ async def test_plan_episodes_attaches_global_volume_review_when_the_source_is_ex
     assert value.ledger_stats["target_seconds"] is None
 
 
-async def test_plan_episodes_marks_a_target_volume_derived_from_duration(fake_ctx: ToolHarness) -> None:
+async def test_plan_episodes_marks_a_target_volume_derived_from_duration(narration_ctx: ToolHarness) -> None:
     """折算而来的目标体量在核对材料里标明来源：主 Agent 不能把估算值当成用户给的硬指标。"""
     volume = EpisodeTargetVolume(units=450, unit_noun="字", source="duration", seconds=90, units_per_second=5.0)
     stats = LedgerStats(total_episodes=30, smallest=[], median_units=812, target_volume=volume)
     result = PlanResult(episodes=[], cursor=None, source_exhausted=True, ledger_stats=stats)
 
-    value = _plan_value(await run_declared_tool(PLAN_EPISODES, fake_ctx, {}, planner_cls=_fake_planner_cls(result)))
+    value = _plan_value(
+        await run_declared_tool(PLAN_EPISODES, narration_ctx, {}, planner_cls=_fake_planner_cls(result))
+    )
 
     assert "目标体量设置：约 450（按单集目标时长 90 秒折算）" in value.message
     assert value.ledger_stats is not None
@@ -227,7 +248,20 @@ async def test_plan_episodes_marks_a_target_volume_derived_from_duration(fake_ct
     assert value.ledger_stats["target_seconds"] == 90
 
 
-async def test_plan_episodes_normal_batch_reports_only_the_running_total(fake_ctx: ToolHarness) -> None:
+async def test_plan_episodes_refuses_drama_projects_and_points_at_episode_upload(narration_ctx: ToolHarness) -> None:
+    _set_content_mode(narration_ctx, "drama")
+    captured: dict[str, Any] = {}
+
+    outcome = await run_declared_tool(
+        PLAN_EPISODES, narration_ctx, {}, planner_cls=_fake_planner_cls(PlanResult(episodes=[], cursor=None), captured)
+    )
+
+    assert outcome.problem is not None
+    assert outcome.problem.code == "episode_planning_unsupported"
+    assert "plan_instructions" not in captured
+
+
+async def test_plan_episodes_normal_batch_reports_only_the_running_total(narration_ctx: ToolHarness) -> None:
     result = PlanResult(
         episodes=[_episode(5, "第五集")],
         cursor={"source_file": "source/novel.txt", "offset": 4000},
@@ -236,7 +270,9 @@ async def test_plan_episodes_normal_batch_reports_only_the_running_total(fake_ct
         ledger_stats=None,
     )
 
-    value = _plan_value(await run_declared_tool(PLAN_EPISODES, fake_ctx, {}, planner_cls=_fake_planner_cls(result)))
+    value = _plan_value(
+        await run_declared_tool(PLAN_EPISODES, narration_ctx, {}, planner_cls=_fake_planner_cls(result))
+    )
 
     assert "累计已规划 5 集。" in value.message
     assert "累计总集数" not in value.message
@@ -292,7 +328,7 @@ def _reset_value(outcome: ToolOutcome[Any]) -> ResetEpisodePlanningResult:
     return outcome.value
 
 
-async def test_reset_episode_planning_full_reset_points_back_to_planning(fake_ctx: ToolHarness) -> None:
+async def test_reset_episode_planning_full_reset_points_back_to_planning(narration_ctx: ToolHarness) -> None:
     captured: dict[str, Any] = {}
     result = EpisodeResetResult(
         removed_episodes=[1, 2],
@@ -303,7 +339,7 @@ async def test_reset_episode_planning_full_reset_points_back_to_planning(fake_ct
 
     value = _reset_value(
         await run_declared_tool(
-            RESET_EPISODE_PLANNING, fake_ctx, {"from_episode": 1}, resetter=_fake_reset(result, captured)
+            RESET_EPISODE_PLANNING, narration_ctx, {"from_episode": 1}, resetter=_fake_reset(result, captured)
         )
     )
 
@@ -316,12 +352,12 @@ async def test_reset_episode_planning_full_reset_points_back_to_planning(fake_ct
 
 
 async def test_reset_episode_planning_asks_for_confirmation_before_touching_consumed_episodes(
-    fake_ctx: ToolHarness,
+    narration_ctx: ToolHarness,
 ) -> None:
     resetter = _fake_reset(ResetConfirmationRequired(consumed_episodes=[1, 3], archived_files=[]))
 
     value = _reset_value(
-        await run_declared_tool(RESET_EPISODE_PLANNING, fake_ctx, {"from_episode": 1}, resetter=resetter)
+        await run_declared_tool(RESET_EPISODE_PLANNING, narration_ctx, {"from_episode": 1}, resetter=resetter)
     )
 
     assert value.confirmation_required is True
@@ -329,14 +365,14 @@ async def test_reset_episode_planning_asks_for_confirmation_before_touching_cons
     assert "confirm_consumed" in value.message
 
 
-async def test_reset_episode_planning_forwards_the_confirmation(fake_ctx: ToolHarness) -> None:
+async def test_reset_episode_planning_forwards_the_confirmation(narration_ctx: ToolHarness) -> None:
     captured: dict[str, Any] = {}
     result = EpisodeResetResult(removed_episodes=[1], deleted_files=[], archived_files=[], consumed_episodes=[1])
 
     value = _reset_value(
         await run_declared_tool(
             RESET_EPISODE_PLANNING,
-            fake_ctx,
+            narration_ctx,
             {"from_episode": 1, "confirm_consumed": True},
             resetter=_fake_reset(result, captured),
         )
@@ -346,13 +382,15 @@ async def test_reset_episode_planning_forwards_the_confirmation(fake_ctx: ToolHa
     assert "未删除" in value.message
 
 
-async def test_reset_episode_planning_partial_reset_reports_the_new_starting_point(fake_ctx: ToolHarness) -> None:
+async def test_reset_episode_planning_partial_reset_reports_the_new_starting_point(narration_ctx: ToolHarness) -> None:
     result = EpisodeResetResult(
         removed_episodes=[2, 3], deleted_files=["source/episode_2.txt"], archived_files=[], consumed_episodes=[]
     )
 
     value = _reset_value(
-        await run_declared_tool(RESET_EPISODE_PLANNING, fake_ctx, {"from_episode": 2}, resetter=_fake_reset(result))
+        await run_declared_tool(
+            RESET_EPISODE_PLANNING, narration_ctx, {"from_episode": 2}, resetter=_fake_reset(result)
+        )
     )
 
     for fragment in ("部分重置", "第 2 集起共 2 集", "第 1 集原文范围末尾", "新集号从第 2 集起"):
@@ -360,10 +398,10 @@ async def test_reset_episode_planning_partial_reset_reports_the_new_starting_poi
     assert "账本已空" not in value.message
 
 
-async def test_reset_episode_planning_reports_a_failed_partial_precheck(fake_ctx: ToolHarness) -> None:
+async def test_reset_episode_planning_reports_a_failed_partial_precheck(narration_ctx: ToolHarness) -> None:
     resetter = _fake_reset(EpisodeResetError("源文件已被修改或移除：source/novel.txt"))
 
-    outcome = await run_declared_tool(RESET_EPISODE_PLANNING, fake_ctx, {"from_episode": 3}, resetter=resetter)
+    outcome = await run_declared_tool(RESET_EPISODE_PLANNING, narration_ctx, {"from_episode": 3}, resetter=resetter)
 
     assert outcome.problem is not None
     assert outcome.problem.code == "episode_reset_failed"
@@ -384,14 +422,14 @@ async def test_reset_episode_planning_reports_a_failed_partial_precheck(fake_ctx
     ],
 )
 async def test_reset_episode_planning_rejects_bad_arguments_before_resetting(
-    fake_ctx: ToolHarness, arguments: dict[str, Any], field: str
+    narration_ctx: ToolHarness, arguments: dict[str, Any], field: str
 ) -> None:
     captured: dict[str, Any] = {}
     resetter = _fake_reset(
         EpisodeResetResult(removed_episodes=[], deleted_files=[], archived_files=[], consumed_episodes=[]), captured
     )
 
-    outcome = await run_declared_tool(RESET_EPISODE_PLANNING, fake_ctx, arguments, resetter=resetter)
+    outcome = await run_declared_tool(RESET_EPISODE_PLANNING, narration_ctx, arguments, resetter=resetter)
 
     assert outcome.problem is not None
     assert outcome.problem.code == "invalid_request"

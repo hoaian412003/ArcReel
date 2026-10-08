@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { Anchor, ChevronDown } from "lucide-react";
 import { API } from "@/api";
 import type { EpisodeMeta } from "@/types";
+import { EpisodeSourceDialog } from "@/components/layout/EpisodeSourceDialog";
+import { useProjectsStore } from "@/stores/projects-store";
 import { ScreenplayReviewPanel } from "./flow/ScreenplayReviewPanel";
 
 /**
@@ -183,6 +185,10 @@ export function EpisodeSourceReview({
   const [view, setView] = useState<{ key: string; mode: "source" | "screenplay" }>({ key: "", mode: "source" });
   // 取到的切片带上归属 key，loading 由 key 是否匹配派生（避免 effect 内同步 setState）
   const [fetched, setFetched] = useState<{ key: string; text: string | null } | null>(null);
+  // drama 的分集源文由用户上传：已上传的集可替换（上传成功后重取正文）
+  const canReplaceSource = useProjectsStore((s) => s.currentProjectData?.content_mode === "drama");
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [sourceVersion, setSourceVersion] = useState(0);
 
   const meta = episodes.find((e) => e.episode === episode);
 
@@ -198,7 +204,7 @@ export function EpisodeSourceReview({
     return () => {
       disposed = true;
     };
-  }, [projectName, episode]);
+  }, [projectName, episode, sourceVersion]);
 
   const loading = fetched?.key !== fetchKey;
   const mode = view.key === fetchKey ? view.mode : "source";
@@ -232,6 +238,16 @@ export function EpisodeSourceReview({
                 {label}
               </button>
             ))}
+            {canReplaceSource ? (
+              <button
+                type="button"
+                onClick={() => setReplaceOpen(true)}
+                className="focus-ring ml-auto rounded px-2 py-0.5 text-[12px] transition-colors"
+                style={{ color: "var(--color-text-3)" }}
+              >
+                {t("episode_source_replace_button")}
+              </button>
+            ) : null}
           </div>
           {mode === "screenplay" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -266,6 +282,16 @@ export function EpisodeSourceReview({
           )}
         </div>
       </div>
+      {canReplaceSource ? (
+        <EpisodeSourceDialog
+          open={replaceOpen}
+          projectName={projectName}
+          episodes={episodes}
+          initialEpisode={episode}
+          onClose={() => setReplaceOpen(false)}
+          onUploaded={() => setSourceVersion((v) => v + 1)}
+        />
+      ) : null}
     </div>
   );
 }

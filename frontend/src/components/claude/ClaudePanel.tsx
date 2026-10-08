@@ -9,15 +9,20 @@ import {
   Plus,
   Send,
   ShieldAlert,
+  Trash2,
   Users,
   Wrench,
   X,
+  Brain,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ClaudeAPI, type ClaudeEvent, type ClaudeSession, type ClaudeUsageTotals } from "@/api/claude";
 import { StreamMarkdown } from "@/components/shared/StreamMarkdown";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAppStore } from "@/stores/app-store";
 import { errMsg } from "@/utils/async";
+import { useClaudeStore } from "@/stores/claude-store";
+import { ClaudeAgentSettings } from "./ClaudeAgentSettings";
 import {
   activitySummary,
   formatActivityDetail,
@@ -158,12 +163,19 @@ function ActivityCard({
 export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
   const { t } = useTranslation("dashboard");
   const pushToast = useAppStore((state) => state.pushToast);
-  const [sessions, setSessions] = useState<ClaudeSession[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ClaudeSession[]>(() => {
+    const accepted = useClaudeStore.getState().accepted;
+    return accepted?.projectName === projectName ? [accepted.session] : [];
+  });
+  const [sessionId, setSessionId] = useState<string | null>(() => useClaudeStore.getState().selected[projectName] || null);
   const [events, setEvents] = useState<ClaudeEvent[]>([]);
   const [draft, setDraft] = useState("");
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [queued, setQueued] = useState(false);
   const [usage, setUsage] = useState<ClaudeUsageTotals | null>(null);
   const [resolvedPermissions, setResolvedPermissions] = useState<Set<string>>(() => new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -183,9 +195,11 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
     setDraft("");
     setUsage(null);
     setSending(false);
+    setQueued(false);
     setResolvedPermissions(new Set());
     setSessionId(nextSessionId);
-  }, []);
+    useClaudeStore.getState().select(projectName, nextSessionId);
+  }, [projectName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,11 +207,22 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
       .then((items) => {
         if (cancelled) return;
         setSessions(items);
-        chooseSession(items[0]?.id ?? null);
+        const preferred = useClaudeStore.getState().selected[projectName];
+        chooseSession(preferred || items[items.length - 1]?.id || null);
       })
       .catch((error) => pushToast(errMsg(error), "error"));
     return () => { cancelled = true; };
   }, [chooseSession, projectName, pushToast]);
+
+  useEffect(() => useClaudeStore.subscribe((next, previous) => {
+    const accepted = next.accepted;
+    if (accepted === previous.accepted || !accepted || accepted.projectName !== projectName) return;
+    setSessions((current) => [accepted.session, ...current.filter((item) => item.id !== accepted.session.id)]);
+    if (accepted.session.id !== sessionId) chooseSession(accepted.session.id);
+    setSending(true);
+    setQueued(true);
+    setShowSettings(false);
+  }), [chooseSession, projectName, sessionId]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -213,19 +238,32 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
           setResolvedPermissions((current) => new Set(current).add(event.payload.request_id as string));
         }
         const message = messageRecord(event);
+        if (event.type === "turn_queued") { setSending(true); setQueued(true); }
+        if (event.type === "turn_running") { setSending(true); setQueued(false); }
         if (
           event.type === "turn_error"
+          || event.type === "turn_finished"
           || (event.type === "sdk_message" && message?.message_type === "ResultMessage")
         ) {
           setSending(false);
-          void ClaudeAPI.getUsage(projectName, sessionId).then((data) => setUsage(data.totals));
+          void ClaudeAPI.getUsage(projectName, sessionId).then((data) => {
+            setUsage(data.totals);
+            setSending(data.turns.some((turn) => turn.status === "accepted" || turn.status === "running"));
+            setQueued(data.turns.some((turn) => turn.status === "accepted"));
+          }).catch((error) => pushToast(errMsg(error), "error"));
         }
       },
       onError(error) {
         if (!error.retryable) pushToast(error.message, "error");
       },
     });
-    void ClaudeAPI.getUsage(projectName, sessionId).then((data) => setUsage(data.totals));
+    void ClaudeAPI.getUsage(projectName, sessionId).then((data) => {
+      setUsage(data.totals);
+      if (data.turns.length) {
+        setSending(data.turns.some((turn) => turn.status === "accepted" || turn.status === "running"));
+        setQueued(data.turns.some((turn) => turn.status === "accepted"));
+      }
+    }).catch((error) => pushToast(errMsg(error), "error"));
     return () => stream.close();
   }, [projectName, pushToast, sessionId]);
 
@@ -280,7 +318,24 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
     }
   };
 
+  const clearSessions = async () => {
+    setClearing(true);
+    try {
+      const result = await ClaudeAPI.clearSessions(projectName);
+      useClaudeStore.getState().clearProject(projectName);
+      setSessions([]);
+      chooseSession(null);
+      setShowClearConfirm(false);
+      pushToast(t("claude_sessions_cleared", { count: result.deleted, project: projectName }), "success");
+    } catch (error) {
+      pushToast(errMsg(error), "error");
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
+    <>
     <aside
       role="dialog"
       aria-modal="false"
@@ -290,6 +345,7 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
       <div className="flex h-12 items-center gap-2 border-b border-white/10 px-3">
         <Bot className="h-4 w-4 text-[#d7ff45]" aria-hidden />
         <strong className="text-sm">{t("claude_title")}</strong>
+        <button type="button" onClick={() => setShowSettings((current) => !current)} aria-label={t("claude_memory")} aria-pressed={showSettings} className="grid h-8 w-8 place-items-center rounded-md hover:bg-white/10"><Brain className="h-4 w-4" /></button>
         <div className="relative ml-auto">
           <select
             aria-label={t("claude_session")}
@@ -298,15 +354,18 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
             className="max-w-44 appearance-none rounded-md border border-white/10 bg-white/5 py-1 pl-2 pr-7 text-xs"
           >
             <option value="">{t("claude_new_session")}</option>
-            {sessions.map((session) => <option key={session.id} value={session.id}>{session.title || t("claude_session")}</option>)}
+            <optgroup label={t("claude_project_sessions", { project: projectName })}>
+              {sessions.map((session) => <option key={session.id} value={session.id}>{session.title || t("claude_session")}</option>)}
+            </optgroup>
           </select>
           <ChevronDown className="pointer-events-none absolute right-2 top-1.5 h-3 w-3" aria-hidden />
         </div>
         <button type="button" onClick={() => chooseSession(null)} aria-label={t("claude_new_session")} className="grid h-8 w-8 place-items-center rounded-md hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d7ff45]/60"><Plus className="h-4 w-4" /></button>
+        <button type="button" disabled={sessions.length === 0 || sending} onClick={() => setShowClearConfirm(true)} aria-label={t("claude_clear_sessions")} className="grid h-8 w-8 place-items-center rounded-md text-white/55 hover:bg-red-400/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/60"><Trash2 className="h-4 w-4" /></button>
         <button type="button" onClick={onClose} aria-label={t("claude_close")} className="grid h-8 w-8 place-items-center rounded-md hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d7ff45]/60"><X className="h-4 w-4" /></button>
       </div>
 
-      <div className="flex-1 space-y-3 overflow-y-auto p-3">
+      {showSettings ? <ClaudeAgentSettings projectName={projectName} /> : <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {timeline.length === 0 && !draft && !sending ? (
           <div className="mt-16 text-center text-sm text-white/45">{t("claude_empty")}</div>
         ) : null}
@@ -351,9 +410,9 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
             </div>
           </div>
         ) : null}
-        {sending && !draft && !hasPendingPermission ? <ResponseSignal label={t("claude_responding")} /> : null}
+        {sending && !draft && !hasPendingPermission ? <ResponseSignal label={t(queued ? "claude_queued" : "claude_responding")} /> : null}
         <div ref={bottomRef} />
-      </div>
+      </div>}
 
       {usage ? (
         <div className="border-t border-white/10 px-3 py-1.5 text-[10px] text-white/45">
@@ -381,5 +440,17 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
         </div>
       </div>
     </aside>
+    <ConfirmDialog
+      open={showClearConfirm}
+      title={t("claude_clear_sessions_title")}
+      description={t("claude_clear_sessions_hint", { project: projectName })}
+      confirmLabel={t("claude_clear_sessions_confirm")}
+      loadingLabel={t("claude_clearing_sessions")}
+      tone="danger"
+      loading={clearing}
+      onConfirm={clearSessions}
+      onCancel={() => setShowClearConfirm(false)}
+    />
+    </>
   );
 }

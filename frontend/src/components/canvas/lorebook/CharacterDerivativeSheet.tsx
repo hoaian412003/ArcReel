@@ -27,6 +27,8 @@ interface CharacterDerivativeSheetProps {
   busy?: boolean;
   /** 版本回退后重新拉取项目数据。 */
   onRestore?: () => Promise<void> | void;
+  /** 图框比例；浮层内默认 16:9，角色卡上的脸部特写用 1:1。 */
+  ratio?: "16:9" | "1:1";
 }
 
 /**
@@ -44,6 +46,7 @@ export function CharacterDerivativeSheet({
   ownerHasSheet,
   busy = false,
   onRestore,
+  ratio = "16:9",
 }: CharacterDerivativeSheetProps) {
   const { t } = useTranslation("assets");
   // 加载失败按「哪一张图失败了」记，不是这一格失败了（同 RefThumbnail）：重生成 / 编辑 /
@@ -80,7 +83,7 @@ export function CharacterDerivativeSheet({
         style={{ border: "1px solid var(--color-hairline-soft)" }}
       >
         <PreviewableImageFrame src={sheetUrl && !imgError ? sheetUrl : null} alt={alt}>
-          <AspectFrame ratio="16:9">
+          <AspectFrame ratio={ratio}>
             <ImageFlipReveal
               src={sheetUrl && !imgError ? sheetUrl : null}
               alt={alt}
@@ -112,7 +115,7 @@ export function CharacterDerivativeSheet({
         )}
       </div>
 
-      <div className="mt-1.5 flex items-center gap-1">
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
         <GenerateButton
           onClick={() => void handleGenerate()}
           loading={generating}

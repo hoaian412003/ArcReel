@@ -221,7 +221,7 @@ export function AppRoutes() {
           </AuthGuard>
         </Route>
 
-        {/* Queue monitor / audit */}
+        {/* Queue monitor */}
         <Route path={ROUTE_APP_QUEUE}>
           <AuthGuard>
             <QueueMonitorPage />

@@ -359,6 +359,12 @@ async def test_remote_mcp_returns_typed_workflow_plan_and_rejects_bad_project(
     text_and_script = {
         "generate_episode_script",
         "generate_script_plan",
+        "get_script_plan_brief",
+        "submit_script_plan",
+        "get_director_brief",
+        "submit_director_plan",
+        "get_prompt_authoring_brief",
+        "submit_h3_prompts",
         "confirm_script_review",
         "patch_episode_script",
     }

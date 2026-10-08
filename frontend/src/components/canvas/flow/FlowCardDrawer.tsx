@@ -1,14 +1,18 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, RotateCcw, X } from "lucide-react";
 import type { FlowCard, FlowColumn } from "@/types/flow";
 import type { Screenplay } from "@/types/screenplay";
 import { ScriptReviewGate } from "@/components/canvas/timeline/ScriptReviewGate";
+import { ReferenceScriptPlanPreviewPanel } from "@/components/canvas/reference/ReferenceScriptPlanPreviewPanel";
+import { useProjectsStore } from "@/stores/projects-store";
+import { buildMentionLookup } from "@/utils/reference-mentions";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { SecondaryButton } from "@/components/ui/SecondaryButton";
 import { ICON_BTN_FILLED_CLS } from "@/components/ui/darkroom-tokens";
 import { DirectionReviewPanel } from "./DirectionReviewPanel";
 import { ScreenplayReviewPanel } from "./ScreenplayReviewPanel";
+import { AskAgentButton } from "@/components/claude/AskAgentButton";
 
 interface FlowCardDrawerProps {
   projectName: string;
@@ -53,8 +57,13 @@ export function FlowCardDrawer({
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const project = useProjectsStore((s) => s.currentProjectData);
+  const referenceVideo = project?.generation_mode === "reference_video";
+  const mentionLookup = useMemo(() => buildMentionLookup(project), [project]);
+
   const columnTitle = t(`flow_col_${card.column}`);
   const title = card.title || t("flow_card_untitled");
+  const reviewingScreenplay = card.column === "script_plan_review" && card.next_action === "review_screenplay";
 
   return (
     <aside
@@ -84,12 +93,20 @@ export function FlowCardDrawer({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {card.column === "script_plan_review" && card.next_action === "review_screenplay" ? (
+        {reviewingScreenplay ? (
           <ScreenplayReviewPanel
             projectName={projectName}
             episode={card.episode}
             version={reviewVersion}
             onLoaded={onScreenplayLoaded}
+            onApproved={() => onClose()}
+          />
+        ) : card.column === "script_plan_review" && referenceVideo ? (
+          <ReferenceScriptPlanPreviewPanel
+            key={card.episode}
+            projectName={projectName}
+            episode={card.episode}
+            lookup={mentionLookup}
           />
         ) : card.column === "script_plan_review" ? (
           contentMode === "drama" || contentMode === "narration" ? (
@@ -107,11 +124,12 @@ export function FlowCardDrawer({
             {card.next_action && (
               <p className="text-[12.5px] text-text">{t("flow_next_action", { action: card.next_action })}</p>
             )}
+            <AskAgentButton projectName={projectName} action={{ action: "continue_episode", episode: card.episode }} />
           </div>
         )}
       </div>
 
-      {human && (
+      {human && !reviewingScreenplay && (
         <footer className="flex flex-wrap justify-end gap-2 border-t border-hairline px-4 py-3">
           {card.column === "direction_review" && (
             <SecondaryButton onClick={onRedo} disabled={busy} leadingIcon={<RotateCcw className="h-3.5 w-3.5" />}>

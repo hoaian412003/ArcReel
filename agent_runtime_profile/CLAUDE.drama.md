@@ -97,7 +97,7 @@ Agent session 的当前工作目录（cwd）已绑定到当前项目根，**所�
   │  只持有：项目状态摘要 + 用户对话历史
   │  职责：查服务端计划、按受控动作决策、用户确认、dispatch 子智能体
   │
-  ├─ dispatch → analyze-assets               全局角色/场景/道具提取
+  ├─ （服务端）上传分集源文后自动分析资产     无需 dispatch
   ├─ dispatch → split-narration-segments     旁白/解说分镜拆分
   ├─ dispatch → normalize-drama-script       剧情演绎规范化剧本
   ├─ dispatch → split-reference-video-units  参考生视频的视频单元拆分
@@ -109,7 +109,7 @@ Agent session 的当前工作目录（cwd）已绑定到当前项目根，**所�
 
 | 类型 | 用途 | 示例 |
 |------|------|------|
-| **子智能体（聚焦任务）** | 需要大量上下文或推理分析 → 保护主 Agent context | analyze-assets、split-narration-segments |
+| **子智能体（聚焦任务）** | 需要大量上下文或推理分析 → 保护主 Agent context | split-narration-segments |
 | **Skill（在子智能体内调用）** | 确定性脚本执行 → API 调用、文件生成 | generate-script、generate-storyboard |
 | **主 Agent 直接操作** | 仅限轻量操作 | 读项目状态、简单文件操作、用户交互 |
 
@@ -153,8 +153,7 @@ Agent session 的当前工作目录（cwd）已绑定到当前项目根，**所�
 - 生成模式（storyboard ↔ reference_video）创建后不可更改，无绕过方式；宫格装配（`grid_storyboard`）
   由用户在设置页开关，Agent 无写入权限。该开关只影响后续生成，已生成的分镜图不会自动失效，
   须显式重新生成对应分镜才会按新装配方式出图
-- 分集规划的附加指令（如按章节对齐切分）**只对本批生效**；用户反复提出的同一要求记入项目记忆，
-  之后每批由你自行经 `plan_episodes` 的 `instructions` 带上；每集目标体量等全局性偏好经
+- 分集由用户在界面逐集上传源文，不做分集规划；每集目标体量等全局性偏好经
   `patch_project` 显式写入 `episode_target_units`
 - 内容确认后正式脚本是该集内容的唯一真相源、脚本规划只读：改台词 / 单元正文 / 对应原文一律在正式脚本上 `patch_episode_script`（对应原文须为本集源文逐字子串）；
   重跑脚本规划只用于整集重做，其确认会整份覆盖现有正式脚本（旧条目与其产物移除、手改提示词丢弃），须先取得用户同意

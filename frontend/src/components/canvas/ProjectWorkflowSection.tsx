@@ -7,9 +7,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { enqueueAssetAnalysis } from "@/actions/assets";
 import { API } from "@/api";
 import { STEP_RAILS } from "@/components/workflow/state-language";
 import { nextStepForAction } from "@/components/workflow/problem-views";
+import { useAppStore } from "@/stores/app-store";
 import { useCostStore } from "@/stores/cost-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import type { CostBreakdown, TextStepCost } from "@/types";
@@ -21,6 +23,9 @@ import {
   workflowStepCosts,
   type CostStepId,
 } from "@/utils/workflow-cost";
+
+/** 逐集取计划的集数上限；超过则只取当前集的计划，避免一次发出海量请求。 */
+const MAX_PER_EPISODE_PLANS = 30;
 
 const CARD_BG =
   "linear-gradient(180deg, oklch(0.22 0.012 265 / 0.55), oklch(0.19 0.010 265 / 0.40))";
@@ -79,11 +84,16 @@ export function ProjectWorkflowSection({
   const episodeKey = episodes.join(",");
   const snapshotRevision = useProjectsStore((s) => s.projectSnapshotRevisions[projectName] ?? 0);
   const costData = useCostStore((s) => s.costData);
+  const [analyzing, setAnalyzing] = useState(false);
 
   useEffect(() => {
     if (!projectName) return;
     const controller = new AbortController();
-    const targets: (number | null)[] = episodeKey ? episodeKey.split(",").map(Number) : [null];
+    // 每集一份计划要一次请求：集数很多（整本小说导入）时逐集取会一次性发出成百上千个请求，
+    // 超过上限改取服务端按项目进度选定的当前集这一份。
+    const listed = episodeKey ? episodeKey.split(",").map(Number) : [];
+    const targets: (number | null)[] =
+      listed.length > 0 && listed.length <= MAX_PER_EPISODE_PLANS ? listed : [null];
     Promise.all(
       targets.map((episode) =>
         API.getWorkflowPlan(projectName, { episode }, { signal: controller.signal }),
@@ -120,6 +130,17 @@ export function ProjectWorkflowSection({
 
   if (!plan) return null;
 
+  const analyzeAssets = async () => {
+    setAnalyzing(true);
+    try {
+      await enqueueAssetAnalysis(projectName);
+    } catch (err) {
+      useAppStore.getState().pushToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   const estimateTotal = mergeCost(
     ...progress.map((step) => costByStep.get(step.id)?.estimate),
   );
@@ -146,6 +167,17 @@ export function ProjectWorkflowSection({
         <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: "var(--color-text-3)" }}>
           {nextStepForAction(tWorkflow, plan.next_action.type)}
         </span>
+        {plan.next_action.type === "analyze_assets" ? (
+          <button
+            type="button"
+            onClick={() => void analyzeAssets()}
+            disabled={analyzing}
+            className="focus-ring shrink-0 rounded px-2 py-0.5 text-[11.5px] disabled:opacity-50"
+            style={{ color: "var(--color-accent-2)", border: "1px solid var(--color-accent-soft)" }}
+          >
+            {t("dashboard:asset_analysis_run")}
+          </button>
+        ) : null}
       </div>
 
       <ol className="num m-0 list-none p-0 text-[12px]">

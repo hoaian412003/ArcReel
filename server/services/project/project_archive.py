@@ -47,8 +47,10 @@ from lib.project.project_migrations.v1_to_v2_normalize_providers import (
 )
 from lib.project.project_schema import project_schema_is_current
 from lib.project.resource_paths import (
+    CANVAS_IMAGE_RESOURCE_TYPE,
     CHARACTER_DERIVATIVE_RESOURCE_TYPE,
     END_FRAME_RESOURCE_TYPE,
+    KEYFRAME_SHEET_RESOURCE_TYPE,
     resource_extension,
     resource_relative_path,
 )
@@ -94,6 +96,8 @@ CURRENT_EXPORT_VERSION_RETENTION: Mapping[str, CurrentExportVersionRetention] = 
         "storyboards": CurrentExportVersionRetention.NONE,
         END_FRAME_RESOURCE_TYPE: CurrentExportVersionRetention.NONE,
         "grids": CurrentExportVersionRetention.NONE,
+        KEYFRAME_SHEET_RESOURCE_TYPE: CurrentExportVersionRetention.NONE,
+        CANVAS_IMAGE_RESOURCE_TYPE: CurrentExportVersionRetention.NONE,
         CHARACTER_DERIVATIVE_RESOURCE_TYPE: CurrentExportVersionRetention.MANUAL_UPLOAD,
         "videos": CurrentExportVersionRetention.SELECTED,
         "reference_videos": CurrentExportVersionRetention.SELECTED,

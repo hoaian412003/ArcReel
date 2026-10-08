@@ -55,7 +55,7 @@ export default {
     live_bladerunner: "极简野蛮 · 赛博粒子",
     live_got: "冷色史诗 · 权谋",
     live_breaking_bad: "南美滤镜 · 犯罪美学",
-    live_kdrama: "柔光美颜 · 浪漫偶像",
+    live_kdrama: "柔和暖调 · 浪漫偶像",
     live_kurosawa: "黑白高对比 · 人性史诗",
     live_nolan: "IMAX · 冷蓝灰",
     live_tarantino: "高对比 · 暴力美学",

@@ -95,6 +95,8 @@ export interface ReferenceVideoUnit {
   /** 越南语配音台词；项目未启用配音或尚未生成时缺席。 */
   dub_lines?: DubLine[];
   /** 导演说明：脚本规划随单元产出，创作者可在解析预览里改；存量单元缺席。Mirrors ReferenceUnitDirection。 */
+  /** 导演说明（自由文本）。 */
+  direction?: string;
   unit_type?: ReferenceUnitType | null;
   brief?: string;
   beats?: DirectorBeat[];
@@ -199,6 +201,7 @@ export interface DirectorPerformance {
 
 /** 导演说明的可写字段；未传 = 不改，空串 / 空数组 = 清空。 */
 export interface UnitDirectionPatch {
+  direction?: string;
   unit_type?: ReferenceUnitType;
   brief?: string;
   beats?: DirectorBeat[];

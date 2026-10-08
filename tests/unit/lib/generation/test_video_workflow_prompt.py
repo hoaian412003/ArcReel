@@ -194,9 +194,11 @@ def test_variants_name_the_per_id_outcome_states(filename: str) -> None:
 def test_episodic_variants_name_the_registered_recovery_tools(filename: str) -> None:
     content = _skill(filename)
 
+    # drama 的分集由用户上传、不做分集规划，没有重置规划这条恢复路径
+    planning_tools = () if filename == "SKILL.drama.md" else ("reset_episode_planning",)
     for tool_id in (
         "generate_videos",
-        "reset_episode_planning",
+        *planning_tools,
         "complete_script_plan_rebuild",
         "get_episode_script",
         "patch_episode_script",

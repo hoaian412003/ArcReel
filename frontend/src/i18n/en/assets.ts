@@ -74,6 +74,7 @@ export default {
   "derivative_description_of": "Appearance change of \"{{name}}\"",
   "derivative_description_placeholder": "Wearing black heavy armor, everything else unchanged",
   "derivative_add": "Add derivative",
+  "face_add": "Add face close-up",
   "derivative_rename": "Rename derivative",
   "derivative_rename_confirm": "Confirm rename",
   "derivative_delete": "Delete derivative \"{{name}}\"",

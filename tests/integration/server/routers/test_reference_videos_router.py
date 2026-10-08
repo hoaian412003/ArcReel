@@ -1325,7 +1325,9 @@ def test_script_preview_derives_utterances_in_reading_order(
 ):
     """预览只回发声派生：utterances 按正文顺序 1-based 编号，另加降级 warning。"""
     _patch_video_caps(monkeypatch, {})
-    body = _preview(reference_videos_client, "镜头1：@[酒馆] 内景。\n@[张三]：{我来了}\n{那年冬天格外冷}").json()
+    body = _preview(
+        reference_videos_client, "镜头1：@[酒馆] 内景，@[张三] 抬头。\n@[张三]：{我来了}\n{那年冬天格外冷}"
+    ).json()
 
     assert set(body) == {"utterances", "warnings"}
     assert body["utterances"] == [
@@ -1359,7 +1361,7 @@ def test_script_preview_uses_project_voice_capabilities(
 ):
     _patch_video_caps(monkeypatch, {"voice_consistency": "none", "model": "silent-01"})
     body = _preview(reference_videos_client, "镜头1：@[酒馆] 开场。\n@[张三]：{我来了}").json()
-    assert [w["key"] for w in body["warnings"]] == ["ref_warn_silent_model"]
+    assert [w["key"] for w in body["warnings"]] == ["ref_warn_silent_model", "ref_warn_speaker_without_picture"]
     assert "silent-01" in body["warnings"][0]["message"]
 
 
@@ -1377,7 +1379,7 @@ def test_script_preview_warns_when_episode_is_silent(
         },
     )
     body = _preview(reference_videos_client, "镜头1：@[酒馆] 开场。\n@[张三]：{我来了}").json()
-    assert [w["key"] for w in body["warnings"]] == ["ref_warn_silent_episode"]
+    assert [w["key"] for w in body["warnings"]] == ["ref_warn_silent_episode", "ref_warn_speaker_without_picture"]
     assert body["warnings"][0]["message"] != "ref_warn_silent_episode"
     # 台词照常派生：无声只影响参考音频，不影响下发给供应商的台词文本
     assert [u["text"] for u in body["utterances"]] == ["我来了"]
@@ -2289,6 +2291,35 @@ def test_prompt_preview_renders_draft_with_projected_references_without_saving(
     assert precheck["hydrated_capability"] == "r2v"
     assert precheck["problems"][0]["code"] == "reference_images_clamped"
     assert precheck["problems"][0]["message"] in body["warnings"]
+
+
+def test_prompt_preview_still_renders_when_reference_images_are_not_generated_yet(
+    reference_videos_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """预览回答「提示词长什么样」：资产图还没生成不阻止查看，只在警告里提示缺图。"""
+    from server.routers import reference_videos as router_mod
+
+    monkeypatch.setattr(
+        router_mod,
+        "project_reference_unit_request",
+        fake_reference_request_projector(durations=(3, 6, 9), max_reference_images=9, text_to_video=False),
+    )
+    project_path = router_mod.get_project_manager().get_project_path("demo")
+    (project_path / "scenes" / "酒馆.png").unlink()
+    (project_path / "characters" / "张三.png").unlink()
+    uid = _seed_unit(reference_videos_client)
+    url = f"/api/v1/projects/demo/reference-videos/episodes/1/units/{uid}"
+
+    response = reference_videos_client.post(f"{url}/prompt-preview", json={"prompt": "@[酒馆] 门口，@[张三] 推开门。"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["unavailable"] is None
+    assert "<酒馆>" in body["text"]
+    assert "<张三>" in body["text"]
+    assert len(body["warnings"]) == 1
+    assert "酒馆" in body["warnings"][0]
+    assert body["references"] == []
 
 
 def test_prompt_preview_fails_closed_when_capabilities_cannot_resolve(

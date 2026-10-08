@@ -1,7 +1,7 @@
 """越南语配音台词在 unit 内的时间排布。
 
-开始时间的优先级：人工覆盖 > 从成片检测到的时间（不早于前一条配音的结束）> 按顺序首尾相接（相邻之间
-留一个固定间隙）。每行时长取已合成音频的真实时长，尚未合成时按 ``vi`` 语速估算；任何一行之后的行都
+开始时间的优先级：人工覆盖 > 导演定的发声时间窗 > 从成片检测到的时间（仅导演没给时间窗的存量行用）> 按顺序
+首尾相接（相邻之间留一个固定间隙）；导演与检测给的时间都不早于前一条配音的结束。每行时长取已合成音频的真实时长，尚未合成时按 ``vi`` 语速估算；任何一行之后的行都
 从该行结束处继续。
 """
 
@@ -19,7 +19,7 @@ DUB_LINE_GAP_SECONDS = 0.2
 DUB_LANGUAGE = "vi"
 
 
-StartSource = Literal["manual", "detected", "estimated"]
+StartSource = Literal["manual", "detected", "planned", "estimated"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +31,10 @@ class DubTimingInput:
     start_override: float | None = None
     #: 已合成音频的真实时长（秒）；None 即按语速估算。
     audio_duration: float | None = None
-    #: 从成片里检测到的原台词开始时间（秒）；无人工覆盖时优先于顺序排布。
+    #: 从成片里检测到的原台词开始时间（秒）；既无人工覆盖也没有导演时间窗时优先于顺序排布。
     detected_start: float | None = None
+    #: 导演为这条发声定的开始时间（秒）；没有人工覆盖时以它为准，画外音只有这一个来源。
+    planned_start: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,9 +46,9 @@ class DubSlot:
     duration_seconds: float
     #: 时长是估算值而非已合成音频的真实时长。
     estimated: bool
-    #: 开始时间的来源：人工覆盖 / 从成片检测 / 顺序排布估算。
+    #: 开始时间的来源：人工覆盖 / 从成片检测 / 导演定的时间窗 / 顺序排布估算。
     source: StartSource = "estimated"
-    #: 被推迟之前想要的开始时间（成片里检测到的时间）；只有检测来源才有。
+    #: 被推迟之前想要的开始时间（检测到的或导演定的时间）；只有这两种来源才有。
     requested_start: float | None = None
 
     @property
@@ -76,8 +78,11 @@ def schedule_dub_lines(lines: Sequence[DubTimingInput], *, speech_rate_override:
         requested: float | None = None
         if line.start_override is not None:
             start, source = line.start_override, "manual"
+        elif line.planned_start is not None:
+            # 导演定的时间窗是准绳；与相邻配音重叠时顺延到前一条结束之后
+            requested = line.planned_start
+            start, source = max(requested, cursor), "planned"
         elif line.detected_start is not None:
-            # 检测到的时间不让相邻两条配音重叠：前一条还没念完就顺延到它结束之后
             requested = line.detected_start
             start, source = max(requested, cursor), "detected"
         else:

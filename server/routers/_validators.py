@@ -83,6 +83,7 @@ _FIELD_MEDIA_TYPES: dict[str, str] = {
     "default_audio_backend": "audio",
     "text_backend_simple": "text",
     "text_backend_complex": "text",
+    "text_backend_review": "text",
     "default_text_backend": "text",
 }
 

@@ -1600,7 +1600,6 @@ class ScriptGenerator:
                 "reference prompt_authoring 草稿待处置；正式生成已中止，请先晋升或丢弃现有草稿",
                 code="draft_revision_conflict",
             )
-        max_refs = self._resolve_max_refs(facts)
         logger.info("正在为第 %d 集编写提示词（video_units，%d/%d 个单元）...", episode, len(units), len(targets.items))
         if keep_text:
             instructions = "\n\n".join(part for part in (instructions, KEEP_TEXT_INSTRUCTION) if part)
@@ -1624,7 +1623,35 @@ class ScriptGenerator:
                 max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
             )
         )
-        response_text = result.text
+        return await self._commit_reference_authoring(
+            episode,
+            filename,
+            targets,
+            facts,
+            result.text,
+            keep_text=keep_text,
+            formal_baseline=formal_baseline,
+            before_quarantine_commit=before_quarantine_commit,
+        )
+
+    async def _commit_reference_authoring(
+        self,
+        episode: int,
+        filename: str,
+        targets: PromptAuthoringTargets,
+        facts: PlanningVideoFacts,
+        response_text: str,
+        *,
+        keep_text: bool,
+        formal_baseline: str | None,
+        before_quarantine_commit: Callable[[], None] | None,
+    ) -> Path:
+        """把一份参考生视频提示词编写产出（文本模型的返回，或提示词编写子智能体提交的等价 JSON）合并、校验并落盘。
+
+        违约不丢弃：连同逐条报告落待修复草稿，由 Agent 经 promote_draft 重判晋升。
+        """
+        units = list(targets.entries)
+        max_refs = self._resolve_max_refs(facts)
 
         async def quarantine(exc: DraftViolation) -> DraftViolation:
             return await run_sync_transaction(
@@ -1668,6 +1695,58 @@ class ScriptGenerator:
         self._quality_probe(script_data, episode)
         logger.info("剧本已保存至 %s", output_path)
         return output_path
+
+    async def submit_reference_h3_prompts(
+        self,
+        episode: int,
+        prompts: Mapping[str, Mapping[str, str]],
+        *,
+        before_quarantine_commit: Callable[[], None] | None = None,
+    ) -> Path:
+        """H3 Ref2VA 提示词档：落盘提示词编写子智能体自己写的六段载荷，不调用文本模型。
+
+        ``prompts`` 是 ``{unit_id: {六段字段: 正文}}``。单元正文（``text``）一律原样保留，载荷对着现有正文做与模型产出
+        同一套机械校验；违约连同报告落 prompt_authoring 草稿。可分批提交，只改动提交的单元，并清除它们的待编写标记。
+        """
+        if not is_h3_ref2va(self.project_json):
+            raise PromptAuthoringTargetError("子智能体提交的提示词只适用于 H3 Ref2VA 提示词档的参考生视频项目")
+        self._script_plan_fingerprint = None
+        self._artifact_basis = None
+        self._script_plan_input_claim = None
+        filename = formal_script_filename(self.project_path, self.project_json, episode)
+        formal_baseline = await asyncio.to_thread(content_fingerprint, self.project_path / "scripts" / filename)
+        targets = await asyncio.to_thread(self._load_prompt_authoring_targets, episode, filename, list(prompts))
+        if targets is None:
+            raise PromptAuthoringTargetError(f"第 {episode} 集尚无正式脚本：请先完成脚本规划并确认，确认即生成正式脚本")
+        if targets.kind != "video_units" or self.content_mode == "ad":
+            raise PromptAuthoringTargetError("子智能体提交的提示词只适用于参考生视频的剧情 / 解说项目")
+        facts = await self._fetch_video_request_facts()
+        self._assert_reference_units_authorable(list(targets.entries), facts=facts)
+        if await asyncio.to_thread(self._reference_prompt_authoring_draft_revision, episode) is not None:
+            raise DraftViolation(
+                "reference prompt_authoring 草稿待处置；请先晋升或丢弃现有草稿，再提交新的提示词",
+                code="draft_revision_conflict",
+            )
+        response_text = json.dumps(
+            {
+                "title": f"第{episode}集",
+                "units": [
+                    {"text": str(unit.get("text") or ""), "h3_prompt": dict(prompts[str(unit["unit_id"])])}
+                    for unit in targets.entries
+                ],
+            },
+            ensure_ascii=False,
+        )
+        return await self._commit_reference_authoring(
+            episode,
+            filename,
+            targets,
+            facts,
+            response_text,
+            keep_text=True,
+            formal_baseline=formal_baseline,
+            before_quarantine_commit=before_quarantine_commit,
+        )
 
     def _parse_unit_texts(
         self, response_text: str, episode: int

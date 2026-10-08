@@ -217,3 +217,22 @@ def test_reference_report_flags_undirected_units_silent_speakers_and_gaps() -> N
 
 def test_reference_report_is_none_without_any_direction() -> None:
     assert build_director_report({"video_units": [_reference_unit("E1U01")]}, "video_units") is None
+
+
+def test_reference_report_treats_free_text_direction_as_directed_without_structural_warnings() -> None:
+    script = {
+        "video_units": [
+            _reference_unit("E1U01", direction="第 0 秒全景，阿离推门。他走进去。末帧：门槛内。"),
+            _reference_unit("E1U02", direction="第 0 秒近景，阿离望向灯火。开场接上一镜的门槛内。"),
+        ],
+        "director_plan": _plan(),
+    }
+
+    report = build_director_report(script, "video_units")
+
+    assert report is not None
+    assert [row["direction"] for row in report["rows"]] == [
+        "第 0 秒全景，阿离推门。他走进去。末帧：门槛内。",
+        "第 0 秒近景，阿离望向灯火。开场接上一镜的门槛内。",
+    ]
+    assert report["warnings"] == []

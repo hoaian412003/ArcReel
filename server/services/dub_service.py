@@ -12,7 +12,7 @@ from lib.backends.providers import PROVIDER_VIENEU
 from lib.generation.generation_queue import GenerationQueue, get_generation_queue
 from lib.infra.path_safety import safe_exists
 from lib.script.reference_video.dub_lines import align_dub_lines, dub_audio_is_current, unit_utterances
-from lib.script.script_models import DubLine
+from lib.script.script_models import DubLine, SpeechCue
 from lib.speech.dub_timeline import DubTimingInput, dub_overflow_seconds, schedule_dub_lines
 from server.services.tasks.dub_tasks import DUB_AUDIO_PAYLOAD, DUB_AUTO_TASK_TYPE
 
@@ -20,6 +20,14 @@ from server.services.tasks.dub_tasks import DUB_AUDIO_PAYLOAD, DUB_AUTO_TASK_TYP
 def dub_lines_of(unit: dict) -> list[DubLine]:
     try:
         return [DubLine.model_validate(raw) for raw in unit.get("dub_lines") or []]
+    except ValueError:
+        return []
+
+
+def speech_cues_of(unit: dict) -> list[SpeechCue]:
+    """导演给这个 unit 定的发声时间窗；结构非法按没有处理。"""
+    try:
+        return [SpeechCue.model_validate(raw) for raw in unit.get("speech_cues") or []]
     except ValueError:
         return []
 
@@ -36,6 +44,7 @@ def build_unit_dub(unit: dict) -> dict[str, Any]:
     status_by_index = {item.index: item.status for item in align_dub_lines(text, lines)}
     utterance_count = len(unit_utterances(text))
     live = [line for line in lines if line.index < utterance_count]
+    planned = {cue.index: cue for cue in speech_cues_of(unit) if cue.index < utterance_count}
     slots = schedule_dub_lines(
         [
             DubTimingInput(
@@ -44,6 +53,7 @@ def build_unit_dub(unit: dict) -> dict[str, Any]:
                 audio_duration=line.audio_duration_seconds if audio_is_current(line) else None,
                 # 原文改过的配音行，旧文本的检测时间不再可信
                 detected_start=line.detected_start_seconds if status_by_index.get(line.index) == "current" else None,
+                planned_start=planned[line.index].start_seconds if line.index in planned else None,
             )
             for line in live
         ]

@@ -220,7 +220,8 @@ class TestReferenceUnitsScriptPlanModel:
         schema = build_reference_units_script_plan_model([4, 6, 8], require_director=True).model_json_schema()
         assert "director_plan" in schema["required"]
         unit_def = next(d for d in schema["$defs"].values() if "text" in d.get("properties", {}))
-        assert set(REFERENCE_UNIT_DIRECTION_FIELDS) <= set(unit_def["required"])
+        # 自由文本 direction 是后加的另一种写法，不属于结构化导演说明的必填项
+        assert set(REFERENCE_UNIT_DIRECTION_FIELDS) - {"direction"} <= set(unit_def["required"])
 
     def test_dub_lines_optional_and_validated(self):
         draft = self._model().model_validate({"units": [self._unit()]})

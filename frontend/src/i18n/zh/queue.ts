@@ -2,7 +2,7 @@ import type enQueue from '../en/queue';
 
 export default {
   "title": "队列监控",
-  "subtitle": "生成 Worker、并发车道、任务与审计记录",
+  "subtitle": "生成 Worker、并发车道与任务",
   "back": "返回项目列表",
   "open_monitor": "队列监控",
   "tabs_label": "队列监控分区",
@@ -81,6 +81,10 @@ export default {
   "detail.close": "关闭",
   "detail.summary": "概要",
   "detail.error": "错误",
+  "detail.input": "输入",
+  "detail.input_empty": "暂无输入记录",
+  "detail.output": "输出",
+  "detail.output_empty": "暂无输出记录",
   "detail.events": "事件时间线",
   "detail.events_empty": "暂无事件记录",
   "detail.api_calls": "API 调用",

@@ -22,11 +22,17 @@ from server.tool_runtime import (
     GenerateDirectorPlanRequest,
     GenerateEpisodeScriptRequest,
     GenerateScriptPlanRequest,
+    GetDirectorBriefRequest,
+    GetPromptAuthoringBriefRequest,
+    GetScriptPlanBriefRequest,
     PatchDraftRequest,
     PatchScreenplayRequest,
     PromoteDraftRequest,
     ScreenplayRequest,
-    WriteScreenplayRequest,
+    SubmitDirectorPlanRequest,
+    SubmitH3PromptsRequest,
+    SubmitScreenplayRequest,
+    SubmitScriptPlanRequest,
     approve_screenplay,
     confirm_script_review,
     decide_direction_review,
@@ -35,12 +41,18 @@ from server.tool_runtime import (
     generate_episode_script,
     generate_script_plan,
     get_direction_report,
+    get_director_brief,
+    get_prompt_authoring_brief,
     get_screenplay,
+    get_script_plan_brief,
     open_draft,
     patch_draft,
     patch_screenplay,
     promote_draft,
-    write_screenplay,
+    submit_director_plan,
+    submit_h3_prompts,
+    submit_screenplay,
+    submit_script_plan,
 )
 
 _TEXT_GENERATION = "text_generation"
@@ -58,7 +70,8 @@ def _text_generation_structured(value: Any) -> dict[str, Any]:
 GENERATE_EPISODE_SCRIPT = ToolDeclaration(
     name="generate_episode_script",
     description=(
-        "提示词编写：为正式脚本中待编写的分镜 / 视频单元补出视觉层，输入是正式脚本自身的内容，不读脚本规划。"
+        "提示词编写（由服务端文本模型生成；H3 Ref2VA 提示词档的参考生视频项目不走这里，由子智能体经 "
+        "get_prompt_authoring_brief / submit_h3_prompts 撰写并提交）：为正式脚本中待编写的分镜 / 视频单元补出视觉层，输入是正式脚本自身的内容，不读脚本规划。"
         "默认只编写全部待编写条目；entry_ids 显式重写指定条目的视觉层。内容字段、备注、尾帧与已生成产物原样保留。"
         "ad 项目尚无正式脚本时整份生成。dry_run=true 时直接返回 prompt，不提交生成任务。"
     ),
@@ -70,10 +83,40 @@ GENERATE_EPISODE_SCRIPT = ToolDeclaration(
     projection=_text_generation_structured,
 )
 
+GET_PROMPT_AUTHORING_BRIEF = ToolDeclaration(
+    name="get_prompt_authoring_brief",
+    description=(
+        "H3 Ref2VA 提示词编写的写作简报（只读，不调用模型）：待编写的视频单元（正文、时长、已通过审阅的导演说明）、登记资产外观、"
+        "风格、参考图上限、可用的参考音频，以及 MiniMax H3 六段英文提示词的写作指南与占位规则。写提示词之前先读它。"
+        "entry_ids 点名时只取这些单元。仅 H3 Ref2VA 提示词档的参考生视频项目可用。"
+    ),
+    request_model=GetPromptAuthoringBriefRequest,
+    migration=Exempt("只读：渲染写作简报，不写任何文件；迁移失败时仍须可读，供诊断。"),
+    domain_key=_TEXT_GENERATION,
+    handler=get_prompt_authoring_brief,
+    projection=_text_generation_structured,
+)
+
+SUBMIT_H3_PROMPTS = ToolDeclaration(
+    name="submit_h3_prompts",
+    description=(
+        "提示词编写提交（H3 Ref2VA）：把你自己写好的单元 H3 六段英文提示词（subject_definitions / summary / retention_analysis / "
+        "detailed_description / overall_soundscape / non_diegetic_music）写进正式脚本，可分批。单元正文原样保留，不用提交。"
+        "服务端不调模型，对着现有正文做机械校验：占位与引用、台词逐字进 <d>、画外音不进 <d>、分镜时间戳、长度上限等。"
+        "有违约时正式脚本不改，产出连同逐条报告落到 prompt_authoring 草稿，按报告走 open_draft → patch_draft → promote_draft 修复。"
+    ),
+    request_model=SubmitH3PromptsRequest,
+    migration=BLOCKED,
+    domain_key=_TEXT_GENERATION,
+    handler=submit_h3_prompts,
+    projection=_text_generation_structured,
+)
+
 GENERATE_SCRIPT_PLAN = ToolDeclaration(
     name="generate_script_plan",
     description=(
-        "按项目创作类型生成结构化 script_plan：剧情分镜、旁白分镜或参考生视频单元。"
+        "按项目创作类型由服务端文本模型生成结构化 script_plan：剧情分镜或旁白分镜。"
+        "参考生视频项目不走这里（由子智能体经 get_script_plan_brief / submit_script_plan 撰写并提交）；"
         "广告/短片项目无 script_plan。dry_run=true 时直接返回 prompt，不提交生成任务。"
     ),
     request_model=GenerateScriptPlanRequest,
@@ -81,6 +124,37 @@ GENERATE_SCRIPT_PLAN = ToolDeclaration(
     domain_key=_TEXT_GENERATION,
     handler=generate_script_plan,
     long_task=True,
+    projection=_text_generation_structured,
+)
+
+GET_SCRIPT_PLAN_BRIEF = ToolDeclaration(
+    name="get_script_plan_brief",
+    description=(
+        "参考生视频单元拆解的写作简报（只读，不调用模型）：本集源文、登记的角色 / 场景 / 道具名、已通过剧本、"
+        "按引用状态生效的时长档位、单元参考图上限、口播语速、引用语法规范与场景引用规则。"
+        "写 units 之前先读它；提交时校验的就是这里写明的约束。仅参考生视频项目可用。"
+    ),
+    request_model=GetScriptPlanBriefRequest,
+    migration=Exempt("只读：渲染写作简报，不写任何文件；迁移失败时仍须可读，供诊断。"),
+    domain_key=_TEXT_GENERATION,
+    handler=get_script_plan_brief,
+    projection=_text_generation_structured,
+)
+
+SUBMIT_SCRIPT_PLAN = ToolDeclaration(
+    name="submit_script_plan",
+    description=(
+        "单元拆解提交（参考生视频）：把你自己写好的视频单元表交给服务端。每个单元是一次视频生成调用，含 duration_seconds、"
+        "source_text（本集源文逐字片段）、text（引用语法正文：@[资产名]、@[角色]{台词}、{画外音}）；"
+        "项目启用配音时另带 dub_lines；有已通过剧本时每个单元须带 scene_no（所属剧本场次，从 1 起）。unit_id 由服务端编号。"
+        "服务端不调模型，只机械校验：时长落在该单元引用状态对应的生效档位、source_text 是源文逐字子串、正文语法与资产引用、"
+        "参考图上限、台词念得完、整集覆盖源文、与已通过剧本对齐。有违约时正式文件不写，产出连同逐条违约报告落到草稿，"
+        "按报告走 open_draft → patch_draft → promote_draft 修复，不要重新整份提交。通过且有已通过剧本时自动完成内容确认。"
+    ),
+    request_model=SubmitScriptPlanRequest,
+    migration=BLOCKED,
+    domain_key=_TEXT_GENERATION,
+    handler=submit_script_plan,
     projection=_text_generation_structured,
 )
 
@@ -98,19 +172,21 @@ CONFIRM_SCRIPT_REVIEW = ToolDeclaration(
     handler=confirm_script_review,
 )
 
-WRITE_SCREENPLAY = ToolDeclaration(
-    name="write_screenplay",
+SUBMIT_SCREENPLAY = ToolDeclaration(
+    name="submit_screenplay",
     description=(
-        "编剧步骤：把本集源文改编为按场次组织、面向审阅者的可读剧本（标题、看点、逐场标题 / 剧情 / 预计时长 / 正文），"
-        "整份写入 drafts/episode_N/screenplay.json，已有剧本被替换且审阅记录清空。旁白 / 剧情项目的分镜与参考生视频两条路线共用；"
-        "广告没有剧本规划，不走这一步。总时长由各场预计时长相加得出。dry_run=true 时直接返回 prompt，不提交生成任务。"
+        "编剧提交：把你自己写好的本集剧本交给服务端落盘。剧本由「场」组成，每场是按发生顺序排列的有类型节拍："
+        "action（动作 / 环境，须给 seconds）、dialogue（一句对白，须给 speaker，可给 tone）、voice_over（一句画外音）。"
+        "服务端把节拍确定性地渲染成存盘格式，并由台词字数按口播语速加动作秒数算出每场预计时长、总时长，时长不取自你。"
+        "整份替换已有剧本且清空审阅记录。检查分两档：error（如无任何台词、非中文项目里出现中文字符、单句台词超硬上限）"
+        "拒绝落盘并返回原因；warning（台词偏长、说话人不在登记角色、总时长偏离目标、开场冷场、集尾落在画外音、"
+        "某场无动作、某场对白过多）照常落盘并回报，按质量要求修改后可重新提交整份剧本。"
+        "旁白 / 剧情项目的分镜与参考生视频两条路线共用；广告没有剧本规划，不走这一步。"
     ),
-    request_model=WriteScreenplayRequest,
+    request_model=SubmitScreenplayRequest,
     migration=BLOCKED,
-    domain_key=_TEXT_GENERATION,
-    handler=write_screenplay,
-    long_task=True,
-    projection=_text_generation_structured,
+    domain_key="screenplay_submission",
+    handler=submit_screenplay,
 )
 
 GET_SCREENPLAY = ToolDeclaration(
@@ -150,12 +226,41 @@ APPROVE_SCREENPLAY = ToolDeclaration(
     handler=approve_screenplay,
 )
 
+GET_DIRECTOR_BRIEF = ToolDeclaration(
+    name="get_director_brief",
+    description=(
+        "参考生视频导演的写作简报（只读，不调用模型）：全集视频单元（正文、台词、时长）、登记的角色 / 场景 / 道具外观、"
+        "已有导演说明、审阅者的修改意见，以及集级导演规划与单元导演说明的写作要求。写导演说明之前先读它。"
+        "entry_ids 点名时只修订这些单元。仅参考生视频项目可用。"
+    ),
+    request_model=GetDirectorBriefRequest,
+    migration=Exempt("只读：渲染写作简报，不写任何文件；迁移失败时仍须可读，供诊断。"),
+    domain_key=_TEXT_GENERATION,
+    handler=get_director_brief,
+    projection=_text_generation_structured,
+)
+
+SUBMIT_DIRECTOR_PLAN = ToolDeclaration(
+    name="submit_director_plan",
+    description=(
+        "导演提交（参考生视频）：把你自己写好的导演结果写回正式脚本。director_plan 是集级规划（本集意图、情绪弧线、基调、意象），"
+        "整份替换；units 是若干单元的导演说明，每个单元一段自由文本 direction（镜头、表演与声音、台词落位、同期声与配乐、末帧与衔接），"
+        "可分批提交，未提交的单元保持原样。服务端不调模型，只做机械检查：单元 id 存在、说明不空泛、集级规划形状；"
+        "角色台词没出现在说明里时返回提示。全部单元与集级规划齐了，这一集才进入人工审阅。"
+    ),
+    request_model=SubmitDirectorPlanRequest,
+    migration=BLOCKED,
+    domain_key=_TEXT_GENERATION,
+    handler=submit_director_plan,
+    projection=_text_generation_structured,
+)
+
 GENERATE_DIRECTOR_PLAN = ToolDeclaration(
     name="generate_director_plan",
     description=(
-        "导演步骤：为本集正式脚本写集级导演规划与逐条目导演说明，写回正式脚本，不动待编写标记。"
-        "分镜图生视频路线写逐分镜的镜头角度 / 景别 / 运动与意图、逐角色表演、前后衔接；参考生视频路线写逐单元的"
-        "镜头表（切入秒数、取景、运镜、动作）、逐角色表演与声音、台词落在哪一镜、同期声与配乐、末帧与衔接。"
+        "导演步骤（分镜图生视频路线，由服务端文本模型生成）：为本集正式脚本写集级导演规划与逐分镜的镜头角度 / 景别 / "
+        "运动与意图、逐角色表演、前后衔接，写回正式脚本，不动待编写标记。参考生视频项目不走这里（由子智能体经 "
+        "get_director_brief / submit_director_plan 撰写并提交）。"
         "只适用于旁白 / 剧情项目，且该集仍有待编写条目；广告不走这一步。entry_ids 只修订指定条目（须已有完整导演结果），"
         "省略时整集导演；"
         "要求修改时审阅者的意见取自该集的导演审阅记录，附加意见走 instructions。导演产出须过机械校验，违约整体拒绝并回报。"
@@ -236,14 +341,20 @@ DISCARD_DRAFT = ToolDeclaration(
 )
 
 SCRIPT_AUTHORING_TOOLS = (
-    WRITE_SCREENPLAY,
+    SUBMIT_SCREENPLAY,
     GET_SCREENPLAY,
     PATCH_SCREENPLAY,
     APPROVE_SCREENPLAY,
     GENERATE_EPISODE_SCRIPT,
     GENERATE_SCRIPT_PLAN,
+    GET_SCRIPT_PLAN_BRIEF,
+    SUBMIT_SCRIPT_PLAN,
     CONFIRM_SCRIPT_REVIEW,
     GENERATE_DIRECTOR_PLAN,
+    GET_DIRECTOR_BRIEF,
+    SUBMIT_DIRECTOR_PLAN,
+    GET_PROMPT_AUTHORING_BRIEF,
+    SUBMIT_H3_PROMPTS,
     GET_DIRECTION_REPORT,
     DECIDE_DIRECTION_REVIEW,
     OPEN_DRAFT,
@@ -261,11 +372,17 @@ __all__ = [
     "GENERATE_EPISODE_SCRIPT",
     "GENERATE_SCRIPT_PLAN",
     "GET_DIRECTION_REPORT",
+    "GET_DIRECTOR_BRIEF",
+    "GET_PROMPT_AUTHORING_BRIEF",
     "GET_SCREENPLAY",
+    "GET_SCRIPT_PLAN_BRIEF",
     "OPEN_DRAFT",
     "PATCH_DRAFT",
     "PATCH_SCREENPLAY",
     "PROMOTE_DRAFT",
     "SCRIPT_AUTHORING_TOOLS",
-    "WRITE_SCREENPLAY",
+    "SUBMIT_DIRECTOR_PLAN",
+    "SUBMIT_H3_PROMPTS",
+    "SUBMIT_SCREENPLAY",
+    "SUBMIT_SCRIPT_PLAN",
 ]

@@ -13,6 +13,9 @@ from lib.project.asset_types import ASSET_SPECS, DERIVATIVES_FIELD, resolve_asse
 from lib.project.project_manager import ProjectManager
 from lib.project.source_revision import SourceRevisionBlocker, SourceScope, compute_source_revision
 
+#: ``workflow`` 下记录「各源文单元已按哪份内容指纹分析过」的字段。
+ANALYZED_UNITS_FIELD = "analyzed_units"
+
 
 class AssetInventoryError(ValueError):
     """Base class for inventory completion failures."""
@@ -56,8 +59,14 @@ def complete_asset_inventory(
     scope: SourceScope,
     expected_source_revision: object,
     entries: object = None,
+    analyzed_units: Mapping[str, str] | None = None,
 ) -> AssetInventoryCompletion:
-    """Validate and atomically persist extracted assets plus their inventory fact."""
+    """Validate and atomically persist extracted assets plus their inventory fact.
+
+    ``analyzed_units`` maps an analysed source unit (an episode number or a source path) to the
+    content fingerprint it was analysed at; it is merged into ``workflow.analyzed_units`` in the same
+    transaction so the next incremental analysis only re-reads units whose text has changed.
+    """
 
     if not isinstance(expected_source_revision, str) or PREFIXED_DIGEST_RE.fullmatch(expected_source_revision) is None:
         raise AssetInventoryInvalidRequest("expected_source_revision must be a sha256-v1 revision")
@@ -109,6 +118,11 @@ def complete_asset_inventory(
             "source_revision": revision.revision,
             "completed_at": datetime.now(UTC).isoformat(),
         }
+        if analyzed_units:
+            recorded = workflow.get(ANALYZED_UNITS_FIELD)
+            merged = dict(recorded) if isinstance(recorded, Mapping) else {}
+            merged.update(analyzed_units)
+            workflow[ANALYZED_UNITS_FIELD] = merged
         completed.append(
             AssetInventoryCompletion(
                 scope=completed_scope,
@@ -184,6 +198,7 @@ def _prepare_entries(entries: object) -> dict[str, dict[str, dict[str, Any]]]:
 
 
 __all__ = [
+    "ANALYZED_UNITS_FIELD",
     "AssetInventoryCompletion",
     "AssetInventoryError",
     "AssetInventoryInvalidRequest",

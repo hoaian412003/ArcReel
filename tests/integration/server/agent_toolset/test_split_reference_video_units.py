@@ -20,7 +20,6 @@ from tests.integration.server.agent_tool_support import (
     run_rv_split,
     rv_character_sheet,
     rv_directed_unit,
-    rv_generator_returning,
     rv_project,
     rv_quarantine_path,
     rv_script_plan_path,
@@ -269,13 +268,13 @@ async def test_reference_split_planning_borrows_planning_tiers_for_endpoint_fixe
     assert caps.text_problem is None
 
 
-async def test_split_reference_video_units_dry_run(fake_ctx: ToolHarness, video_request_facts) -> None:
+async def test_script_plan_brief_carries_the_authoring_context(fake_ctx: ToolHarness, video_request_facts) -> None:
     rv_source(fake_ctx)
 
-    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1, "dry_run": True})
+    out = await run_declared_tool("get_script_plan_brief", fake_ctx, {"episode": 1})
     assert out.problem is None, out
     prompt_text = said(out)
-    assert "DRY RUN" in prompt_text
+    assert "submit_script_plan" in prompt_text
     # 集号、资产候选与能力约束进 prompt；引用语法规范随之注入
     assert "第 1 集" in prompt_text
     assert "张三" in prompt_text
@@ -287,16 +286,12 @@ async def test_split_reference_video_units_dry_run(fake_ctx: ToolHarness, video_
 async def test_split_reference_video_units_happy_derives_structure(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
-    """happy path：LLM 只写扁平正文，正文逐字落盘，只有 unit_id 由工具机械派生。"""
-    from server import text_generation as mod
-
+    """happy path：子智能体只写扁平正文，正文逐字落盘，只有 unit_id 由工具机械派生。"""
     rv_source(fake_ctx)
-    captured: dict[str, Any] = {}
     text = "@[张三] 走向 @[村口]\n@[张三] 停下脚步"
     units = [rv_unit(text)]
-    monkeypatch.setattr(mod.TextGenerator, "create", rv_generator_returning(units, captured))
 
-    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1})
+    out = await run_rv_split(fake_ctx, monkeypatch, units)
     assert out.problem is None, out
 
     saved = json.loads(rv_script_plan_path(fake_ctx).read_text(encoding="utf-8"))
@@ -307,23 +302,16 @@ async def test_split_reference_video_units_happy_derives_structure(
     assert "references" not in unit
     assert derived_reference_names(fake_ctx, unit["text"]) == ["张三", "村口"]
     assert unit["source_text"] == _RV_NOVEL
-    assert captured["task_type"] is mod.TextTaskType.SCRIPT
-    assert captured["create_project_name"] == "demo"
-    assert captured["generate_project_name"] == "demo"
 
 
 async def test_split_leaves_direction_to_the_director_step(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
     """单元拆解只定内容：落盘的 script_plan 不带集级导演规划，也不带 unit 级导演说明。"""
-    from server import text_generation as mod
-
     rv_source(fake_ctx)
     units = [rv_unit("@[张三] 起身"), rv_unit("@[张三] 出门")]
-    # 模型在顶层多写了一份导演规划：顶层多余字段被忽略，不进 script_plan。
-    monkeypatch.setattr(mod.TextGenerator, "create", rv_generator_returning(units, with_director_plan=True))
 
-    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1})
+    out = await run_rv_split(fake_ctx, monkeypatch, units)
 
     assert out.problem is None, out
     saved = json.loads(rv_script_plan_path(fake_ctx).read_text(encoding="utf-8"))
@@ -335,15 +323,11 @@ async def test_split_rejects_unit_level_director_fields(
     fake_ctx: ToolHarness, monkeypatch, video_request_facts
 ) -> None:
     """导演说明不属于拆解的产出：单元里带导演字段时过不了产出结构校验，什么都不落盘。"""
-    from server import text_generation as mod
-
     rv_source(fake_ctx)
-    monkeypatch.setattr(mod.TextGenerator, "create", rv_generator_returning([rv_directed_unit("@[张三] 起身")]))
 
-    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1})
+    out = await run_rv_split(fake_ctx, monkeypatch, [rv_directed_unit("@[张三] 起身")])
 
     assert out.problem is not None
-    assert "结构校验失败" in said(out)
     assert not rv_script_plan_path(fake_ctx).exists()
     assert not rv_quarantine_path(fake_ctx).exists()
 
@@ -544,7 +528,7 @@ async def test_split_reference_video_units_rejects_braces_in_description(
 
 
 async def test_split_reference_video_units_no_source(fake_ctx: ToolHarness) -> None:
-    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1})
+    out = await run_declared_tool("get_script_plan_brief", fake_ctx, {"episode": 1})
     assert out.problem is not None
 
 
@@ -552,9 +536,9 @@ async def test_split_reference_video_units_injects_instructions(fake_ctx: ToolHa
     rv_source(fake_ctx)
 
     out = await run_declared_tool(
-        "generate_script_plan",
+        "get_script_plan_brief",
         fake_ctx,
-        {"episode": 1, "dry_run": True, "instructions": "单 unit 出场人物尽量不超过两人"},
+        {"episode": 1, "instructions": "单 unit 出场人物尽量不超过两人"},
     )
     assert out.problem is None, out
     prompt_text = said(out)
@@ -677,12 +661,12 @@ async def test_split_prompt_asks_for_dub_lines_only_when_the_project_enables_dub
     fake_ctx: ToolHarness, video_request_facts
 ) -> None:
     rv_source(fake_ctx)
-    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1, "dry_run": True})
+    out = await run_declared_tool("get_script_plan_brief", fake_ctx, {"episode": 1})
     assert "dub_lines" not in said(out)
 
     fake_ctx.pm.project_payload["characters"]["张三"]["gender"] = "female"
     _enable_dub(fake_ctx, narrator_gender="female")
-    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1, "dry_run": True})
+    out = await run_declared_tool("get_script_plan_brief", fake_ctx, {"episode": 1})
     prompt = said(out)
     assert "dub_lines" in prompt
     assert "张三：female" in prompt
@@ -765,3 +749,69 @@ def test_formal_units_flatten_into_the_draft_shape_with_slim_dub_lines() -> None
 
     assert flat[0]["dub_lines"] == [_DUB_LINE_0]
     assert "dub_lines" not in flat[1]
+
+
+async def test_generate_script_plan_refuses_reference_video_projects(fake_ctx: ToolHarness) -> None:
+    """参考生视频的单元表由子智能体写，服务端不再替它调文本模型。"""
+    rv_source(fake_ctx)
+
+    out = await run_declared_tool("generate_script_plan", fake_ctx, {"episode": 1})
+
+    assert out.problem is not None
+    assert out.problem.code == "generation_refused"
+    assert "submit_script_plan" in out.problem.detail
+    assert not rv_script_plan_path(fake_ctx).exists()
+
+
+@pytest.mark.parametrize("tool", ["get_script_plan_brief", "submit_script_plan"])
+async def test_script_plan_authoring_tools_serve_only_reference_video_projects(
+    fake_ctx: ToolHarness, tool: str
+) -> None:
+    rv_source(fake_ctx)
+    rv_project(fake_ctx, generation_mode="storyboard")
+    args: dict[str, Any] = {"episode": 1}
+    if tool == "submit_script_plan":
+        args["units"] = [rv_unit("@[张三] 起身")]
+
+    out = await run_declared_tool(tool, fake_ctx, args)
+
+    assert out.problem is not None
+    assert out.problem.code == "generation_refused"
+    assert "generate_script_plan" in out.problem.detail
+
+
+@pytest.mark.parametrize("tool", ["get_prompt_authoring_brief", "submit_h3_prompts"])
+async def test_h3_authoring_tools_need_the_h3_prompt_profile(fake_ctx: ToolHarness, tool: str) -> None:
+    rv_source(fake_ctx)
+    args: dict[str, Any] = {"episode": 1}
+    if tool == "submit_h3_prompts":
+        section = {
+            "subject_definitions": "s",
+            "summary": "s",
+            "retention_analysis": "s",
+            "detailed_description": "s",
+            "overall_soundscape": "s",
+            "non_diegetic_music": "N/A",
+        }
+        args["units"] = [{"unit_id": "E1U01", **section}]
+
+    out = await run_declared_tool(tool, fake_ctx, args)
+
+    assert out.problem is not None
+    assert out.problem.code == "generation_refused"
+    assert "H3" in out.problem.detail
+
+
+async def test_generate_episode_script_refuses_h3_projects(fake_ctx: ToolHarness) -> None:
+    """H3 Ref2VA 项目的提示词由子智能体写，服务端不再替它调文本模型。"""
+    rv_source(fake_ctx)
+    fake_ctx.pm.project_payload["video_prompt_profile"] = "h3_ref2va"
+    (fake_ctx.project_path / "project.json").write_text(
+        json.dumps(fake_ctx.pm.project_payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+    out = await run_declared_tool("generate_episode_script", fake_ctx, {"episode": 1})
+
+    assert out.problem is not None
+    assert out.problem.code == "generation_refused"
+    assert "submit_h3_prompts" in out.problem.detail

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { EpisodeCard } from "./EpisodeCard";
 import type { EpisodeMeta } from "@/types/project";
@@ -86,3 +87,22 @@ function unplannedEpisode(): EpisodeMeta {
     videos: { total: 0, available: 0, stale: 0 },
   });
 }
+
+describe("EpisodeCard delete button", () => {
+  it("is offered only when a delete handler is wired, and does not open the episode when used", async () => {
+    const onDelete = vi.fn();
+    const onClick = vi.fn();
+    const { rerender } = render(
+      <EpisodeCard ep={makeEpisode()} active={false} onClick={onClick} route="storyboard" />,
+    );
+    expect(screen.queryByRole("button", { name: "删除本集" })).not.toBeInTheDocument();
+
+    rerender(
+      <EpisodeCard ep={makeEpisode()} active={false} onClick={onClick} route="storyboard" onDelete={onDelete} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "删除本集" }));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+});

@@ -549,51 +549,6 @@ def build_director_prompt(
     )
 
 
-def build_screenplay_prompt(
-    *,
-    novel_text: str,
-    project_overview: dict,
-    style: str | None,
-    characters: dict,
-    scenes: dict,
-    props: dict,
-    episode: int,
-    source_kind: str = "novel",
-    target_language: str = "中文",
-    source_language: str | None = None,
-    speech_rate_override: float | None = None,
-    episode_target_duration: int | None = None,
-    episode_outline: dict | None = None,
-    next_episode_outline: dict | None = None,
-    instructions: str | None = None,
-) -> str:
-    """编剧步骤 prompt：源文 → 面向审阅者的单集剧本（``ScreenplayDraft``），含逐场预计时长。
-
-    narration / drama 两种内容类型与两条生成路线共用同一份模版（``text/screenplay``）。时长相关的能力档位
-    （``supported_durations`` 等）不在本阶段：那是后续单元拆解的事，这里只按口播语速与动作长短估算。
-    ``source_kind`` 非 ``"screenplay"`` 的取值一律按 ``"novel"`` 渲染；``source_language`` 非字符串回退默认语速。
-    """
-    source_language = source_language if isinstance(source_language, str) else None
-    return builtin_templates.render(
-        "text/screenplay",
-        source_kind="screenplay" if source_kind == "screenplay" else "novel",
-        target_language=target_language,
-        project_overview=_overview_slot(project_overview),
-        style=_stripped_text(style),
-        character_names=asset_reference_names("character", characters),
-        scene_names=asset_reference_names("scene", scenes),
-        prop_names=asset_reference_names("prop", props),
-        novel_text=novel_text,
-        episode=episode,
-        speech_rate=f"{speech_rate_units_per_second(source_language, speech_rate_override):g}",
-        speech_unit=reading_unit_noun(source_language),
-        episode_target_duration=episode_target_duration,
-        episode_outline=_outline_slot(episode_outline),
-        next_episode_outline=_outline_slot(next_episode_outline),
-        instructions=instructions or None,
-    )
-
-
 def build_overview_prompt(source_content: str, source_kind: str = "novel", target_language: str = "中文") -> str:
     """构建项目概述（overview）生成 prompt，措辞在内置模版 ``text/source_overview``。
 
