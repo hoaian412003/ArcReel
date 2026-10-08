@@ -2894,4 +2894,7 @@ export default {
   'node_canvas_derivative_sheet': 'Sheet · {{name}}',
   'node_canvas_derivative_generate_hint': 'Chỉnh sửa ảnh sheet gốc theo mô tả thay đổi.',
   'node_canvas_derivative_delete_confirm': 'Xóa biến thể “{{name}}” và ảnh sheet của nó?',
+  'node_canvas_scene_sheet': 'Ảnh sheet cảnh',
+  'node_canvas_prop_sheet': 'Ảnh sheet đạo cụ',
+  'node_canvas_product_sheet': 'Ảnh sheet sản phẩm',
 } satisfies Record<keyof typeof enDashboard, string>;

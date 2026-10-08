@@ -271,3 +271,16 @@ async def test_derivative_generators_are_runnable_only_with_a_description_and_a_
     assert no_sheet.problem is not None
     assert no_sheet.problem.code == "canvas_derivative_owner_sheet_missing"
     assert _queue(ctx).calls == []
+
+
+async def test_scene_generators_run_the_scene_task_and_need_a_description(ctx: Services) -> None:
+    ctx.projects.add_scenes_batch("demo", {"茶楼": {"description": "旧楼"}, "空场": {"description": ""}})
+
+    run = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:scene_gen:茶楼"), ctx)
+    assert run.problem is None
+    call = _queue(ctx).calls[0]
+    assert (call["task_type"], call["resource_id"]) == ("scene", "茶楼")
+
+    blank = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:scene_gen:空场"), ctx)
+    assert blank.problem is not None
+    assert blank.problem.code == "canvas_character_description_required"

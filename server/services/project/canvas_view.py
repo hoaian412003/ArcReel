@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.canvas.graph import (
+    ASSET_GROUP_TYPES,
     KIND_CHAR_GEN,
     KIND_CHAR_REF,
     KIND_CHAR_SHEET,
@@ -26,6 +27,7 @@ from lib.canvas.graph import (
     KIND_UNIT,
     derived_id,
 )
+from lib.project.asset_types import ASSET_SPECS
 from lib.project.project_manager import ProjectManager, find_episode
 from lib.prompts.video_prompt_profile import is_h3_ref2va
 from lib.script.reference_video.h3_prompt import (
@@ -113,7 +115,11 @@ def build_project_view(
 
     ``h3_status`` 判定单元的 H3 提示词是 current / stale / missing，默认按脚本里的载荷机械校验。
     """
-    characters, character_edges = _character_nodes(pm, project_name, project, overrides)
+    characters, character_edges, next_y = _character_nodes(pm, project_name, project, overrides)
+    for asset_type in ASSET_GROUP_TYPES:
+        more_nodes, more_edges, next_y = _asset_group_nodes(pm, project_name, project, asset_type, next_y, overrides)
+        characters.extend(more_nodes)
+        character_edges.extend(more_edges)
     if not applicable(project):
         return characters, character_edges
     project_path = pm.get_project_path(project_name)
@@ -275,7 +281,7 @@ def _character_nodes(
     project_name: str,
     project: Mapping[str, Any],
     overrides: Mapping[str, Mapping[str, float]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], float]:
     """项目里的每个角色一个分组（按角色名），组内：描述文本 + 参考图 → 图片供应商 → 角色资产图。
 
     这些节点的内容都取自项目里存的角色条目（描述、参考图、资产图），生成走既有的角色资产图任务，
@@ -283,7 +289,7 @@ def _character_nodes(
     """
     characters = project.get("characters")
     if not isinstance(characters, Mapping) or not characters:
-        return [], []
+        return [], [], 0.0
     project_path = pm.get_project_path(project_name)
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
@@ -309,7 +315,7 @@ def _character_nodes(
                 "position": group_pos,
                 "width": CHARACTER_GROUP_WIDTH,
                 "height": height,
-                "data": {"name": name},
+                "data": {"name": name, "asset": "character"},
             }
         )
 
@@ -403,7 +409,79 @@ def _character_nodes(
                     _virtual_edge(d_gen, "image", d_sheet, "in"),
                 ]
             )
-    return nodes, edges
+    return nodes, edges, next_y
+
+
+#: 场景 / 道具 / 商品分组的高度（没有参考图节点，比角色组矮）与组宽（同角色组）。
+ASSET_GROUP_HEIGHT = 440
+
+
+def _asset_group_nodes(
+    pm: ProjectManager,
+    project_name: str,
+    project: Mapping[str, Any],
+    asset_type: str,
+    start_y: float,
+    overrides: Mapping[str, Mapping[str, float]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], float]:
+    """场景 / 道具 / 商品：每个资产一个分组，组内 描述 → 图片供应商 → 资产图，接在上一类分组下面。
+
+    与角色同构（描述与资产图都取自项目里的条目、生成走既有的资产图任务），只是没有参考图与衍生。
+    """
+    spec = ASSET_SPECS[asset_type]
+    entries = project.get(spec.bucket_key)
+    if not isinstance(entries, Mapping) or not entries:
+        return [], [], start_y
+    project_path = pm.get_project_path(project_name)
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    next_y = start_y
+    for name, entry in entries.items():
+        entry = entry if isinstance(entry, Mapping) else {}
+        sheet = entry.get(spec.sheet_field)
+        sheet = sheet if isinstance(sheet, str) and sheet else None
+        group_id = derived_id(asset_type, name)
+        default = {"x": float(CHARACTER_ORIGIN_X), "y": next_y}
+        next_y += ASSET_GROUP_HEIGHT + CHARACTER_GROUP_GAP
+        group_pos = dict(overrides.get(group_id) or default)
+        group_pos = {"x": float(group_pos["x"]), "y": float(group_pos["y"])}
+        nodes.append(
+            {
+                "id": group_id,
+                "type": "character",
+                "derived": True,
+                "position": group_pos,
+                "width": CHARACTER_GROUP_WIDTH,
+                "height": ASSET_GROUP_HEIGHT,
+                "data": {"name": name, "asset": asset_type},
+            }
+        )
+        common = {"asset": asset_type}
+        text_id = _char_child(
+            nodes,
+            group_id,
+            group_pos,
+            name,
+            f"{asset_type}_text",
+            "text",
+            _CHAR_TEXT_POS,
+            {**common, "text": str(entry.get("description") or "")},
+        )
+        gen_id = _char_child(
+            nodes, group_id, group_pos, name, f"{asset_type}_gen", "image_generate", _CHAR_GEN_POS, common
+        )
+        sheet_id = _char_child(
+            nodes,
+            group_id,
+            group_pos,
+            name,
+            f"{asset_type}_sheet",
+            "image",
+            _CHAR_SHEET_POS,
+            {**common, "path": sheet, "version": _version(project_path, sheet), "label": name, "role": "sheet"},
+        )
+        edges.extend([_virtual_edge(text_id, "text", gen_id, "prompt"), _virtual_edge(gen_id, "image", sheet_id, "in")])
+    return nodes, edges, next_y
 
 
 def _virtual_edge(source: str, source_handle: str, target: str, target_handle: str) -> dict[str, Any]:

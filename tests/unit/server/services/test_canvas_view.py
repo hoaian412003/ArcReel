@@ -1,5 +1,6 @@
 """画布项目视图：参考生视频项目里选中的集推导成集 / 单元 / 起始帧 / H3 节点与它们的虚拟连线。"""
 
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -202,3 +203,35 @@ def test_each_derivative_is_a_row_in_its_character_group_that_edits_the_base_she
     assert (d_text["id"], "text", d_gen["id"], "prompt") in inner
     assert (derived_id("char_sheet", "阿离"), "image", d_gen["id"], "image1") in inner
     assert (d_gen["id"], "image", d_sheet["id"], "in") in inner
+
+
+ASSET_PROJECT = {
+    "generation_mode": "storyboard",
+    "characters": {"阿离": {"description": "少女"}},
+    "scenes": {"茶楼": {"description": "旧楼", "scene_sheet": "scenes/茶楼.png"}},
+    "props": {"玉佩": {"description": "青色玉佩"}},
+    "products": {"马克杯": {"description": "白色马克杯", "product_sheet": ""}},
+}
+
+
+def test_scenes_props_and_products_get_description_generator_sheet_groups_below_the_characters(patched):
+    nodes, edges = canvas_view.build_project_view(patched, "demo", ASSET_PROJECT, [], {})
+    by_id = {n["id"]: n for n in nodes}
+
+    for asset, name in (("scene", "茶楼"), ("prop", "玉佩"), ("product", "马克杯")):
+        group = by_id[derived_id(asset, name)]
+        assert (group["type"], group["data"]["asset"]) == ("character", asset)
+        parts = [by_id[derived_id(f"{asset}_{part}", name)] for part in ("text", "gen", "sheet")]
+        assert [p["type"] for p in parts] == ["text", "image_generate", "image"]
+        assert all(p["parentId"] == group["id"] and p["data"]["asset"] == asset for p in parts)
+        inner = {(e["source"], e["target"]) for e in edges}
+        assert (parts[0]["id"], parts[1]["id"]) in inner
+        assert (parts[1]["id"], parts[2]["id"]) in inner
+
+    assert by_id[derived_id("scene_sheet", "茶楼")]["data"]["path"] == "scenes/茶楼.png"
+    assert by_id[derived_id("product_sheet", "马克杯")]["data"]["path"] is None
+    # 分组自上而下依次排开，互不重叠。
+    ordered = sorted((n for n in nodes if n["type"] == "character"), key=lambda n: n["position"]["y"])
+    assert [n["data"]["asset"] for n in ordered] == ["character", "scene", "prop", "product"]
+    for upper, lower in pairwise(ordered):
+        assert lower["position"]["y"] >= upper["position"]["y"] + upper["height"]

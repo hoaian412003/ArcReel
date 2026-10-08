@@ -2895,4 +2895,7 @@ export default {
   'node_canvas_derivative_sheet': '衍生资产图 · {{name}}',
   'node_canvas_derivative_generate_hint': '以本体资产图为底，按变化描述编辑出衍生资产图。',
   'node_canvas_derivative_delete_confirm': '删除衍生「{{name}}」及其资产图？',
+  'node_canvas_scene_sheet': '场景资产图',
+  'node_canvas_prop_sheet': '道具资产图',
+  'node_canvas_product_sheet': '商品资产图',
 } satisfies Record<keyof typeof enDashboard, string>;

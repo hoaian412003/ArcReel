@@ -2896,4 +2896,7 @@ export default {
   'node_canvas_derivative_sheet': 'Sheet · {{name}}',
   'node_canvas_derivative_generate_hint': 'Edits the base character sheet using the change description.',
   'node_canvas_derivative_delete_confirm': 'Delete the derivative “{{name}}” and its sheet?',
+  'node_canvas_scene_sheet': 'Scene sheet',
+  'node_canvas_prop_sheet': 'Prop sheet',
+  'node_canvas_product_sheet': 'Product sheet',
 };

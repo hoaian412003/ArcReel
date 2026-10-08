@@ -144,6 +144,9 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const agentPending = useClaudeStore((s) => s.pending[projectName] ?? false);
   const askAgent = useClaudeStore((s) => s.ask);
   const characters = useProjectsStore((s) => s.currentProjectData?.characters);
+  const scenes = useProjectsStore((s) => s.currentProjectData?.scenes);
+  const props = useProjectsStore((s) => s.currentProjectData?.props);
+  const products = useProjectsStore((s) => s.currentProjectData?.products);
   const characterAssets = useCharacterAssets(projectName);
   const [addingCharacter, setAddingCharacter] = useState(false);
   const [pickingCharacter, setPickingCharacter] = useState(false);
@@ -242,10 +245,24 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   );
 
   // 角色的增删与资产图变化（生成完成、版本恢复）发生在项目数据里，画布上对应的角色节点要跟着重读。
-  const characterSignature = useMemo(
-    () => Object.entries(characters ?? {}).map(([name, c]) => `${name}:${c.character_sheet ?? ""}:${c.reference_image ?? ""}:${c.description ?? ""}:${Object.entries(c.derivatives ?? {}).map(([k, d]) => `${k}=${d.character_sheet ?? ""}=${d.description}`).join(",")}`).join("|"),
-    [characters],
-  );
+  const characterSignature = useMemo(() => {
+    const sheetOf = (item: object): string =>
+      JSON.stringify([
+        (item as { description?: string }).description ?? "",
+        (item as { character_sheet?: string }).character_sheet ?? "",
+        (item as { scene_sheet?: string }).scene_sheet ?? "",
+        (item as { prop_sheet?: string }).prop_sheet ?? "",
+        (item as { product_sheet?: string }).product_sheet ?? "",
+        (item as { reference_image?: string }).reference_image ?? "",
+        Object.entries((item as { derivatives?: Record<string, { character_sheet?: string; description: string }> }).derivatives ?? {}).map(
+          ([k, d]) => [k, d.character_sheet ?? "", d.description],
+        ),
+      ]);
+    const buckets: (Record<string, object> | undefined)[] = [characters, scenes, props, products];
+    return buckets
+      .map((bucket) => Object.entries(bucket ?? {}).map(([name, item]) => `${name}=${sheetOf(item)}`).join("|"))
+      .join("||");
+  }, [characters, scenes, props, products]);
   const previousSignature = useRef(characterSignature);
   useEffect(() => {
     if (previousSignature.current === characterSignature) return;

@@ -635,7 +635,7 @@ MESSAGES = {
     "canvas_worker_offline": "The task queue service is not running; cannot submit generation tasks",
     "canvas_template_empty": "None of the selected nodes can go into a template (text, image provider, H3 writer)",
     "canvas_template_not_found": "Canvas template '{id}' does not exist",
-    "canvas_character_description_required": "Character '{name}' has no description yet; write one on the card before generating",
+    "canvas_character_description_required": "'{name}' has no description yet; write one before generating",
     "canvas_derivative_description_required": "Derivative '{name}' has no change description yet; write one before generating",
     "canvas_derivative_owner_sheet_missing": "The base character has no sheet yet; generate it before the derivative",
 }

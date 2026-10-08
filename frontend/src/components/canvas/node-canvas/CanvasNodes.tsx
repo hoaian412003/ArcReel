@@ -1,11 +1,12 @@
 import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Clapperboard, Film, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Plus, Sparkles, Type, Upload, User, Video, X } from "lucide-react";
+import { AlertTriangle, Box, Clapperboard, Film, Landmark, Package, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Plus, Sparkles, Type, Upload, User, Video, X } from "lucide-react";
 import { API } from "@/api";
 import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/types/canvas";
 import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
+import type { OtherAssetKind } from "@/components/canvas/lorebook/useCharacterAssets";
 import { useBusyNodeIds, useCanvasActions, useCharacterNodeContext } from "./canvas-context";
 import { ASPECT_RATIOS, PASSIVE_INPUT_HANDLE, isBusy } from "./canvas-rules";
 
@@ -89,8 +90,14 @@ function HandleLabel({ side, children }: { side: "left" | "right"; children: Rea
 }
 
 /** 角色分组里的节点（id 形如 `p:char_*:<角色名>`）：内容取自项目，写操作走角色接口，不能删。 */
+/** 资产分组（角色 / 场景 / 道具 / 商品）里的节点：内容取自项目，写操作走各自的资产接口，不能删。 */
 function isCharacterPart(id: string): boolean {
-  return id.startsWith("p:char_") || id.startsWith("p:deriv_");
+  return /^p:(char_|deriv_|scene_|prop_|product_)/.test(id);
+}
+
+/** 角色以外的资产（场景 / 道具 / 商品）里的节点所属类型；角色与普通节点返回 null。 */
+function otherAsset(data: CanvasNodeData): OtherAssetKind | null {
+  return data.asset === "scene" || data.asset === "prop" || data.asset === "product" ? data.asset : null;
 }
 
 function isDerivativePart(id: string): boolean {
@@ -119,7 +126,9 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     dirty.current = false;
+    const other = otherAsset(data);
     if (isDerivativePart(id)) void characters?.assets.saveDerivativeDescription(data.name ?? "", data.derivative ?? "", value);
+    else if (other) void characters?.assets.saveAssetDescription(other, data.name ?? "", value);
     else if (bound) void characters?.assets.saveDescription(data.name ?? "", value);
     else void setText(id, value);
   };
@@ -181,7 +190,12 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   // 角色资产图在生成队列里时，资产图节点显示占位。
   const busy =
     isBusy(data.status) ||
-    (data.role === "sheet" && Boolean(characters?.assets.generating.has(data.name ?? ""))) ||
+    (data.role === "sheet" &&
+      Boolean(
+        (otherAsset(data) ? characters?.assets.generatingAssets[otherAsset(data) as OtherAssetKind] : characters?.assets.generating)?.has(
+          data.name ?? "",
+        ),
+      )) ||
     (data.role === "derivative" && Boolean(characters?.assets.generatingDerivatives.has(`${data.name}/${data.derivative}`)));
   const failed = data.status === "failed";
   return (
@@ -193,7 +207,7 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
         data.role === "reference"
           ? t("node_canvas_character_reference")
           : data.role === "sheet"
-            ? t("node_canvas_character_sheet")
+            ? t(`node_canvas_${data.asset ?? "character"}_sheet`)
             : data.role === "derivative"
               ? t("node_canvas_derivative_sheet", { name: data.derivative })
               : (data.label ?? t("node_canvas_image_label"))
@@ -275,7 +289,11 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
   const busy = derivative
     ? Boolean(characters?.assets.generatingDerivatives.has(`${data.name}/${data.derivative}`))
     : bound
-      ? Boolean(characters?.assets.generating.has(data.name ?? ""))
+      ? Boolean(
+          (otherAsset(data) ? characters?.assets.generatingAssets[otherAsset(data) as OtherAssetKind] : characters?.assets.generating)?.has(
+            data.name ?? "",
+          ),
+        )
       : isBusy(data.status);
   return (
     <NodeShell
@@ -336,6 +354,7 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         disabled={busy}
         onClick={() => {
           if (derivative) characters?.assets.generateDerivative(data.name ?? "", data.derivative ?? "");
+          else if (otherAsset(data)) characters?.assets.generateAsset(otherAsset(data) as OtherAssetKind, data.name ?? "");
           else if (bound) characters?.assets.generate(data.name ?? "");
           else void run(id);
         }}
@@ -513,17 +532,27 @@ function CharacterGroupView({ data, selected }: NodeProps<CanvasFlowNode>) {
       className={`h-full w-full rounded-[16px] border border-dashed bg-white/[0.02] ${selected ? "border-accent/60" : "border-hairline-strong"}`}
     >
       <div className="flex items-center gap-2 px-4 py-3 text-[13px] font-medium text-text-2">
-        <User className="h-3.5 w-3.5" aria-hidden="true" />
+        {data.asset === "scene" ? (
+          <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
+        ) : data.asset === "prop" ? (
+          <Box className="h-3.5 w-3.5" aria-hidden="true" />
+        ) : data.asset === "product" ? (
+          <Package className="h-3.5 w-3.5" aria-hidden="true" />
+        ) : (
+          <User className="h-3.5 w-3.5" aria-hidden="true" />
+        )}
         <span className="truncate">{data.name}</span>
-        <button
-          type="button"
-          className={`nodrag ml-auto ${GHOST_BTN_CLS}`}
-          aria-expanded={adding}
-          onClick={() => setAdding((open) => !open)}
-        >
-          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-          {t("node_canvas_derivative_add")}
-        </button>
+        {data.asset && data.asset !== "character" ? null : (
+          <button
+            type="button"
+            className={`nodrag ml-auto ${GHOST_BTN_CLS}`}
+            aria-expanded={adding}
+            onClick={() => setAdding((open) => !open)}
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_derivative_add")}
+          </button>
+        )}
       </div>
       {adding ? (
         <form

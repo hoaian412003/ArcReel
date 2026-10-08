@@ -53,6 +53,12 @@ KIND_CHAR_SHEET = "char_sheet"
 KIND_DERIV_TEXT = "deriv_text"
 KIND_DERIV_GEN = "deriv_gen"
 KIND_DERIV_SHEET = "deriv_sheet"
+#: 与角色同构的「描述 → 图片供应商 → 资产图」分组：场景 / 道具 / 商品。组及其子节点的种类名为 ``<类型>``、
+#: ``<类型>_text``、``<类型>_gen``、``<类型>_sheet``。
+ASSET_GROUP_TYPES = ("scene", "prop", "product")
+_ASSET_KINDS = tuple(
+    kind for asset in ASSET_GROUP_TYPES for kind in (asset, f"{asset}_text", f"{asset}_gen", f"{asset}_sheet")
+)
 DERIVED_KINDS = (
     KIND_EPISODE,
     KIND_UNIT,
@@ -66,6 +72,7 @@ DERIVED_KINDS = (
     KIND_DERIV_TEXT,
     KIND_DERIV_GEN,
     KIND_DERIV_SHEET,
+    *_ASSET_KINDS,
 )
 #: 派生节点里复用通用节点外观与连线规则的那几类：派生种类 → 它扮演的节点类型。
 DERIVED_NODE_TYPE: dict[str, str] = {
@@ -76,6 +83,15 @@ DERIVED_NODE_TYPE: dict[str, str] = {
     KIND_DERIV_TEXT: "text",
     KIND_DERIV_GEN: "image_generate",
     KIND_DERIV_SHEET: "image",
+    **{
+        kind: node_type
+        for asset in ASSET_GROUP_TYPES
+        for kind, node_type in (
+            (f"{asset}_text", "text"),
+            (f"{asset}_gen", "image_generate"),
+            (f"{asset}_sheet", "image"),
+        )
+    },
 }
 
 #: 句柄的数据类型。连线只允许同类型句柄相连。
@@ -278,6 +294,14 @@ def latest_output(graph: dict[str, Any], generator_id: str, handle: str) -> dict
     return outputs[-1] if outputs else None
 
 
+def _sheet_of_generator(node_id: str) -> str:
+    """派生的图片供应商节点（``p:<x>_gen:<名>``）的输出就是同名的资产图节点（``p:<x>_sheet:<名>``）。"""
+    kind = derived_kind(node_id)
+    if kind is None or not kind.endswith("_gen"):
+        return node_id
+    return node_id.replace(f"p:{kind}:", f"p:{kind[: -len('_gen')]}_sheet:", 1)
+
+
 def _incoming(
     graph: dict[str, Any], node_id: str, handle: str, derived: Mapping[str, dict[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
@@ -291,11 +315,7 @@ def _incoming(
             continue
         if derived_kind(e["source"]) is not None:
             # 角色分组里图片供应商的输出就是该角色的资产图节点。
-            source_id = (
-                e["source"]
-                .replace(f"p:{KIND_CHAR_GEN}:", f"p:{KIND_CHAR_SHEET}:", 1)
-                .replace(f"p:{KIND_DERIV_GEN}:", f"p:{KIND_DERIV_SHEET}:", 1)
-            )
+            source_id = _sheet_of_generator(e["source"])
             if derived is not None and source_id in derived:
                 sources.append(derived[source_id])
         else:

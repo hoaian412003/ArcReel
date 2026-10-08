@@ -10,6 +10,7 @@ import asyncio
 from typing import Any
 
 from lib.canvas.graph import (
+    ASSET_GROUP_TYPES,
     BUSY_STATUSES,
     KIND_CHAR_GEN,
     KIND_CHARACTER,
@@ -45,7 +46,7 @@ from lib.generation.generation_queue import GenerationQueue
 from lib.generation.generation_queue_client import TaskSpec, WorkerOfflineError, enqueue_task_only
 from lib.infra.api_errors import ApiError
 from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE, DerivativeSheetSource, resolve_derivative_sheet_source
-from lib.project.asset_types import resolve_asset_key
+from lib.project.asset_types import ASSET_SPECS, resolve_asset_key
 from lib.project.project_manager import ProjectManager
 from lib.prompts.video_prompt_profile import is_h3_ref2va
 from server.services.project.canvas_view import build_project_view, list_episodes, writer_output_edges
@@ -58,7 +59,11 @@ from server.tool_runtime import TEXT_EPISODE_SCRIPT_TASK_TYPE
 
 UNIT_NODE_PREFIX = "p:unit:"
 #: 可以被用户摆位置的派生节点（位置存进画布的 overrides）。
-_MOVABLE_DERIVED = frozenset({"episode", "character"})
+_MOVABLE_DERIVED = frozenset({"episode", "character", *ASSET_GROUP_TYPES})
+#: 运行即「生成这个资产的资产图」的派生节点种类：各类资产分组本身与其中的图片供应商节点。
+_ASSET_RUN_KINDS = frozenset(
+    {KIND_CHARACTER, KIND_CHAR_GEN, *ASSET_GROUP_TYPES, *(f"{a}_gen" for a in ASSET_GROUP_TYPES)}
+)
 
 
 #: 供应商节点类型 → (任务类型, 队列媒体类型)。
@@ -241,8 +246,8 @@ class CanvasService:
         kind = derived_kind(node_id)
         if kind == KIND_DERIV_GEN:
             return await self._run_derivative(project_name, node_id, user_id=user_id, source=source)
-        if kind in (KIND_CHARACTER, KIND_CHAR_GEN):
-            return await self._run_character(project_name, node_id, user_id=user_id, source=source)
+        if kind in _ASSET_RUN_KINDS:
+            return await self._run_asset(project_name, node_id, user_id=user_id, source=source)
         if kind == KIND_KEYFRAME:
             return await self._run_keyframe(project_name, node_id, user_id=user_id, source=source)
         project_path = await asyncio.to_thread(self.pm.get_project_path, project_name)
@@ -378,29 +383,32 @@ class CanvasService:
             raise CanvasGraphError("canvas_run_failed", message=exc.message) from exc
         return {"success": True, "task_id": result["task_id"], "task_ids": [result["task_id"]]}
 
-    async def _run_character(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
-        """生成角色的资产图：描述只取项目里存的条目，与角色页的「生成」是同一条入队链路。"""
+    async def _run_asset(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
+        """生成角色 / 场景 / 道具 / 商品的资产图：描述只取项目里存的条目，与资产页的「生成」是同一条入队链路。"""
+        kind = derived_kind(node_id) or ""
+        asset_type = "character" if kind.startswith(("char", "character")) else kind.split("_", 1)[0]
+        spec = ASSET_SPECS[asset_type]
         name = node_id.split(":", 2)[2]
 
         def _resolve() -> str:
             project = self.pm.load_project(project_name)
-            key = resolve_asset_key(project.get("characters"), name)
+            key = resolve_asset_key(project.get(spec.bucket_key), name)
             if key is None:
                 raise CanvasGraphError("canvas_node_not_found", id=node_id)
-            entry = project["characters"][key]
+            entry = project[spec.bucket_key][key]
             description = entry.get("description") if isinstance(entry, dict) else None
             if not isinstance(description, str) or not description.strip():
                 raise CanvasGraphError("canvas_character_description_required", name=key)
             return key
 
         key = await asyncio.to_thread(_resolve)
-        spec = TaskSpec.from_request(task_type="character", media_type="image", resource_id=key)
+        task = TaskSpec.from_request(task_type=asset_type, media_type="image", resource_id=key)
         result = await self.queue.enqueue_task(
             project_name=project_name,
-            task_type=spec.task_type,
-            media_type=spec.media_type,
-            resource_id=spec.resource_id,
-            payload=spec.payload,
+            task_type=task.task_type,
+            media_type=task.media_type,
+            resource_id=task.resource_id,
+            payload=task.payload,
             source=source,
             user_id=user_id,
         )

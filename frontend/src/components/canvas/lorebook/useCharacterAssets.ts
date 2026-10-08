@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { API } from "@/api";
-import { enqueueCharacter, enqueueCharacterDerivative } from "@/actions/generation";
+import { enqueueCharacter, enqueueCharacterDerivative, enqueueProduct, enqueueProp, enqueueScene } from "@/actions/generation";
 import i18n from "@/i18n";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -15,6 +15,9 @@ export interface CharacterSavePayload {
   audioFile?: File | null;
 }
 
+/** 与角色同构、在画布上也按「描述 → 图片供应商 → 资产图」分组的其余资产类型。 */
+export type OtherAssetKind = "scene" | "prop" | "product";
+
 export interface CharacterAssets {
   generating: Set<string>;
   save: (name: string, payload: CharacterSavePayload) => Promise<void>;
@@ -26,6 +29,10 @@ export interface CharacterAssets {
   saveDescription: (name: string, description: string) => Promise<void>;
   /** 上传 / 替换参考图（画布上参考图节点）；失败 toast，不抛出。 */
   uploadReference: (name: string, file: File) => Promise<void>;
+  /** 场景 / 道具 / 商品：正在生成资产图的名字集合。 */
+  generatingAssets: Record<OtherAssetKind, Set<string>>;
+  saveAssetDescription: (kind: OtherAssetKind, name: string, description: string) => Promise<void>;
+  generateAsset: (kind: OtherAssetKind, name: string) => void;
   /** 正在生成中的衍生，键为 `角色/衍生`。 */
   generatingDerivatives: Set<string>;
   generateDerivative: (name: string, derivative: string) => void;
@@ -45,6 +52,13 @@ export interface CharacterAssets {
 export function useCharacterAssets(projectName: string | null): CharacterAssets {
   const generating = useActiveResourceIds("character", projectName);
   const generatingDerivatives = useActiveResourceIds("character_derivative", projectName);
+  const generatingScenes = useActiveResourceIds("scene", projectName);
+  const generatingProps = useActiveResourceIds("prop", projectName);
+  const generatingProducts = useActiveResourceIds("product", projectName);
+  const generatingAssets = useMemo(
+    () => ({ scene: generatingScenes, prop: generatingProps, product: generatingProducts }),
+    [generatingScenes, generatingProps, generatingProducts],
+  );
 
   const refreshProject = useCallback(
     async (invalidateKeys: string[] = []): Promise<void> => {
@@ -201,6 +215,34 @@ export function useCharacterAssets(projectName: string | null): CharacterAssets 
     [projectName, refreshProject],
   );
 
+  const saveAssetDescription = useCallback(
+    async (kind: OtherAssetKind, name: string, description: string) => {
+      if (!projectName) return;
+      try {
+        const updates = { description };
+        if (kind === "scene") await API.updateProjectScene(projectName, name, updates);
+        else if (kind === "prop") await API.updateProjectProp(projectName, name, updates);
+        else await API.updateProjectProduct(projectName, name, updates);
+      } catch (err) {
+        useAppStore.getState().pushToast(i18n.t("dashboard:submit_failed", { message: errMsg(err) }), "error");
+      } finally {
+        await refreshProject();
+      }
+    },
+    [projectName, refreshProject],
+  );
+
+  const generateAsset = useCallback(
+    (kind: OtherAssetKind, name: string) => {
+      if (!projectName) return;
+      const enqueue = { scene: enqueueScene, prop: enqueueProp, product: enqueueProduct }[kind];
+      enqueue(projectName, name).catch((err: unknown) => {
+        useAppStore.getState().pushToast(i18n.t("dashboard:submit_failed", { message: errMsg(err) }), "error");
+      });
+    },
+    [projectName],
+  );
+
   const refresh = useCallback(() => refreshProject(), [refreshProject]);
 
   return useMemo(
@@ -211,6 +253,9 @@ export function useCharacterAssets(projectName: string | null): CharacterAssets 
       add,
       saveDescription,
       uploadReference,
+      generatingAssets,
+      saveAssetDescription,
+      generateAsset,
       generatingDerivatives,
       generateDerivative,
       saveDerivativeDescription,
@@ -225,6 +270,9 @@ export function useCharacterAssets(projectName: string | null): CharacterAssets 
       add,
       saveDescription,
       uploadReference,
+      generatingAssets,
+      saveAssetDescription,
+      generateAsset,
       generatingDerivatives,
       generateDerivative,
       saveDerivativeDescription,
