@@ -128,7 +128,14 @@ from server.services.currency.video_artifact_currency import (
     complete_video_artifact_commit,
     freeze_video_speech_facts,
 )
-from server.services.tasks.canvas_tasks import CANVAS_IMAGE_TASK_TYPE, execute_canvas_image_task
+from server.services.tasks.canvas_tasks import (
+    CANVAS_AUDIO_TASK_TYPE,
+    CANVAS_IMAGE_TASK_TYPE,
+    CANVAS_VIDEO_TASK_TYPE,
+    execute_canvas_audio_task,
+    execute_canvas_image_task,
+    execute_canvas_video_task,
+)
 from server.services.tasks.derivative_sheet_tasks import execute_character_derivative_task
 from server.services.tasks.dub_tasks import (
     DUB_AUTO_TASK_TYPE,
@@ -1910,6 +1917,8 @@ _TASK_EXECUTORS = {
     DERIVATIVE_TASK_TYPE: execute_character_derivative_task,
     KEYFRAME_SHEET_TASK_TYPE: execute_keyframe_sheet_task,
     CANVAS_IMAGE_TASK_TYPE: execute_canvas_image_task,
+    CANVAS_VIDEO_TASK_TYPE: execute_canvas_video_task,
+    CANVAS_AUDIO_TASK_TYPE: execute_canvas_audio_task,
 }
 
 

@@ -14,8 +14,28 @@ NODE_TEXT = "text"
 NODE_IMAGE = "image"
 NODE_IMAGE_GENERATE = "image_generate"
 NODE_H3_WRITER = "h3_writer"
-#: 用户可创建、持久化在画布里的节点类型。
-NODE_TYPES = (NODE_TEXT, NODE_IMAGE, NODE_IMAGE_GENERATE, NODE_H3_WRITER)
+NODE_VIDEO = "video"
+NODE_AUDIO = "audio"
+NODE_VIDEO_GENERATE = "video_generate"
+NODE_AUDIO_GENERATE = "audio_generate"
+#: 可持久化在画布里的节点类型（含运行产出的 video / audio 媒体节点）；哪些允许客户端新建由路由与工具的请求模型限定。
+NODE_TYPES = (
+    NODE_TEXT,
+    NODE_IMAGE,
+    NODE_IMAGE_GENERATE,
+    NODE_H3_WRITER,
+    NODE_VIDEO_GENERATE,
+    NODE_AUDIO_GENERATE,
+    NODE_VIDEO,
+    NODE_AUDIO,
+)
+
+#: 供应商节点 → (它产出的媒体句柄 / 句柄数据类型, 产出的媒体节点类型)。
+PROVIDER_MEDIA: dict[str, tuple[str, str]] = {
+    NODE_IMAGE_GENERATE: ("image", NODE_IMAGE),
+    NODE_VIDEO_GENERATE: ("video", NODE_VIDEO),
+    NODE_AUDIO_GENERATE: ("audio", NODE_AUDIO),
+}
 
 #: 由项目数据推导、不落盘的节点（集 / 视频单元 / 起始帧联合图 / H3 提示词），id 形如 ``p:<kind>:...``。
 DERIVED_PREFIX = "p:"
@@ -30,17 +50,25 @@ HANDLE_TEXT = "text"
 HANDLE_IMAGE = "image"
 HANDLE_UNIT = "unit"
 HANDLE_H3 = "h3"
+HANDLE_VIDEO = "video"
+HANDLE_AUDIO = "audio"
 
 #: ``(节点类型, 句柄 id) → 数据类型``，输入句柄在左、输出句柄在右。
 INPUT_HANDLES: dict[str, dict[str, str]] = {
     NODE_IMAGE_GENERATE: {"prompt": HANDLE_TEXT, "refs": HANDLE_IMAGE},
     NODE_H3_WRITER: {"units": HANDLE_UNIT},
+    NODE_VIDEO_GENERATE: {"prompt": HANDLE_TEXT, "frame": HANDLE_IMAGE},
+    NODE_AUDIO_GENERATE: {"text": HANDLE_TEXT},
 }
 OUTPUT_HANDLES: dict[str, dict[str, str]] = {
     NODE_TEXT: {"text": HANDLE_TEXT},
     NODE_IMAGE: {"image": HANDLE_IMAGE},
     NODE_IMAGE_GENERATE: {"text": HANDLE_TEXT, "image": HANDLE_IMAGE},
     NODE_H3_WRITER: {"h3": HANDLE_H3},
+    NODE_VIDEO: {"video": HANDLE_VIDEO},
+    NODE_AUDIO: {"audio": HANDLE_AUDIO},
+    NODE_VIDEO_GENERATE: {"text": HANDLE_TEXT, "video": HANDLE_VIDEO},
+    NODE_AUDIO_GENERATE: {"text": HANDLE_TEXT, "audio": HANDLE_AUDIO},
     KIND_UNIT: {"unit": HANDLE_UNIT, "text": HANDLE_TEXT},
     KIND_KEYFRAME: {"image": HANDLE_IMAGE},
 }
@@ -61,6 +89,10 @@ _DEFAULT_DATA: dict[str, dict[str, Any]] = {
     NODE_IMAGE: {"path": None},
     NODE_IMAGE_GENERATE: {"aspect_ratio": "9:16", "status": STATUS_IDLE},
     NODE_H3_WRITER: {},
+    NODE_VIDEO: {"path": None},
+    NODE_AUDIO: {"path": None},
+    NODE_VIDEO_GENERATE: {"aspect_ratio": "9:16", "duration_seconds": 5, "status": STATUS_IDLE},
+    NODE_AUDIO_GENERATE: {"status": STATUS_IDLE},
 }
 
 #: 输出节点相对供应商节点的摆放间距。
@@ -207,7 +239,7 @@ def latest_output(graph: dict[str, Any], generator_id: str, handle: str) -> dict
     """供应商节点某输出句柄上最近一次运行的产物节点：图片取已完成的，文本取最新的提示词副本。"""
     targets = {e["target"] for e in graph["edges"] if e["source"] == generator_id and e["sourceHandle"] == handle}
     outputs = [n for n in graph["nodes"] if n["id"] in targets and n["data"].get("generated")]
-    if handle == "image":
+    if handle in {"image", "video", "audio"}:
         outputs = [n for n in outputs if n["data"].get("status") == STATUS_DONE and n["data"].get("path")]
     return outputs[-1] if outputs else None
 
@@ -228,7 +260,7 @@ def _incoming(
                 sources.append(derived[e["source"]])
         else:
             source = find_node(graph, e["source"])
-            if source["type"] == NODE_IMAGE_GENERATE:
+            if source["type"] in PROVIDER_MEDIA:
                 # 直接连供应商节点的输出句柄 = 取它最近一次运行的产物，重跑它后下游自动用上新结果。
                 latest = latest_output(graph, source["id"], e["sourceHandle"])
                 if latest is not None:
@@ -238,29 +270,42 @@ def _incoming(
     return sorted(sources, key=lambda n: (_abs_position(n)["y"], _abs_position(n)["x"]))
 
 
+#: 供应商节点的输入句柄：(文本句柄, 参考图句柄 | None)。
+_INPUT_HANDLE_NAMES: dict[str, tuple[str, str | None]] = {
+    NODE_IMAGE_GENERATE: ("prompt", "refs"),
+    NODE_VIDEO_GENERATE: ("prompt", "frame"),
+    NODE_AUDIO_GENERATE: ("text", None),
+}
+
+
 def resolve_generate_inputs(
     graph: dict[str, Any], node_id: str, derived: Mapping[str, dict[str, Any]] | None = None
 ) -> tuple[str, list[str]]:
-    """图片供应商节点的输入：``(拼接后的提示词, 参考图项目相对路径列表)``。
+    """供应商节点的输入：``(拼接后的文本, 参考图项目相对路径列表)``。
 
-    文本来自文本节点与视频单元正文；参考图来自图片节点与起始帧联合图。只收已有产物的参考图，
-    占位中的上游图片（还没有 path）被跳过。
+    文本来自文本节点与视频单元正文；参考图来自图片节点与起始帧联合图（图片节点的 ``refs``、视频节点的
+    ``frame``）。只收已有产物的参考图，占位中的上游图片（还没有 path）被跳过；语音节点没有参考图。
     """
     node = find_node(graph, node_id)
-    if node["type"] != NODE_IMAGE_GENERATE:
+    handles = _INPUT_HANDLE_NAMES.get(node["type"])
+    if handles is None:
         raise CanvasGraphError("canvas_node_not_runnable", id=node_id)
-    texts = [str(n["data"].get("text") or "").strip() for n in _incoming(graph, node_id, "prompt", derived)]
+    text_handle, ref_handle = handles
+    texts = [str(n["data"].get("text") or "").strip() for n in _incoming(graph, node_id, text_handle, derived)]
     prompt = "\n\n".join(t for t in texts if t)
-    refs = [n["data"]["path"] for n in _reference_nodes(graph, node_id, derived)]
+    refs = [n["data"]["path"] for n in _reference_nodes(graph, node_id, derived)] if ref_handle else []
     return prompt, refs
 
 
 def _reference_nodes(
     graph: dict[str, Any], node_id: str, derived: Mapping[str, dict[str, Any]] | None
 ) -> list[dict[str, Any]]:
+    handle = _INPUT_HANDLE_NAMES[find_node(graph, node_id)["type"]][1]
+    if handle is None:
+        return []
     return [
         n
-        for n in _incoming(graph, node_id, "refs", derived)
+        for n in _incoming(graph, node_id, handle, derived)
         if isinstance(n["data"].get("path"), str) and n["data"]["path"]
     ]
 
@@ -306,30 +351,31 @@ def stale_generated_images(graph: dict[str, Any], derived: Mapping[str, dict[str
 
 
 def add_run_outputs(graph: dict[str, Any], node_id: str, prompt: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """为一次运行挂出输出节点：使用的提示词文本节点 + 待填充的图片占位节点，并连上供应商节点。
+    """为一次运行挂出输出节点：使用的文本节点 + 待填充的媒体占位节点（图片 / 视频 / 语音），并连上供应商节点。
 
     重复运行会往下堆叠，已有输出保留。输出节点上的 ``in`` 句柄只承接来源连线，不接受手动连线。
     """
     source = find_node(graph, node_id)
-    siblings = sum(1 for e in graph["edges"] if e["source"] == node_id and e["sourceHandle"] == "image")
+    handle, media_type = PROVIDER_MEDIA[source["type"]]
+    siblings = sum(1 for e in graph["edges"] if e["source"] == node_id and e["sourceHandle"] == handle)
     x = source["position"]["x"] + OUTPUT_OFFSET_X
     y = source["position"]["y"] + siblings * OUTPUT_STACK_GAP
     text_node = make_node(NODE_TEXT, {"x": x, "y": y}, {"text": prompt, "generated": True})
-    image_node = make_node(NODE_IMAGE, {"x": x + OUTPUT_OFFSET_X * 0.75, "y": y})
-    image_node["data"].update({"status": STATUS_QUEUED, "prompt": prompt, "generated": True})
+    media_node = make_node(media_type, {"x": x + OUTPUT_OFFSET_X * 0.75, "y": y})
+    media_node["data"].update({"status": STATUS_QUEUED, "prompt": prompt, "generated": True})
     add_node(graph, text_node)
-    add_node(graph, image_node)
-    for target, handle in ((text_node, "text"), (image_node, "image")):
+    add_node(graph, media_node)
+    for target, source_handle in ((text_node, "text"), (media_node, handle)):
         graph["edges"].append(
             {
                 "id": new_id("edge"),
                 "source": node_id,
-                "sourceHandle": handle,
+                "sourceHandle": source_handle,
                 "target": target["id"],
                 "targetHandle": "in",
             }
         )
-    return text_node, image_node
+    return text_node, media_node
 
 
 def branch_plan(
@@ -383,7 +429,7 @@ def _node_or_none(graph: dict[str, Any], node_id: str) -> dict[str, Any] | None:
 
 
 #: 模板里保留的节点类型：只带可复用的结构（文本、供应商），不带随项目走的产物图片与项目推导节点。
-TEMPLATE_NODE_TYPES = (NODE_TEXT, NODE_IMAGE_GENERATE, NODE_H3_WRITER)
+TEMPLATE_NODE_TYPES = (NODE_TEXT, NODE_IMAGE_GENERATE, NODE_H3_WRITER, NODE_VIDEO_GENERATE, NODE_AUDIO_GENERATE)
 
 
 def make_template(graph: dict[str, Any], name: str, node_ids: list[str]) -> dict[str, Any]:

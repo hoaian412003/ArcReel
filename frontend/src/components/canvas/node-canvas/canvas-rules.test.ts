@@ -70,3 +70,24 @@ describe("derived node connections", () => {
     expect(isValidCanvasConnection(derived, { source: "u", sourceHandle: "text", target: "w", targetHandle: "units" })).toBe(false);
   });
 });
+
+describe("video and audio providers", () => {
+  const media: CanvasNode[] = [
+    { id: "t", type: "text", position: { x: 0, y: 0 }, data: {} },
+    { id: "i", type: "image", position: { x: 0, y: 0 }, data: {} },
+    { id: "v", type: "video_generate", position: { x: 0, y: 0 }, data: {} },
+    { id: "a", type: "audio_generate", position: { x: 0, y: 0 }, data: {} },
+    { id: "clip", type: "video", position: { x: 0, y: 0 }, data: {} },
+  ];
+
+  it("takes text and an optional start frame for video, text only for voice", () => {
+    expect(isValidCanvasConnection(media, { source: "t", sourceHandle: "text", target: "v", targetHandle: "prompt" })).toBe(true);
+    expect(isValidCanvasConnection(media, { source: "i", sourceHandle: "image", target: "v", targetHandle: "frame" })).toBe(true);
+    expect(isValidCanvasConnection(media, { source: "t", sourceHandle: "text", target: "a", targetHandle: "text" })).toBe(true);
+    expect(isValidCanvasConnection(media, { source: "i", sourceHandle: "image", target: "a", targetHandle: "text" })).toBe(false);
+  });
+
+  it("does not let a produced clip feed back into an image slot", () => {
+    expect(isValidCanvasConnection(media, { source: "clip", sourceHandle: "video", target: "v", targetHandle: "frame" })).toBe(false);
+  });
+});

@@ -36,8 +36,11 @@ class GetCanvasRequest(BaseModel):
 class CanvasAddNodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    type: Literal["text", "image_generate", "h3_writer"] = Field(
-        description="节点类型：text 文本（提示词 / 备注）；image_generate 图片供应商（可运行）；h3_writer H3 提示词写作（可运行）"
+    type: Literal["text", "image_generate", "h3_writer", "video_generate", "audio_generate"] = Field(
+        description=(
+            "节点类型：text 文本（提示词 / 备注）；image_generate 图片供应商；h3_writer H3 提示词写作；"
+            "video_generate 视频供应商（提示词 + 可选起始帧图 → 视频）；audio_generate 语音供应商（文本 → 语音）。后四类可运行"
+        )
     )
     position: Position = Field(
         description="放置位置。先 get_canvas 看现有节点的坐标，避免重叠；节点宽约 280，纵向间隔取 ≥ 300"
@@ -50,6 +53,13 @@ class CanvasAddNodeRequest(BaseModel):
         default=None,
         description="type=image_generate 时指定的图像模型，形如 供应商/模型（如 gemini-aistudio/imagen-4）；缺省用项目默认",
     )
+    duration_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        le=60,
+        description="type=video_generate 时的视频时长（秒），缺省 5；须是所用视频模型支持的时长",
+    )
+    voice: str | None = Field(default=None, description="type=audio_generate 时的音色名；缺省用项目的旁白音色")
 
 
 class CanvasPatchNodeRequest(BaseModel):
@@ -64,6 +74,8 @@ class CanvasPatchNodeRequest(BaseModel):
     model: str | None = Field(
         default=None, description="新图像模型（供应商/模型），仅图片供应商节点；传空串恢复项目默认"
     )
+    duration_seconds: int | None = Field(default=None, ge=1, le=60, description="新视频时长（秒），仅视频供应商节点")
+    voice: str | None = Field(default=None, description="新音色名，仅语音供应商节点；传空串恢复项目默认")
 
 
 class CanvasNodeRequest(BaseModel):
@@ -165,6 +177,10 @@ async def canvas_add_node(
         data["aspect_ratio"] = value.aspect_ratio
     if value.model is not None:
         data["model"] = value.model
+    if value.duration_seconds is not None:
+        data["duration_seconds"] = value.duration_seconds
+    if value.voice is not None:
+        data["voice"] = value.voice
     try:
         node, revision = await _service(services).add_node(
             scope.project_name, value.type, value.position.model_dump(), data
@@ -185,6 +201,10 @@ async def canvas_patch_node(
         data["aspect_ratio"] = value.aspect_ratio
     if value.model is not None:
         data["model"] = value.model or None
+    if value.duration_seconds is not None:
+        data["duration_seconds"] = value.duration_seconds
+    if value.voice is not None:
+        data["voice"] = value.voice or None
     try:
         node, revision = await _service(services).patch_node(
             scope.project_name, value.node_id, value.position.model_dump() if value.position else None, data
@@ -276,7 +296,8 @@ async def canvas_use_template(
 _HANDLES_NOTE = (
     "句柄（只有同数据类型的句柄能连）：text 节点输出 text；image 节点输出 image；"
     "image_generate 输入 prompt(text)、refs(image)，输出 text、image；h3_writer 输入 units(unit)，输出 h3；"
-    "image_generate 的输出句柄 image 也可直接连到另一个 image_generate 的 refs：运行时取它最近一次产出的图。"
+    "image_generate 的输出句柄 image 也可直接连到另一个 image_generate 的 refs，或连到 video_generate 的 frame（起始帧）：运行时取它最近一次产出的图。"
+    "video_generate 输入 prompt(text)、frame(image)，输出 text、video；audio_generate 输入 text(text)，输出 text、audio。"
     "视频单元节点 p:unit:<集>:<单元> 输出 unit、text；起始帧联合图节点 p:keyframe:<集>:<联合图> 输出 image。"
 )
 
@@ -295,7 +316,7 @@ GET_CANVAS = ToolDeclaration(
 CANVAS_ADD_NODE = ToolDeclaration(
     name="canvas_add_node",
     description=(
-        "在画布上新增一个节点（文本 / 图片供应商 / H3 写作）。图片节点由用户上传或运行产出，不能新增。"
+        "在画布上新增一个节点（文本 / 图片供应商 / H3 写作 / 视频供应商 / 语音供应商）。图片 / 视频 / 语音节点由用户上传或运行产出，不能新增。"
         "新增后用 canvas_connect 连线，再用 canvas_run_node 运行。"
     ),
     request_model=CanvasAddNodeRequest,
@@ -355,7 +376,7 @@ CANVAS_SET_EPISODES = ToolDeclaration(
 CANVAS_RUN_NODE = ToolDeclaration(
     name="canvas_run_node",
     description=(
-        "运行一个节点并立即返回任务 id（不等结果）：image_generate 读入连进来的提示词与参考图，挂出「使用的提示词」与图片两个输出节点；"
+        "运行一个节点并立即返回任务 id（不等结果）：image_generate / video_generate / audio_generate 读入连进来的文本（与参考图 / 起始帧），挂出「使用的文本」与图片 / 视频 / 语音两个输出节点；"
         "h3_writer 为它所连的视频单元重写 H3 提示词（单元正文原样保留）；p:keyframe 节点生成这张起始帧联合图。"
         "结果出现在画布上，用 get_canvas 查看进度。"
     ),

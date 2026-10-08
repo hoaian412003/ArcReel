@@ -90,4 +90,5 @@ class TestResourceTypes:
             "character_derivatives",
             "keyframe_sheets",
             "canvas_images",
+            "canvas_videos",
         }

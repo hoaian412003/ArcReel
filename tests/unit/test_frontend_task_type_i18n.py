@@ -63,7 +63,7 @@ FIXED_TASK_TYPES = (
     | UNIT_TASK_TYPES
     | DUB_TASK_TYPES
     | ASSET_ANALYSIS_TASK_TYPES
-    | {"image_edit", "voice_sample", "canvas_image", DERIVATIVE_TASK_TYPE}
+    | {"image_edit", "voice_sample", "canvas_image", "canvas_video", "canvas_audio", DERIVATIVE_TASK_TYPE}
 )
 
 ALL_TASK_TYPES = FIXED_TASK_TYPES | frozenset(ASSET_SPECS.keys())

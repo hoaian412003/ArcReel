@@ -68,7 +68,7 @@ class Position(BaseModel):
 
 class CreateNodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["text", "image", "image_generate", "h3_writer"]
+    type: Literal["text", "image", "image_generate", "h3_writer", "video_generate", "audio_generate"]
     position: Position
     data: dict[str, Any] = Field(default_factory=dict)
 

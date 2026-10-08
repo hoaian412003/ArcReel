@@ -116,3 +116,89 @@ async def test_deleted_node_does_not_break_the_task(seeded):
     )
 
     assert result["version"] == 3
+
+
+class _Media:
+    """视频 / 语音生成器替身：记下调用，按需失败。"""
+
+    def __init__(self):
+        self.video_calls = []
+        self.audio_calls = []
+
+    async def generate_video_async(self, prompt, resource_type, resource_id, **kwargs):
+        self.video_calls.append((prompt, resource_type, resource_id, kwargs))
+        return Path("x"), 2, None, None
+
+    async def generate_audio_async(self, text, resource_id, voice, **kwargs):
+        self.audio_calls.append((text, resource_id, voice, kwargs))
+        return Path("y"), 4
+
+
+def _install_media(monkeypatch, media):
+    context = SimpleNamespace(
+        generator=media,
+        video=SimpleNamespace(resolution="720p"),
+        audio=SimpleNamespace(narration_voice="Cherry", narration_speed=None),
+    )
+    lanes = []
+
+    async def _resolve(*_a, **kwargs):
+        lanes.append(kwargs)
+        return context
+
+    monkeypatch.setattr(canvas_tasks, "resolve_generation_context", _resolve)
+    return lanes
+
+
+async def test_video_task_uses_the_first_reference_as_start_frame_and_writes_back(seeded, monkeypatch):
+    _, root, ids, _ = seeded
+    media = _Media()
+    lanes = _install_media(monkeypatch, media)
+    payload = {
+        "prompt": "a duel",
+        "generator_id": ids["gen"],
+        "references": ["ref.png"],
+        "aspect_ratio": "16:9",
+        "duration_seconds": 6,
+    }
+
+    result = await canvas_tasks.execute_canvas_video_task("demo", ids["image"], payload, task_id="t1")
+
+    assert result["file_path"] == f"canvas/videos/{ids['image']}.mp4"
+    prompt, resource_type, resource_id, kwargs = media.video_calls[0]
+    assert (prompt, resource_type, resource_id) == ("a duel", "canvas_videos", ids["image"])
+    assert kwargs["start_image"] == root / "ref.png"
+    assert (kwargs["aspect_ratio"], kwargs["duration_seconds"], kwargs["resolution"]) == ("16:9", 6, "720p")
+    assert lanes[0]["video"].generation_type == "i2v"
+    assert _data(root, ids["image"])["status"] == "done"
+    assert _data(root, ids["image"])["version"] == 2
+
+
+async def test_video_task_without_a_start_frame_is_text_to_video(seeded, monkeypatch):
+    _, _, ids, _ = seeded
+    media = _Media()
+    lanes = _install_media(monkeypatch, media)
+
+    await canvas_tasks.execute_canvas_video_task("demo", ids["image"], {"prompt": "p", "generator_id": ids["gen"]})
+
+    assert media.video_calls[0][3]["start_image"] is None
+    assert lanes[0]["video"].generation_type is None
+
+
+async def test_audio_task_defaults_to_the_project_voice_and_lands_in_the_tts_folder(seeded, monkeypatch):
+    _, root, ids, _ = seeded
+    media = _Media()
+    _install_media(monkeypatch, media)
+
+    result = await canvas_tasks.execute_canvas_audio_task(
+        "demo", ids["image"], {"prompt": "hello", "generator_id": ids["gen"]}, task_id="t1"
+    )
+
+    assert media.audio_calls[0][:3] == ("hello", ids["image"], "Cherry")
+    assert result["file_path"] == f"audio/segment_{ids['image']}.wav"
+    assert _data(root, ids["image"])["path"] == result["file_path"]
+
+    await canvas_tasks.execute_canvas_audio_task(
+        "demo", ids["image"], {"prompt": "hi", "voice": "Ethan", "generator_id": ids["gen"]}
+    )
+    assert media.audio_calls[1][2] == "Ethan"

@@ -11,6 +11,8 @@ export interface CanvasActions {
   projectName: string;
   setText: (nodeId: string, text: string) => Promise<void>;
   setAspectRatio: (nodeId: string, aspectRatio: string) => Promise<void>;
+  /** 通用字段补丁（时长、音色等供应商节点参数）。 */
+  setData: (nodeId: string, data: Record<string, unknown>) => Promise<void>;
   /** 空串恢复项目默认。 */
   setModel: (nodeId: string, model: string) => Promise<void>;
   imageModels: ImageModelChoices;

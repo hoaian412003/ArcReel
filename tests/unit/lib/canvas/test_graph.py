@@ -238,3 +238,38 @@ def test_empty_template_is_refused():
     image = add_node(graph, make_node("image", {"x": 0, "y": 0}, server_data={"path": "a.png"}))
     with pytest.raises(CanvasGraphError):
         make_template(graph, "x", [image["id"]])
+
+
+def test_video_and_audio_providers_wire_by_media_type_and_emit_matching_outputs():
+    graph = empty_graph()
+    text = _add(graph, "text", text="a duel")
+    frame = add_node(graph, make_node("image", {"x": 0, "y": 0}, server_data={"path": "canvas/images/a.png"}))
+    video = _add(graph, "video_generate")
+    audio = _add(graph, "audio_generate")
+    connect(graph, text["id"], "text", video["id"], "prompt")
+    connect(graph, frame["id"], "image", video["id"], "frame")
+    connect(graph, text["id"], "text", audio["id"], "text")
+    with pytest.raises(CanvasGraphError):
+        connect(graph, frame["id"], "image", video["id"], "prompt")
+    with pytest.raises(CanvasGraphError):
+        connect(graph, frame["id"], "image", audio["id"], "text")
+
+    assert resolve_generate_inputs(graph, video["id"]) == ("a duel", ["canvas/images/a.png"])
+    assert resolve_generate_inputs(graph, audio["id"]) == ("a duel", [])
+
+    _, clip = add_run_outputs(graph, video["id"], "a duel")
+    _, voice = add_run_outputs(graph, audio["id"], "a duel")
+    assert (clip["type"], voice["type"]) == ("video", "audio")
+    handles = {(e["source"], e["sourceHandle"]) for e in graph["edges"] if e["target"] in {clip["id"], voice["id"]}}
+    assert handles == {(video["id"], "video"), (audio["id"], "audio")}
+
+
+def test_a_video_provider_can_take_a_generators_latest_image_as_its_start_frame():
+    graph = empty_graph()
+    text = _add(graph, "text", text="a fox")
+    upstream = _add(graph, "image_generate")
+    video = _add(graph, "video_generate")
+    connect(graph, text["id"], "text", video["id"], "prompt")
+    connect(graph, upstream["id"], "image", video["id"], "frame")
+    _finished_run(graph, upstream["id"], "canvas/images/frame.png")
+    assert resolve_generate_inputs(graph, video["id"])[1] == ["canvas/images/frame.png"]

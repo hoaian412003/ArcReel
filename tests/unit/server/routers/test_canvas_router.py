@@ -264,3 +264,25 @@ def test_branch_endpoint_returns_the_plan(env):
         )
     plan = client.get(f"/api/v1/projects/demo/canvas/nodes/{second['id']}/branch").json()["nodes"]
     assert [item["id"] for item in plan] == [first["id"], second["id"]]
+
+
+def test_video_and_audio_runs_enqueue_their_own_task_types(env):
+    client, queue, _ = env
+    text = _node(client, "text", text="a duel at dawn")
+    video = _node(client, "video_generate", duration_seconds=6, aspect_ratio="16:9")
+    audio = _node(client, "audio_generate", voice="Ethan")
+    for target, handle in ((video, "prompt"), (audio, "text")):
+        client.post(
+            "/api/v1/projects/demo/canvas/edges",
+            json={"source": text["id"], "source_handle": "text", "target": target["id"], "target_handle": handle},
+        )
+    assert client.post(f"/api/v1/projects/demo/canvas/nodes/{video['id']}/run").status_code == 200
+    assert client.post(f"/api/v1/projects/demo/canvas/nodes/{audio['id']}/run").status_code == 200
+
+    clip_call, voice_call = queue.calls
+    assert (clip_call["task_type"], clip_call["media_type"]) == ("canvas_video", "video")
+    assert (clip_call["payload"]["duration_seconds"], clip_call["payload"]["aspect_ratio"]) == (6, "16:9")
+    assert (voice_call["task_type"], voice_call["media_type"]) == ("canvas_audio", "audio")
+    assert voice_call["payload"]["voice"] == "Ethan"
+    types = sorted(n["type"] for n in client.get("/api/v1/projects/demo/canvas").json()["nodes"])
+    assert types == ["audio", "audio_generate", "text", "text", "text", "video", "video_generate"]

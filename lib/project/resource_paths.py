@@ -46,6 +46,9 @@ KEYFRAME_SHEET_RESOURCE_TYPE = "keyframe_sheets"
 #: 画布图片输出的资源类型名。资源 id 是画布上的图片节点 id，落盘为 ``canvas/images/{id}.png``。
 CANVAS_IMAGE_RESOURCE_TYPE = "canvas_images"
 
+#: 画布视频输出的资源类型名。资源 id 是画布上的视频节点 id，落盘为 ``canvas/videos/{id}.mp4``。
+CANVAS_VIDEO_RESOURCE_TYPE = "canvas_videos"
+
 _PATTERNS: dict[str, ResourcePattern] = {
     "storyboards": ResourcePattern("storyboards", ".png", prefix="scene_"),
     # 尾帧快照与分镜图、分镜视频同按分镜 id 命名，故共用 scene_ 前缀。
@@ -61,6 +64,7 @@ _PATTERNS: dict[str, ResourcePattern] = {
     CHARACTER_DERIVATIVE_RESOURCE_TYPE: ResourcePattern("characters/derivatives", ".png", id_segments=2),
     KEYFRAME_SHEET_RESOURCE_TYPE: ResourcePattern("keyframes", ".png", id_segments=2),
     CANVAS_IMAGE_RESOURCE_TYPE: ResourcePattern("canvas/images", ".png"),
+    CANVAS_VIDEO_RESOURCE_TYPE: ResourcePattern("canvas/videos", ".mp4"),
 }
 
 RESOURCE_TYPES: tuple[str, ...] = tuple(_PATTERNS)

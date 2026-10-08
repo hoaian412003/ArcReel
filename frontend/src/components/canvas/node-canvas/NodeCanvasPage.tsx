@@ -14,7 +14,7 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Bot, Check, ImagePlus, LayoutGrid, Layers, Loader2, PenLine, Save, Sparkles, Trash2, Type, Workflow } from "lucide-react";
+import { Bot, Check, ImagePlus, LayoutGrid, Layers, Loader2, Mic, PenLine, Save, Sparkles, Trash2, Type, Video, Workflow } from "lucide-react";
 import { API } from "@/api";
 import { enqueueKeyframeSheet } from "@/actions/generation";
 import { isActiveStatus, useTaskRowsByIds } from "@/stores/tasks-store";
@@ -207,11 +207,14 @@ function CanvasSurface({ projectName }: { projectName: string }) {
       setText: (nodeId, text) => guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { text } })),
       setAspectRatio: (nodeId, aspectRatio) =>
         guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { aspect_ratio: aspectRatio } })),
+      setData: (nodeId, data) => guarded(() => API.updateCanvasNode(projectName, nodeId, { data })),
       setModel: (nodeId, model) => guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { model: model || null } })),
       imageModels,
       run: async (nodeId) => {
         // 上游还有没产出或已过期的节点时，先让用户确认整条链再按顺序跑。
         try {
+          // 整链运行目前只针对图片供应商节点（视频 / 语音节点的上游按需手动先跑）。
+          if (graphRef.current?.nodes.find((n) => n.id === nodeId)?.type !== "image_generate") throw new Error("single");
           const plan = await API.getCanvasBranch(projectName, nodeId);
           if (plan.nodes.length > 1) {
             setBranch({ steps: plan.nodes, current: null });
@@ -412,6 +415,14 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => void addNode("image_generate")}>
             <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_add_generate")}
+          </button>
+          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => void addNode("video_generate")}>
+            <Video className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_add_video_generate")}
+          </button>
+          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => void addNode("audio_generate")}>
+            <Mic className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_add_audio_generate")}
           </button>
           {graph.episodes.length > 0 && (
             <>

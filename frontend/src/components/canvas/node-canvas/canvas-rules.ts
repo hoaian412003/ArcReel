@@ -4,12 +4,18 @@ import type { CanvasAnyNodeType, CanvasHandleType, CanvasNode, CanvasNodeStatus 
 const INPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHandleType>>> = {
   image_generate: { prompt: "text", refs: "image" },
   h3_writer: { units: "unit" },
+  video_generate: { prompt: "text", frame: "image" },
+  audio_generate: { text: "text" },
 };
 const OUTPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHandleType>>> = {
   text: { text: "text" },
   image: { image: "image" },
   image_generate: { text: "text", image: "image" },
   h3_writer: { h3: "h3" },
+  video: { video: "video" },
+  audio: { audio: "audio" },
+  video_generate: { text: "text", video: "video" },
+  audio_generate: { text: "text", audio: "audio" },
   unit: { unit: "unit", text: "text" },
   keyframe: { image: "image" },
 };

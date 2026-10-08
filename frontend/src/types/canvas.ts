@@ -1,10 +1,12 @@
 /** 节点画布的后端契约类型。 */
 
-export type CanvasNodeType = "text" | "image" | "image_generate" | "h3_writer";
+export type CanvasNodeType = "text" | "image" | "image_generate" | "h3_writer" | "video_generate" | "audio_generate";
 /** 由项目数据推导的只读节点：集分组、视频单元、起始帧联合图、H3 提示词。 */
 export type CanvasDerivedType = "episode" | "unit" | "keyframe" | "h3_prompt";
-export type CanvasAnyNodeType = CanvasNodeType | CanvasDerivedType;
-export type CanvasHandleType = "text" | "image" | "unit" | "h3";
+/** 运行产出的媒体节点。 */
+export type CanvasMediaNodeType = "video" | "audio";
+export type CanvasAnyNodeType = CanvasNodeType | CanvasDerivedType | CanvasMediaNodeType;
+export type CanvasHandleType = "text" | "image" | "unit" | "h3" | "video" | "audio";
 export type H3Status = "current" | "stale" | "missing";
 export type CanvasNodeStatus = "idle" | "queued" | "running" | "done" | "failed";
 
@@ -16,6 +18,10 @@ export interface CanvasNodeData {
   label?: string;
   /** image_generate 节点的画幅。 */
   aspect_ratio?: string;
+  /** video_generate 节点的视频时长（秒）。 */
+  duration_seconds?: number | null;
+  /** audio_generate 节点的音色名；缺省用项目旁白音色。 */
+  voice?: string | null;
   /** image_generate 节点指定的图像模型，形如 `供应商/模型`；缺省用项目默认。 */
   model?: string | null;
   /** 以下字段只由服务端写入。 */
@@ -34,7 +40,6 @@ export interface CanvasNodeData {
   unit_count?: number;
   h3?: boolean;
   unit_id?: string;
-  duration_seconds?: number | null;
   h3_status?: H3Status | null;
   sheet_id?: string;
   scene?: string | null;

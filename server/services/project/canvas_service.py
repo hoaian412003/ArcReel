@@ -12,8 +12,10 @@ from typing import Any
 from lib.canvas.graph import (
     BUSY_STATUSES,
     KIND_KEYFRAME,
+    NODE_AUDIO_GENERATE,
     NODE_H3_WRITER,
     NODE_IMAGE_GENERATE,
+    NODE_VIDEO_GENERATE,
     STATUS_FAILED,
     STATUS_QUEUED,
     CanvasGraphError,
@@ -41,11 +43,37 @@ from lib.prompts.video_prompt_profile import is_h3_ref2va
 from server.services.project.canvas_view import build_project_view, list_episodes, writer_output_edges
 from server.services.project.keyframe_plan import KeyframePlanError
 from server.services.project.keyframe_sheets import enqueue_keyframe_sheet
-from server.services.tasks.canvas_tasks import CANVAS_IMAGE_TASK_TYPE
+from server.services.tasks.canvas_tasks import CANVAS_AUDIO_TASK_TYPE, CANVAS_IMAGE_TASK_TYPE, CANVAS_VIDEO_TASK_TYPE
 from server.text_generation import TextGenerationError, TextGenerationRequest, prompt_authoring_preflight
 from server.tool_runtime import TEXT_EPISODE_SCRIPT_TASK_TYPE
 
 UNIT_NODE_PREFIX = "p:unit:"
+
+
+#: 供应商节点类型 → (任务类型, 队列媒体类型)。
+_PROVIDER_TASKS: dict[str, tuple[str, str]] = {
+    NODE_IMAGE_GENERATE: (CANVAS_IMAGE_TASK_TYPE, "image"),
+    NODE_VIDEO_GENERATE: (CANVAS_VIDEO_TASK_TYPE, "video"),
+    NODE_AUDIO_GENERATE: (CANVAS_AUDIO_TASK_TYPE, "audio"),
+}
+
+
+def _task_options(node: dict[str, Any], frozen: dict[str, Any]) -> dict[str, Any]:
+    """各类供应商节点随任务冻结的专有参数。"""
+    data = node["data"]
+    if node["type"] == NODE_IMAGE_GENERATE:
+        return {
+            "reference_labels": frozen["reference_labels"],
+            "aspect_ratio": data.get("aspect_ratio") or "9:16",
+            **_model_override(data.get("model")),
+        }
+    if node["type"] == NODE_VIDEO_GENERATE:
+        return {
+            "aspect_ratio": data.get("aspect_ratio") or "9:16",
+            "duration_seconds": int(data.get("duration_seconds") or 5),
+        }
+    voice = data.get("voice")
+    return {"voice": voice} if isinstance(voice, str) and voice.strip() else {}
 
 
 def _model_override(model: object) -> dict[str, str]:
@@ -207,15 +235,13 @@ class CanvasService:
         node = next((n for n in graph["nodes"] if n["id"] == node_id), None)
         if node is None:
             raise CanvasGraphError("canvas_node_not_found", id=node_id)
-        if node["type"] == NODE_IMAGE_GENERATE:
-            return await self._run_image_generate(project_name, node_id, user_id=user_id, source=source)
+        if node["type"] in _PROVIDER_TASKS:
+            return await self._run_provider(project_name, node_id, user_id=user_id, source=source)
         if node["type"] == NODE_H3_WRITER:
             return await self._run_h3_writer(project_name, node_id, user_id=user_id, source=source)
         raise CanvasGraphError("canvas_node_not_runnable", id=node_id)
 
-    async def _run_image_generate(
-        self, project_name: str, node_id: str, *, user_id: str, source: str
-    ) -> dict[str, Any]:
+    async def _run_provider(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
         frozen: dict[str, Any] = {}
 
         def _prepare(graph: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -229,29 +255,28 @@ class CanvasService:
             prompt, references = resolve_generate_inputs(graph, node_id, derived)
             if not prompt:
                 raise CanvasGraphError("canvas_prompt_required")
+            labels = resolve_reference_labels(graph, node_id, derived)
             frozen.update(
                 prompt=prompt,
                 references=references,
-                reference_labels=resolve_reference_labels(graph, node_id, derived),
-                aspect_ratio=node["data"].get("aspect_ratio") or "9:16",
-                model=node["data"].get("model"),
+                options=_task_options(node, {"reference_labels": labels}),
+                task_type=_PROVIDER_TASKS[node["type"]],
             )
-            text_node, image_node = add_run_outputs(graph, node_id, prompt)
+            text_node, media_node = add_run_outputs(graph, node_id, prompt)
             node["data"].update(status=STATUS_QUEUED, error=None)
-            return text_node, image_node
+            return text_node, media_node
 
-        (text_node, image_node), _ = await self.mutate(project_name, _prepare)
+        (text_node, media_node), _ = await self.mutate(project_name, _prepare)
+        task_type, media_type = frozen["task_type"]
         spec = TaskSpec.from_request(
-            task_type=CANVAS_IMAGE_TASK_TYPE,
-            media_type="image",
-            resource_id=image_node["id"],
+            task_type=task_type,
+            media_type=media_type,
+            resource_id=media_node["id"],
             prompt=frozen["prompt"],
             extra_payload={
                 "generator_id": node_id,
                 "references": frozen["references"],
-                "reference_labels": frozen["reference_labels"],
-                "aspect_ratio": frozen["aspect_ratio"],
-                **_model_override(frozen["model"]),
+                **frozen["options"],
             },
         )
         try:
@@ -267,7 +292,7 @@ class CanvasService:
         except BaseException:
 
             def _rollback(graph: dict[str, Any]) -> None:
-                for created in (image_node["id"], text_node["id"]):
+                for created in (media_node["id"], text_node["id"]):
                     graph["nodes"] = [n for n in graph["nodes"] if n["id"] != created]
                     graph["edges"] = [e for e in graph["edges"] if created not in (e["source"], e["target"])]
                 find_node(graph, node_id)["data"].update(status=STATUS_FAILED)
@@ -277,7 +302,7 @@ class CanvasService:
 
         def _record_task(graph: dict[str, Any]) -> None:
             find_node(graph, node_id)["data"]["task_id"] = result["task_id"]
-            find_node(graph, image_node["id"])["data"]["task_id"] = result["task_id"]
+            find_node(graph, media_node["id"])["data"]["task_id"] = result["task_id"]
 
         await self.mutate(project_name, _record_task)
         return {
@@ -285,7 +310,8 @@ class CanvasService:
             "task_id": result["task_id"],
             "task_ids": [result["task_id"]],
             "text_node_id": text_node["id"],
-            "image_node_id": image_node["id"],
+            "image_node_id": media_node["id"],
+            "media_node_id": media_node["id"],
         }
 
     async def _run_h3_writer(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
