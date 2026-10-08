@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { useTranslation } from "react-i18next";
 import {
   ChevronLeft,
@@ -41,6 +41,8 @@ interface NavItem {
   label: string;
   icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
   meta?: number;
+  /** 同一路由下按查询参数区分的入口（如画布里「聚焦角色」）。 */
+  focus?: string;
 }
 
 /**
@@ -54,6 +56,7 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
   const { currentProjectName, currentProjectData } = useProjectsStore();
   const debouncedFetchCost = useCostStore((s) => s.debouncedFetch);
   const [location, setLocation] = useLocation();
+  const searchString = useSearch();
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -117,6 +120,13 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
             path: "/canvas",
             label: t("dashboard:node_canvas_nav"),
             icon: Workflow,
+          },
+          {
+            key: "characters",
+            path: "/canvas",
+            focus: "characters",
+            label: t("dashboard:workspace_nav_characters"),
+            icon: Users,
             meta: characterCount,
           },
           {
@@ -169,6 +179,10 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
 
   const isNavActive = (item: NavItem): boolean => {
     if (item.path === "/") return location === "/";
+    // 画布的两个入口共用一条路由：带 focus 的是「角色」入口，不带的是「画布」本身。
+    if (item.path === "/canvas") {
+      return location === "/canvas" && new URLSearchParams(searchString).get("focus") === (item.focus ?? null);
+    }
     return location === item.path || location.startsWith(item.path + "/");
   };
 
@@ -200,7 +214,7 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
             <button
               key={item.key}
               type="button"
-              onClick={() => setLocation(item.path)}
+              onClick={() => setLocation(item.focus ? `${item.path}?focus=${item.focus}&t=${Date.now()}` : item.path)}
               title={collapsed ? item.label : ""}
               aria-label={collapsed ? item.label : undefined}
               className="relative mb-px flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors focus-ring hover:bg-[oklch(0.26_0.012_265/0.5)]"

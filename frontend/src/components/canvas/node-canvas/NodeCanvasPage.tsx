@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearch } from "wouter";
 import {
   Background,
   BackgroundVariant,
@@ -44,6 +45,11 @@ import { useCanvasGraph } from "./use-canvas-graph";
 const NEW_NODE_JITTER_PX = 24;
 
 const DIMMED_OPACITY = 0.28;
+
+/** 取景留白：顶部让出工具栏（两行按钮），底部让出 Agent 输入框。 */
+const FIT_PADDING = { top: "150px", right: "48px", bottom: "100px", left: "48px" } as const;
+/** 取景缩放下限：内容再大也不缩到看不清字，超出的部分靠平移。 */
+const FIT_MIN_ZOOM = 0.5;
 
 /** 节点内容签名：服务端数据没变（位置、data、分组）就沿用上一个节点对象，React Flow 不会重绘它。 */
 function nodeSignature(node: CanvasGraph["nodes"][number]): string {
@@ -186,7 +192,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     setEdges((prev) => toFlowEdges(graph, prev));
     if (!fitted.current && graph.nodes.length > 0) {
       fitted.current = true;
-      requestAnimationFrame(() => void fitView({ padding: 0.3, maxZoom: 1 }));
+      requestAnimationFrame(() => void fitView({ padding: FIT_PADDING, minZoom: FIT_MIN_ZOOM, maxZoom: 1 }));
     }
   }, [graph, setNodes, setEdges, fitView]);
 
@@ -328,9 +334,29 @@ function CanvasSurface({ projectName }: { projectName: string }) {
       return;
     }
     setNodes((prev) => prev.map((n) => (n.selected === (n.id === nodeId) ? n : { ...n, selected: n.id === nodeId })));
-    void fitView({ nodes: [{ id: nodeId }], padding: 0.4, maxZoom: 1, duration: 400 });
+    void fitView({ nodes: [{ id: nodeId }], padding: FIT_PADDING, minZoom: FIT_MIN_ZOOM, maxZoom: 1, duration: 400 });
     clearScrollTarget(scrollTarget.request_id);
   }, [scrollTarget, nodes, fitView, setNodes, clearScrollTarget]);
+
+  // 侧栏「角色」入口：/canvas?focus=characters，把视图移到角色节点上。
+  const search = useSearch();
+  const handledFocus = useRef("");
+  useEffect(() => {
+    if (new URLSearchParams(search).get("focus") !== "characters" || handledFocus.current === search) return;
+    const characterNodes = nodes.filter((n) => n.type === "character");
+    if (characterNodes.length === 0) return;
+    handledFocus.current = search;
+    requestAnimationFrame(
+      () =>
+        void fitView({
+          nodes: characterNodes.map((n) => ({ id: n.id })),
+          padding: FIT_PADDING,
+          minZoom: FIT_MIN_ZOOM,
+          maxZoom: 0.9,
+          duration: 400,
+        }),
+    );
+  }, [search, nodes, fitView]);
 
   const importCharacters = useCallback(
     async (ids: string[]) => {
