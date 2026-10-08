@@ -332,3 +332,23 @@ def test_legacy_graphs_migrate_refs_to_image1_and_drop_prompt_copy_nodes():
 
     assert [e["targetHandle"] for e in graph["edges"]] == ["image1"]
     assert all(n["id"] != copy["id"] for n in graph["nodes"])
+
+
+def test_a_derivative_generator_output_resolves_to_its_sheet_and_is_labelled_with_its_path():
+    from lib.canvas.graph import derived_id, resolve_reference_labels
+
+    graph = empty_graph()
+    gen = _add(graph, "image_generate")
+    d_gen = derived_id("deriv_gen", "阿离/幼年")
+    d_sheet = derived_id("deriv_sheet", "阿离/幼年")
+    connect(graph, d_gen, "image", gen["id"], "image1")
+    derived = {
+        d_sheet: {
+            "id": d_sheet,
+            "type": "image",
+            "position": {"x": 0, "y": 0},
+            "data": {"path": "characters/derivatives/阿离/幼年.png", "label": "阿离/幼年"},
+        }
+    }
+    assert resolve_generate_inputs(graph, gen["id"], derived)[1] == ["characters/derivatives/阿离/幼年.png"]
+    assert resolve_reference_labels(graph, gen["id"], derived) == ["阿离/幼年"]

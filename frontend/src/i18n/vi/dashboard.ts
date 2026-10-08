@@ -2886,4 +2886,12 @@ export default {
   'node_canvas_character_reference_upload': 'Tải ảnh tham chiếu',
   'node_canvas_character_reference_replace': 'Đổi ảnh tham chiếu',
   'node_canvas_character_generate_hint': 'Tạo ảnh sheet nhân vật từ prompt và ảnh tham chiếu (nếu có).',
+  'node_canvas_derivative_add': 'Biến thể',
+  'node_canvas_derivative_name_placeholder': 'Tên biến thể, ví dụ Lúc trẻ',
+  'node_canvas_derivative_description_placeholder': 'Thay đổi so với bản gốc? Viết như một chỉ dẫn chỉnh sửa.',
+  'node_canvas_derivative_create': 'Thêm biến thể',
+  'node_canvas_derivative_prompt': 'Thay đổi · {{name}}',
+  'node_canvas_derivative_sheet': 'Sheet · {{name}}',
+  'node_canvas_derivative_generate_hint': 'Chỉnh sửa ảnh sheet gốc theo mô tả thay đổi.',
+  'node_canvas_derivative_delete_confirm': 'Xóa biến thể “{{name}}” và ảnh sheet của nó?',
 } satisfies Record<keyof typeof enDashboard, string>;

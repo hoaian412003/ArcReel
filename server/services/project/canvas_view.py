@@ -17,6 +17,9 @@ from lib.canvas.graph import (
     KIND_CHAR_SHEET,
     KIND_CHAR_TEXT,
     KIND_CHARACTER,
+    KIND_DERIV_GEN,
+    KIND_DERIV_SHEET,
+    KIND_DERIV_TEXT,
     KIND_EPISODE,
     KIND_H3_PROMPT,
     KIND_KEYFRAME,
@@ -47,6 +50,8 @@ GROUP_GAP = 80
 #: 角色分组在画布左侧竖排：每个角色一组，组内从左到右是 描述 / 参考图 → 图片供应商 → 资产图。
 CHARACTER_GROUP_WIDTH = 1140
 CHARACTER_GROUP_HEIGHT = 700
+#: 每个衍生在分组里占一行（描述 → 图片供应商 → 衍生资产图），分组随衍生数增高。
+DERIVATIVE_ROW_HEIGHT = 400
 CHARACTER_GROUP_GAP = 60
 CHARACTER_ORIGIN_X = -CHARACTER_GROUP_WIDTH - 160
 #: 组内各子节点的位置（相对分组）。
@@ -232,6 +237,13 @@ def build_project_view(
     return nodes, edges
 
 
+def _derivatives_of(entry: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
+    table = entry.get("derivatives")
+    if not isinstance(table, Mapping):
+        return []
+    return [(str(key), item) for key, item in table.items() if isinstance(item, Mapping)]
+
+
 def _char_child(
     nodes: list[dict[str, Any]],
     group_id: str,
@@ -275,17 +287,18 @@ def _character_nodes(
     project_path = pm.get_project_path(project_name)
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
-    for index, (name, entry) in enumerate(characters.items()):
+    next_y = 0.0
+    for name, entry in characters.items():
         entry = entry if isinstance(entry, Mapping) else {}
         sheet = entry.get("character_sheet")
         sheet = sheet if isinstance(sheet, str) and sheet else None
         reference = entry.get("reference_image")
         reference = reference if isinstance(reference, str) and reference else None
         group_id = derived_id(KIND_CHARACTER, name)
-        default = {
-            "x": float(CHARACTER_ORIGIN_X),
-            "y": float(index * (CHARACTER_GROUP_HEIGHT + CHARACTER_GROUP_GAP)),
-        }
+        derivatives = _derivatives_of(entry)
+        height = CHARACTER_GROUP_HEIGHT + len(derivatives) * DERIVATIVE_ROW_HEIGHT
+        default = {"x": float(CHARACTER_ORIGIN_X), "y": next_y}
+        next_y += height + CHARACTER_GROUP_GAP
         group_pos = dict(overrides.get(group_id) or default)
         group_pos = {"x": float(group_pos["x"]), "y": float(group_pos["y"])}
         nodes.append(
@@ -295,7 +308,7 @@ def _character_nodes(
                 "derived": True,
                 "position": group_pos,
                 "width": CHARACTER_GROUP_WIDTH,
-                "height": CHARACTER_GROUP_HEIGHT,
+                "height": height,
                 "data": {"name": name},
             }
         )
@@ -340,6 +353,56 @@ def _character_nodes(
                 _virtual_edge(gen_id, "image", sheet_id, "in"),
             ]
         )
+        for row, (derivative, item) in enumerate(derivatives):
+            y = CHARACTER_GROUP_HEIGHT + row * DERIVATIVE_ROW_HEIGHT
+            key = f"{name}/{derivative}"
+            path = item.get("character_sheet")
+            path = path if isinstance(path, str) and path else None
+            extra = {"derivative": derivative}
+            d_text = _char_child(
+                nodes,
+                group_id,
+                group_pos,
+                key,
+                KIND_DERIV_TEXT,
+                "text",
+                {"x": _CHAR_TEXT_POS["x"], "y": y},
+                {**extra, "name": name, "text": str(item.get("description") or "")},
+            )
+            d_gen = _char_child(
+                nodes,
+                group_id,
+                group_pos,
+                key,
+                KIND_DERIV_GEN,
+                "image_generate",
+                {"x": _CHAR_GEN_POS["x"], "y": y},
+                {**extra, "name": name},
+            )
+            d_sheet = _char_child(
+                nodes,
+                group_id,
+                group_pos,
+                key,
+                KIND_DERIV_SHEET,
+                "image",
+                {"x": _CHAR_SHEET_POS["x"], "y": y},
+                {
+                    **extra,
+                    "name": name,
+                    "path": path,
+                    "version": _version(project_path, path),
+                    "label": key,
+                    "role": "derivative",
+                },
+            )
+            edges.extend(
+                [
+                    _virtual_edge(d_text, "text", d_gen, "prompt"),
+                    _virtual_edge(sheet_id, "image", d_gen, "image1"),
+                    _virtual_edge(d_gen, "image", d_sheet, "in"),
+                ]
+            )
     return nodes, edges
 
 

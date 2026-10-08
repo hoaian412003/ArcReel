@@ -49,6 +49,10 @@ KIND_CHAR_TEXT = "char_text"
 KIND_CHAR_REF = "char_ref"
 KIND_CHAR_GEN = "char_gen"
 KIND_CHAR_SHEET = "char_sheet"
+#: 角色衍生（如「幼年」）的三个子节点：变化描述 → 图片供应商（以本体资产图为参考做编辑）→ 衍生资产图。
+KIND_DERIV_TEXT = "deriv_text"
+KIND_DERIV_GEN = "deriv_gen"
+KIND_DERIV_SHEET = "deriv_sheet"
 DERIVED_KINDS = (
     KIND_EPISODE,
     KIND_UNIT,
@@ -59,6 +63,9 @@ DERIVED_KINDS = (
     KIND_CHAR_REF,
     KIND_CHAR_GEN,
     KIND_CHAR_SHEET,
+    KIND_DERIV_TEXT,
+    KIND_DERIV_GEN,
+    KIND_DERIV_SHEET,
 )
 #: 派生节点里复用通用节点外观与连线规则的那几类：派生种类 → 它扮演的节点类型。
 DERIVED_NODE_TYPE: dict[str, str] = {
@@ -66,6 +73,9 @@ DERIVED_NODE_TYPE: dict[str, str] = {
     KIND_CHAR_REF: "image",
     KIND_CHAR_GEN: "image_generate",
     KIND_CHAR_SHEET: "image",
+    KIND_DERIV_TEXT: "text",
+    KIND_DERIV_GEN: "image_generate",
+    KIND_DERIV_SHEET: "image",
 }
 
 #: 句柄的数据类型。连线只允许同类型句柄相连。
@@ -281,7 +291,11 @@ def _incoming(
             continue
         if derived_kind(e["source"]) is not None:
             # 角色分组里图片供应商的输出就是该角色的资产图节点。
-            source_id = e["source"].replace(f"p:{KIND_CHAR_GEN}:", f"p:{KIND_CHAR_SHEET}:", 1)
+            source_id = (
+                e["source"]
+                .replace(f"p:{KIND_CHAR_GEN}:", f"p:{KIND_CHAR_SHEET}:", 1)
+                .replace(f"p:{KIND_DERIV_GEN}:", f"p:{KIND_DERIV_SHEET}:", 1)
+            )
             if derived is not None and source_id in derived:
                 sources.append(derived[source_id])
         else:

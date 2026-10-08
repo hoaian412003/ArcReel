@@ -242,3 +242,32 @@ async def test_each_character_is_a_group_whose_sheet_feeds_references_and_whose_
     blank = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:char_gen:阿宁"), ctx)
     assert blank.problem is not None
     assert blank.problem.code == "canvas_character_description_required"
+
+
+async def test_derivative_generators_are_runnable_only_with_a_description_and_a_base_sheet(ctx: Services) -> None:
+    ctx.projects.add_character("demo", "阿离", "少女")
+
+    def _register(entry: dict) -> None:
+        entry["derivatives"] = {
+            "幼年": {"description": "年纪更小"},
+            "空白": {"description": ""},
+        }
+
+    ctx.projects.update_asset_entry("character", "demo", "阿离", _register)
+
+    view = await _canvas(ctx)
+    ids = {n["id"] for n in view["nodes"]}
+    assert {"p:deriv_gen:阿离/幼年", "p:deriv_sheet:阿离/幼年", "p:deriv_text:阿离/空白"} <= ids
+
+    no_description = await _call(
+        canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:deriv_gen:阿离/空白"), ctx
+    )
+    assert no_description.problem is not None
+    assert no_description.problem.code == "canvas_derivative_description_required"
+
+    no_sheet = await _call(
+        canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:deriv_gen:阿离/幼年"), ctx
+    )
+    assert no_sheet.problem is not None
+    assert no_sheet.problem.code == "canvas_derivative_owner_sheet_missing"
+    assert _queue(ctx).calls == []

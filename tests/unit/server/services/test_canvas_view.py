@@ -155,3 +155,50 @@ def test_characters_sit_alongside_episode_groups_in_reference_projects(patched):
     project = {**PROJECT, "characters": {"阿离": {"character_sheet": ""}}}
     nodes, _ = canvas_view.build_project_view(patched, "demo", project, [1], {}, h3_status=_status)
     assert {n["type"] for n in nodes} >= {"character", "episode", "unit", "image_generate"}
+
+
+DERIVATIVE_PROJECT = {
+    "generation_mode": "storyboard",
+    "characters": {
+        "阿离": {
+            "description": "少女",
+            "character_sheet": "characters/阿离.png",
+            "derivatives": {
+                "幼年": {"description": "年纪更小", "character_sheet": "characters/derivatives/阿离/幼年.png"},
+                "战斗装": {"description": "穿上重甲"},
+            },
+        },
+        "阿宁": {"description": "少年"},
+    },
+}
+
+
+def test_each_derivative_is_a_row_in_its_character_group_that_edits_the_base_sheet(patched):
+    nodes, edges = canvas_view.build_project_view(patched, "demo", DERIVATIVE_PROJECT, [], {})
+    by_id = {n["id"]: n for n in nodes}
+    group = by_id[derived_id("character", "阿离")]
+    other = by_id[derived_id("character", "阿宁")]
+
+    assert group["height"] == canvas_view.CHARACTER_GROUP_HEIGHT + 2 * canvas_view.DERIVATIVE_ROW_HEIGHT
+    # 下一组接在这一组（含衍生行）之后，不会叠上去。
+    assert other["position"]["y"] >= group["position"]["y"] + group["height"]
+
+    d_text = by_id[derived_id("deriv_text", "阿离/幼年")]
+    d_gen = by_id[derived_id("deriv_gen", "阿离/幼年")]
+    d_sheet = by_id[derived_id("deriv_sheet", "阿离/幼年")]
+    assert (d_text["type"], d_gen["type"], d_sheet["type"]) == ("text", "image_generate", "image")
+    assert (d_text["data"]["text"], d_text["data"]["derivative"], d_text["data"]["name"]) == (
+        "年纪更小",
+        "幼年",
+        "阿离",
+    )
+    assert d_sheet["data"]["path"] == "characters/derivatives/阿离/幼年.png"
+    assert d_sheet["data"]["label"] == "阿离/幼年"
+    assert by_id[derived_id("deriv_sheet", "阿离/战斗装")]["data"]["path"] is None
+    # 第二行在第一行下面。
+    assert by_id[derived_id("deriv_gen", "阿离/战斗装")]["position"]["y"] > d_gen["position"]["y"]
+
+    inner = {(e["source"], e["sourceHandle"], e["target"], e["targetHandle"]) for e in edges}
+    assert (d_text["id"], "text", d_gen["id"], "prompt") in inner
+    assert (derived_id("char_sheet", "阿离"), "image", d_gen["id"], "image1") in inner
+    assert (d_gen["id"], "image", d_sheet["id"], "in") in inner

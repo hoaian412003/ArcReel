@@ -38,7 +38,9 @@ export interface CanvasNodeData {
   /** 角色分组及其子节点：角色名（内容取自项目里的角色条目）。 */
   name?: string;
   /** 角色分组里的图片节点：reference 参考图（可上传）/ sheet 资产图。 */
-  role?: "reference" | "sheet";
+  role?: "reference" | "sheet" | "derivative";
+  /** 角色衍生节点：衍生名（`name` 仍是角色名）。 */
+  derivative?: string;
   episode?: number;
   title?: string;
   unit_count?: number;

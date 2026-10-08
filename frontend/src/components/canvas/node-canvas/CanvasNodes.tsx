@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Clapperboard, Film, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Sparkles, Type, Upload, User, Video, X } from "lucide-react";
+import { AlertTriangle, Clapperboard, Film, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Plus, Sparkles, Type, Upload, User, Video, X } from "lucide-react";
 import { API } from "@/api";
 import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/types/canvas";
 import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
@@ -90,7 +90,11 @@ function HandleLabel({ side, children }: { side: "left" | "right"; children: Rea
 
 /** 角色分组里的节点（id 形如 `p:char_*:<角色名>`）：内容取自项目，写操作走角色接口，不能删。 */
 function isCharacterPart(id: string): boolean {
-  return id.startsWith("p:char_");
+  return id.startsWith("p:char_") || id.startsWith("p:deriv_");
+}
+
+function isDerivativePart(id: string): boolean {
+  return id.startsWith("p:deriv_");
 }
 
 function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
@@ -115,7 +119,8 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     dirty.current = false;
-    if (bound) void characters?.assets.saveDescription(data.name ?? "", value);
+    if (isDerivativePart(id)) void characters?.assets.saveDerivativeDescription(data.name ?? "", data.derivative ?? "", value);
+    else if (bound) void characters?.assets.saveDescription(data.name ?? "", value);
     else void setText(id, value);
   };
 
@@ -125,13 +130,24 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
       width={280}
       icon={<Type className="h-3.5 w-3.5" aria-hidden="true" />}
       title={
-        bound
-          ? t("node_canvas_character_prompt")
-          : data.generated
-            ? t("node_canvas_text_generated")
-            : (data.label ?? t("node_canvas_text_label"))
+        isDerivativePart(id)
+          ? t("node_canvas_derivative_prompt", { name: data.derivative })
+          : bound
+            ? t("node_canvas_character_prompt")
+            : data.generated
+              ? t("node_canvas_text_generated")
+              : (data.label ?? t("node_canvas_text_label"))
       }
-      onRemove={bound ? undefined : () => void remove(id)}
+      onRemove={
+        isDerivativePart(id)
+          ? () => {
+              if (window.confirm(t("node_canvas_derivative_delete_confirm", { name: data.derivative })))
+                void characters?.assets.deleteDerivative(data.name ?? "", data.derivative ?? "");
+            }
+          : bound
+            ? undefined
+            : () => void remove(id)
+      }
     >
       <textarea
         className={`nodrag nowheel ${INPUT_CLS} min-h-[96px] resize-y`}
@@ -163,7 +179,10 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const bound = isCharacterPart(id);
   const uploadInput = useRef<HTMLInputElement>(null);
   // 角色资产图在生成队列里时，资产图节点显示占位。
-  const busy = isBusy(data.status) || (data.role === "sheet" && Boolean(characters?.assets.generating.has(data.name ?? "")));
+  const busy =
+    isBusy(data.status) ||
+    (data.role === "sheet" && Boolean(characters?.assets.generating.has(data.name ?? ""))) ||
+    (data.role === "derivative" && Boolean(characters?.assets.generatingDerivatives.has(`${data.name}/${data.derivative}`)));
   const failed = data.status === "failed";
   return (
     <NodeShell
@@ -175,7 +194,9 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
           ? t("node_canvas_character_reference")
           : data.role === "sheet"
             ? t("node_canvas_character_sheet")
-            : (data.label ?? t("node_canvas_image_label"))
+            : data.role === "derivative"
+              ? t("node_canvas_derivative_sheet", { name: data.derivative })
+              : (data.label ?? t("node_canvas_image_label"))
       }
       onRemove={bound || busy ? undefined : () => void remove(id)}
     >
@@ -233,7 +254,7 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
           </button>
         </>
       ) : null}
-      {data.generated || data.role === "sheet" ? (
+      {data.generated || data.role === "sheet" || data.role === "derivative" ? (
         <Handle type="target" position={Position.Left} id={PASSIVE_INPUT_HANDLE} isConnectable={false} style={handleStyle("image", false)} />
       ) : null}
       <Handle type="source" position={Position.Right} id="image" style={handleStyle("image")} />
@@ -250,7 +271,12 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
   const { setAspectRatio, setModel, imageModels, run, remove } = useCanvasActions();
   const characters = useCharacterNodeContext();
   const bound = isCharacterPart(id);
-  const busy = bound ? Boolean(characters?.assets.generating.has(data.name ?? "")) : isBusy(data.status);
+  const derivative = isDerivativePart(id);
+  const busy = derivative
+    ? Boolean(characters?.assets.generatingDerivatives.has(`${data.name}/${data.derivative}`))
+    : bound
+      ? Boolean(characters?.assets.generating.has(data.name ?? ""))
+      : isBusy(data.status);
   return (
     <NodeShell
       selected={selected}
@@ -270,7 +296,9 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         <HandleLabel side="left">{t("node_canvas_handle_prompt")}</HandleLabel>
       </div>
       {bound ? (
-        <p className="mb-3 text-[10.5px] leading-snug text-text-4">{t("node_canvas_character_generate_hint")}</p>
+        <p className="mb-3 text-[10.5px] leading-snug text-text-4">
+          {derivative ? t("node_canvas_derivative_generate_hint") : t("node_canvas_character_generate_hint")}
+        </p>
       ) : (
         <>
           <div className="nodrag mb-2">
@@ -307,7 +335,8 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         className={`nodrag w-full justify-center ${ACCENT_BTN_SM_CLS}`}
         disabled={busy}
         onClick={() => {
-          if (bound) characters?.assets.generate(data.name ?? "");
+          if (derivative) characters?.assets.generateDerivative(data.name ?? "", data.derivative ?? "");
+          else if (bound) characters?.assets.generate(data.name ?? "");
           else void run(id);
         }}
       >
@@ -473,6 +502,12 @@ function H3WriterNodeView({ id, selected }: NodeProps<CanvasFlowNode>) {
 }
 
 function CharacterGroupView({ data, selected }: NodeProps<CanvasFlowNode>) {
+  const { t } = useTranslation("dashboard");
+  const characters = useCharacterNodeContext();
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [saving, setSaving] = useState(false);
   return (
     <div
       className={`h-full w-full rounded-[16px] border border-dashed bg-white/[0.02] ${selected ? "border-accent/60" : "border-hairline-strong"}`}
@@ -480,7 +515,56 @@ function CharacterGroupView({ data, selected }: NodeProps<CanvasFlowNode>) {
       <div className="flex items-center gap-2 px-4 py-3 text-[13px] font-medium text-text-2">
         <User className="h-3.5 w-3.5" aria-hidden="true" />
         <span className="truncate">{data.name}</span>
+        <button
+          type="button"
+          className={`nodrag ml-auto ${GHOST_BTN_CLS}`}
+          aria-expanded={adding}
+          onClick={() => setAdding((open) => !open)}
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          {t("node_canvas_derivative_add")}
+        </button>
       </div>
+      {adding ? (
+        <form
+          className="nodrag nowheel mx-4 mb-2 flex flex-col gap-2 rounded-[10px] border border-hairline bg-bg-grad-a/90 p-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!characters || !name.trim() || !description.trim()) return;
+            setSaving(true);
+            characters.assets
+              .addDerivative(data.name ?? "", name.trim(), description.trim())
+              .then(() => {
+                setName("");
+                setDescription("");
+                setAdding(false);
+              })
+              .catch(() => {
+                /* 失败已 toast，表单保持打开供修改后重试 */
+              })
+              .finally(() => setSaving(false));
+          }}
+        >
+          <input
+            className={`${INPUT_CLS} !py-1`}
+            value={name}
+            placeholder={t("node_canvas_derivative_name_placeholder")}
+            aria-label={t("node_canvas_derivative_name_placeholder")}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <textarea
+            className={`${INPUT_CLS} min-h-[64px] resize-y`}
+            value={description}
+            placeholder={t("node_canvas_derivative_description_placeholder")}
+            aria-label={t("node_canvas_derivative_description_placeholder")}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+          <button type="submit" className={`self-end ${ACCENT_BTN_SM_CLS}`} disabled={saving || !name.trim() || !description.trim()}>
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+            {t("node_canvas_derivative_create")}
+          </button>
+        </form>
+      ) : null}
     </div>
   );
 }

@@ -2888,4 +2888,12 @@ export default {
   'node_canvas_character_reference_upload': 'Upload reference',
   'node_canvas_character_reference_replace': 'Replace reference',
   'node_canvas_character_generate_hint': 'Writes the character sheet from the prompt and the optional reference image.',
+  'node_canvas_derivative_add': 'Derivative',
+  'node_canvas_derivative_name_placeholder': 'Derivative name, e.g. Young',
+  'node_canvas_derivative_description_placeholder': 'What changes from the base look? Write it as an edit instruction.',
+  'node_canvas_derivative_create': 'Add derivative',
+  'node_canvas_derivative_prompt': 'Change · {{name}}',
+  'node_canvas_derivative_sheet': 'Sheet · {{name}}',
+  'node_canvas_derivative_generate_hint': 'Edits the base character sheet using the change description.',
+  'node_canvas_derivative_delete_confirm': 'Delete the derivative “{{name}}” and its sheet?',
 };

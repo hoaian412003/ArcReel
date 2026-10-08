@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { API } from "@/api";
-import { enqueueCharacter } from "@/actions/generation";
+import { enqueueCharacter, enqueueCharacterDerivative } from "@/actions/generation";
 import i18n from "@/i18n";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -26,6 +26,13 @@ export interface CharacterAssets {
   saveDescription: (name: string, description: string) => Promise<void>;
   /** 上传 / 替换参考图（画布上参考图节点）；失败 toast，不抛出。 */
   uploadReference: (name: string, file: File) => Promise<void>;
+  /** 正在生成中的衍生，键为 `角色/衍生`。 */
+  generatingDerivatives: Set<string>;
+  generateDerivative: (name: string, derivative: string) => void;
+  saveDerivativeDescription: (name: string, derivative: string, description: string) => Promise<void>;
+  /** 失败时 toast 后抛出，供新增表单据此保持打开。 */
+  addDerivative: (name: string, derivative: string, description: string) => Promise<void>;
+  deleteDerivative: (name: string, derivative: string) => Promise<void>;
   /** 版本恢复 / 外部变更后重新拉取项目。 */
   refresh: () => Promise<void>;
 }
@@ -37,6 +44,7 @@ export interface CharacterAssets {
  */
 export function useCharacterAssets(projectName: string | null): CharacterAssets {
   const generating = useActiveResourceIds("character", projectName);
+  const generatingDerivatives = useActiveResourceIds("character_derivative", projectName);
 
   const refreshProject = useCallback(
     async (invalidateKeys: string[] = []): Promise<void> => {
@@ -137,10 +145,92 @@ export function useCharacterAssets(projectName: string | null): CharacterAssets 
     [projectName, refreshProject],
   );
 
+  const generateDerivative = useCallback(
+    (name: string, derivative: string) => {
+      if (!projectName) return;
+      enqueueCharacterDerivative(projectName, name, derivative).catch((err: unknown) => {
+        useAppStore.getState().pushToast(i18n.t("dashboard:submit_failed", { message: errMsg(err) }), "error");
+      });
+    },
+    [projectName],
+  );
+
+  const saveDerivativeDescription = useCallback(
+    async (name: string, derivative: string, description: string) => {
+      if (!projectName) return;
+      try {
+        await API.updateCharacterDerivative(projectName, name, derivative, description);
+      } catch (err) {
+        useAppStore
+          .getState()
+          .pushToast(i18n.t("dashboard:update_character_failed", { message: errMsg(err) }), "error");
+      } finally {
+        await refreshProject();
+      }
+    },
+    [projectName, refreshProject],
+  );
+
+  const addDerivative = useCallback(
+    async (name: string, derivative: string, description: string) => {
+      if (!projectName) return;
+      try {
+        await API.addCharacterDerivative(projectName, name, derivative, description);
+        await refreshProject();
+      } catch (err) {
+        useAppStore.getState().pushToast(i18n.t("dashboard:add_failed", { message: errMsg(err) }), "error");
+        throw err;
+      }
+    },
+    [projectName, refreshProject],
+  );
+
+  const deleteDerivative = useCallback(
+    async (name: string, derivative: string) => {
+      if (!projectName) return;
+      try {
+        await API.deleteCharacterDerivative(projectName, name, derivative);
+      } catch (err) {
+        useAppStore
+          .getState()
+          .pushToast(i18n.t("dashboard:update_character_failed", { message: errMsg(err) }), "error");
+      } finally {
+        await refreshProject();
+      }
+    },
+    [projectName, refreshProject],
+  );
+
   const refresh = useCallback(() => refreshProject(), [refreshProject]);
 
   return useMemo(
-    () => ({ generating, save, generate, add, saveDescription, uploadReference, refresh }),
-    [generating, save, generate, add, saveDescription, uploadReference, refresh],
+    () => ({
+      generating,
+      save,
+      generate,
+      add,
+      saveDescription,
+      uploadReference,
+      generatingDerivatives,
+      generateDerivative,
+      saveDerivativeDescription,
+      addDerivative,
+      deleteDerivative,
+      refresh,
+    }),
+    [
+      generating,
+      save,
+      generate,
+      add,
+      saveDescription,
+      uploadReference,
+      generatingDerivatives,
+      generateDerivative,
+      saveDerivativeDescription,
+      addDerivative,
+      deleteDerivative,
+      refresh,
+    ],
   );
 }

@@ -2887,4 +2887,12 @@ export default {
   'node_canvas_character_reference_upload': '上传参考图',
   'node_canvas_character_reference_replace': '替换参考图',
   'node_canvas_character_generate_hint': '按提示词和可选的参考图生成角色资产图。',
+  'node_canvas_derivative_add': '衍生',
+  'node_canvas_derivative_name_placeholder': '衍生名，如 幼年',
+  'node_canvas_derivative_description_placeholder': '相对本体的外观变化，用编辑指令的口吻来写',
+  'node_canvas_derivative_create': '添加衍生',
+  'node_canvas_derivative_prompt': '变化描述 · {{name}}',
+  'node_canvas_derivative_sheet': '衍生资产图 · {{name}}',
+  'node_canvas_derivative_generate_hint': '以本体资产图为底，按变化描述编辑出衍生资产图。',
+  'node_canvas_derivative_delete_confirm': '删除衍生「{{name}}」及其资产图？',
 } satisfies Record<keyof typeof enDashboard, string>;

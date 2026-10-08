@@ -50,6 +50,8 @@ const DIMMED_OPACITY = 0.28;
 const FRAME_PAD = { top: 150, right: 48, bottom: 100, left: 48 } as const;
 /** 取景缩放下限：内容再大也不缩到看不清字，超出的部分靠平移。 */
 const FRAME_MIN_ZOOM = 0.5;
+/** 小地图抬高一截，让出右下角的 Agent 按钮。 */
+const MINIMAP_STYLE = { marginBottom: 76 } as const;
 
 /** 节点内容签名：服务端数据没变（位置、data、分组）就沿用上一个节点对象，React Flow 不会重绘它。 */
 function nodeSignature(node: CanvasGraph["nodes"][number]): string {
@@ -241,7 +243,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
 
   // 角色的增删与资产图变化（生成完成、版本恢复）发生在项目数据里，画布上对应的角色节点要跟着重读。
   const characterSignature = useMemo(
-    () => Object.entries(characters ?? {}).map(([name, c]) => `${name}:${c.character_sheet ?? ""}:${c.reference_image ?? ""}:${c.description ?? ""}`).join("|"),
+    () => Object.entries(characters ?? {}).map(([name, c]) => `${name}:${c.character_sheet ?? ""}:${c.reference_image ?? ""}:${c.description ?? ""}:${Object.entries(c.derivatives ?? {}).map(([k, d]) => `${k}=${d.character_sheet ?? ""}=${d.description}`).join(",")}`).join("|"),
     [characters],
   );
   const previousSignature = useRef(characterSignature);
@@ -501,8 +503,8 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           colorMode="dark"
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} />
-          <Controls showInteractive={false} />
-          <MiniMap pannable zoomable position="top-right" className="!bg-bg-grad-a/80" />
+          <Controls showInteractive={false} onFitView={() => frame(null, 1, 300)} />
+          <MiniMap pannable zoomable position="bottom-right" style={MINIMAP_STYLE} className="!bg-bg-grad-a/80" />
         </ReactFlow>
 
         <div className="pointer-events-none absolute left-4 top-4 flex flex-wrap items-center gap-2">

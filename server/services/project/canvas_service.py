@@ -13,6 +13,7 @@ from lib.canvas.graph import (
     BUSY_STATUSES,
     KIND_CHAR_GEN,
     KIND_CHARACTER,
+    KIND_DERIV_GEN,
     KIND_KEYFRAME,
     NODE_AUDIO_GENERATE,
     NODE_H3_WRITER,
@@ -38,8 +39,12 @@ from lib.canvas.graph import (
     stale_generated_images,
 )
 from lib.canvas.store import load_canvas, mutate_canvas
+from lib.config.resolver import ConfigResolver
+from lib.db import async_session_factory
 from lib.generation.generation_queue import GenerationQueue
 from lib.generation.generation_queue_client import TaskSpec, WorkerOfflineError, enqueue_task_only
+from lib.infra.api_errors import ApiError
+from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE, DerivativeSheetSource, resolve_derivative_sheet_source
 from lib.project.asset_types import resolve_asset_key
 from lib.project.project_manager import ProjectManager
 from lib.prompts.video_prompt_profile import is_h3_ref2va
@@ -47,6 +52,7 @@ from server.services.project.canvas_view import build_project_view, list_episode
 from server.services.project.keyframe_plan import KeyframePlanError
 from server.services.project.keyframe_sheets import enqueue_keyframe_sheet
 from server.services.tasks.canvas_tasks import CANVAS_AUDIO_TASK_TYPE, CANVAS_IMAGE_TASK_TYPE, CANVAS_VIDEO_TASK_TYPE
+from server.services.tasks.derivative_sheet_tasks import build_derivative_sheet_instruction
 from server.text_generation import TextGenerationError, TextGenerationRequest, prompt_authoring_preflight
 from server.tool_runtime import TEXT_EPISODE_SCRIPT_TASK_TYPE
 
@@ -233,6 +239,8 @@ class CanvasService:
     async def run(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
         """运行一个节点，立即返回入队结果。图片供应商 / H3 写作 / 起始帧联合图三类节点可运行。"""
         kind = derived_kind(node_id)
+        if kind == KIND_DERIV_GEN:
+            return await self._run_derivative(project_name, node_id, user_id=user_id, source=source)
         if kind in (KIND_CHARACTER, KIND_CHAR_GEN):
             return await self._run_character(project_name, node_id, user_id=user_id, source=source)
         if kind == KIND_KEYFRAME:
@@ -395,5 +403,51 @@ class CanvasService:
             payload=spec.payload,
             source=source,
             user_id=user_id,
+        )
+        return {"success": True, "task_id": result["task_id"], "task_ids": [result["task_id"]]}
+
+    async def _run_derivative(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
+        """生成角色衍生的资产图：以本体资产图为唯一参考、按衍生的变化描述编辑，与角色页的「生成衍生」同一条入队链路。"""
+        owner, _, derivative = node_id.split(":", 2)[2].partition("/")
+
+        def _resolve() -> tuple[dict[str, Any], DerivativeSheetSource]:
+            project = self.pm.load_project(project_name)
+            try:
+                return project, resolve_derivative_sheet_source(project, owner, derivative)
+            except KeyError as exc:
+                raise CanvasGraphError("canvas_node_not_found", id=node_id) from exc
+            except ApiError as exc:
+                codes = {
+                    "derivative_description_required": "canvas_derivative_description_required",
+                    "derivative_owner_sheet_missing": "canvas_derivative_owner_sheet_missing",
+                }
+                if exc.key == "derivative_not_found" or exc.status_code == 404:
+                    raise CanvasGraphError("canvas_node_not_found", id=node_id) from exc
+                raise CanvasGraphError(
+                    codes.get(exc.key, "canvas_run_failed"), name=derivative, message=exc.key
+                ) from exc
+
+        project, target = await asyncio.to_thread(_resolve)
+        try:
+            resolved = await ConfigResolver(async_session_factory).resolve_image_backend(
+                project, None, generation_type="i2i"
+            )
+        except ValueError as exc:
+            raise CanvasGraphError("canvas_run_failed", message="no i2i image provider configured") from exc
+        spec = TaskSpec.from_request(
+            task_type=DERIVATIVE_TASK_TYPE,
+            media_type="image",
+            resource_id=target.target.artifact_id,
+            prompt=build_derivative_sheet_instruction(target.description),
+        )
+        result = await self.queue.enqueue_task(
+            project_name=project_name,
+            task_type=spec.task_type,
+            media_type=spec.media_type,
+            resource_id=spec.resource_id,
+            payload=spec.payload,
+            source=source,
+            user_id=user_id,
+            provider_id=resolved.provider_id,
         )
         return {"success": True, "task_id": result["task_id"], "task_ids": [result["task_id"]]}
