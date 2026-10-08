@@ -46,10 +46,10 @@ const NEW_NODE_JITTER_PX = 24;
 
 const DIMMED_OPACITY = 0.28;
 
-/** 取景留白：顶部让出工具栏（两行按钮），底部让出 Agent 输入框。 */
-const FIT_PADDING = { top: "150px", right: "48px", bottom: "100px", left: "48px" } as const;
+/** 取景留白（px）：顶部让出工具栏（两行按钮），底部让出 Agent 输入框。 */
+const FRAME_PAD = { top: 150, right: 48, bottom: 100, left: 48 } as const;
 /** 取景缩放下限：内容再大也不缩到看不清字，超出的部分靠平移。 */
-const FIT_MIN_ZOOM = 0.5;
+const FRAME_MIN_ZOOM = 0.5;
 
 /** 节点内容签名：服务端数据没变（位置、data、分组）就沿用上一个节点对象，React Flow 不会重绘它。 */
 function nodeSignature(node: CanvasGraph["nodes"][number]): string {
@@ -151,9 +151,32 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const { graph, error, reload } = useCanvasGraph(projectName, agentOpen);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const { screenToFlowPosition, fitView } = useReactFlow<CanvasFlowNode, Edge>();
+  const { screenToFlowPosition, getNodes, getNodesBounds, setViewport } = useReactFlow<CanvasFlowNode, Edge>();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  /**
+   * 把视图摆到指定节点上（缺省全部）：缩放取「刚好放下」与下限之间，横向放得下就居中；纵向始终顶端对齐
+   * 工具栏下沿——内容比窗口高时从头看起，而不是被居中后顶部藏在工具栏后面。
+   */
+  const frame = useCallback(
+    (ids: readonly string[] | null, maxZoom: number, duration = 0) => {
+      const rect = surfaceRef.current?.getBoundingClientRect();
+      const targets = getNodes().filter((n) => !ids || ids.includes(n.id));
+      if (!rect || targets.length === 0) return;
+      const bounds = getNodesBounds(targets);
+      const availableWidth = rect.width - FRAME_PAD.left - FRAME_PAD.right;
+      const availableHeight = rect.height - FRAME_PAD.top - FRAME_PAD.bottom;
+      const fit = Math.min(availableWidth / Math.max(bounds.width, 1), availableHeight / Math.max(bounds.height, 1));
+      const zoom = Math.min(maxZoom, Math.max(FRAME_MIN_ZOOM, fit));
+      const slack = Math.max(0, availableWidth - bounds.width * zoom);
+      void setViewport(
+        { x: FRAME_PAD.left + slack / 2 - bounds.x * zoom, y: FRAME_PAD.top - bounds.y * zoom, zoom },
+        { duration },
+      );
+    },
+    [getNodes, getNodesBounds, setViewport],
+  );
   const fitted = useRef(false);
   const signatures = useRef(new Map<string, string>());
   const graphRef = useRef(graph);
@@ -192,9 +215,9 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     setEdges((prev) => toFlowEdges(graph, prev));
     if (!fitted.current && graph.nodes.length > 0) {
       fitted.current = true;
-      requestAnimationFrame(() => void fitView({ padding: FIT_PADDING, minZoom: FIT_MIN_ZOOM, maxZoom: 1 }));
+      requestAnimationFrame(() => requestAnimationFrame(() => frame(null, 1)));
     }
-  }, [graph, setNodes, setEdges, fitView]);
+  }, [graph, setNodes, setEdges, frame]);
 
   // 任务行还没进 store 时按进行中算；终态后节点恢复可点，并重新读一次画布拿到新产物。
   const activeTaskIds = useMemo(
@@ -334,9 +357,9 @@ function CanvasSurface({ projectName }: { projectName: string }) {
       return;
     }
     setNodes((prev) => prev.map((n) => (n.selected === (n.id === nodeId) ? n : { ...n, selected: n.id === nodeId })));
-    void fitView({ nodes: [{ id: nodeId }], padding: FIT_PADDING, minZoom: FIT_MIN_ZOOM, maxZoom: 1, duration: 400 });
+    frame([nodeId], 1, 400);
     clearScrollTarget(scrollTarget.request_id);
-  }, [scrollTarget, nodes, fitView, setNodes, clearScrollTarget]);
+  }, [scrollTarget, nodes, frame, setNodes, clearScrollTarget]);
 
   // 侧栏「角色」入口：/canvas?focus=characters，把视图移到角色节点上。
   const search = useSearch();
@@ -346,17 +369,8 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     const characterNodes = nodes.filter((n) => n.type === "character");
     if (characterNodes.length === 0) return;
     handledFocus.current = search;
-    requestAnimationFrame(
-      () =>
-        void fitView({
-          nodes: characterNodes.map((n) => ({ id: n.id })),
-          padding: FIT_PADDING,
-          minZoom: FIT_MIN_ZOOM,
-          maxZoom: 0.9,
-          duration: 400,
-        }),
-    );
-  }, [search, nodes, fitView]);
+    requestAnimationFrame(() => frame(characterNodes.map((n) => n.id), 0.9, 400));
+  }, [search, nodes, frame]);
 
   const importCharacters = useCallback(
     async (ids: string[]) => {
