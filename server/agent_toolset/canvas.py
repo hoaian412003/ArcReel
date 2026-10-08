@@ -298,6 +298,7 @@ _HANDLES_NOTE = (
     "image_generate 输入 prompt(text)、refs(image)，输出 text、image；h3_writer 输入 units(unit)，输出 h3；"
     "image_generate 的输出句柄 image 也可直接连到另一个 image_generate 的 refs，或连到 video_generate 的 frame（起始帧）：运行时取它最近一次产出的图。"
     "video_generate 输入 prompt(text)、frame(image)，输出 text、video；audio_generate 输入 text(text)，输出 text、audio。"
+    "角色节点 p:character:<角色名> 输出 image（角色资产图，无资产图时连了也不提供参考图）。"
     "视频单元节点 p:unit:<集>:<单元> 输出 unit、text；起始帧联合图节点 p:keyframe:<集>:<联合图> 输出 image。"
 )
 
@@ -377,7 +378,7 @@ CANVAS_RUN_NODE = ToolDeclaration(
     name="canvas_run_node",
     description=(
         "运行一个节点并立即返回任务 id（不等结果）：image_generate / video_generate / audio_generate 读入连进来的文本（与参考图 / 起始帧），挂出「使用的文本」与图片 / 视频 / 语音两个输出节点；"
-        "h3_writer 为它所连的视频单元重写 H3 提示词（单元正文原样保留）；p:keyframe 节点生成这张起始帧联合图。"
+        "h3_writer 为它所连的视频单元重写 H3 提示词（单元正文原样保留）；p:keyframe 节点生成这张起始帧联合图；p:character 节点生成角色资产图（要求角色已有描述）。"
         "结果出现在画布上，用 get_canvas 查看进度。"
     ),
     request_model=CanvasNodeRequest,

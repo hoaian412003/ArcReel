@@ -2876,4 +2876,7 @@ export default {
   'node_canvas_duration': 'Thời lượng',
   'node_canvas_voice': 'Giọng',
   'node_canvas_voice_placeholder': 'Giọng thuyết minh của dự án',
+  'node_canvas_character_missing': 'Nhân vật này không còn tồn tại',
+  'node_canvas_add_character': 'Thêm nhân vật',
+  'node_canvas_import_characters': 'Từ thư viện',
 } satisfies Record<keyof typeof enDashboard, string>;

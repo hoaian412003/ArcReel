@@ -14,8 +14,12 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Bot, Check, ImagePlus, LayoutGrid, Layers, Loader2, Mic, PenLine, Save, Sparkles, Trash2, Type, Video, Workflow } from "lucide-react";
+import { Bot, Check, Library, UserPlus, ImagePlus, LayoutGrid, Layers, Loader2, Mic, PenLine, Save, Sparkles, Trash2, Type, Video, Workflow } from "lucide-react";
 import { API } from "@/api";
+import { AssetFormModal } from "@/components/assets/AssetFormModal";
+import { AssetPickerModal } from "@/components/assets/AssetPickerModal";
+import { useCharacterAssets } from "@/components/canvas/lorebook/useCharacterAssets";
+import { useProjectsStore } from "@/stores/projects-store";
 import { enqueueKeyframeSheet } from "@/actions/generation";
 import { isActiveStatus, useTaskRowsByIds } from "@/stores/tasks-store";
 import { useAppStore } from "@/stores/app-store";
@@ -23,7 +27,14 @@ import { useClaudeStore } from "@/stores/claude-store";
 import { errMsg } from "@/utils/async";
 import type { CanvasBranchStep, CanvasGraph, CanvasNodeData, CanvasNodeType } from "@/types/canvas";
 import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS } from "@/components/ui/darkroom-tokens";
-import { CanvasActionsContext, CanvasBusyContext, type CanvasActions, type ImageModelChoices } from "./canvas-context";
+import {
+  CanvasActionsContext,
+  CanvasBusyContext,
+  CharacterNodeContextValue,
+  type CanvasActions,
+  type CharacterNodeContext,
+  type ImageModelChoices,
+} from "./canvas-context";
 import { tidyLayout } from "./canvas-layout";
 import { BranchStepFailed, runBranch } from "./branch-runner";
 import { isValidCanvasConnection, lineageOf } from "./canvas-rules";
@@ -65,7 +76,7 @@ function toFlowNodes(
       ...(node.parentId ? { parentId: node.parentId } : {}),
       ...(group ? { style: { width: node.width, height: node.height }, zIndex: -1 } : {}),
       // 项目推导的节点只读：不能删，也不能单独拖离集分组（拖动整个分组）。
-      draggable: !derived || group,
+      draggable: !derived || group || node.type === "character",
       deletable: !derived,
     };
     return flowNode;
@@ -119,11 +130,18 @@ function parseUnitNodeId(id: string): { episode: number; unitId: string } | null
 }
 
 function CanvasSurface({ projectName }: { projectName: string }) {
-  const { t } = useTranslation("dashboard");
+  const { t } = useTranslation(["dashboard", "assets"]);
   const pushToast = useAppStore((s) => s.pushToast);
   const agentOpen = useClaudeStore((s) => s.openProject === projectName);
   const agentPending = useClaudeStore((s) => s.pending[projectName] ?? false);
   const askAgent = useClaudeStore((s) => s.ask);
+  const characters = useProjectsStore((s) => s.currentProjectData?.characters);
+  const voiceBinding = useProjectsStore((s) => s.currentProjectData?.character_voice_binding);
+  const characterAssets = useCharacterAssets(projectName);
+  const [addingCharacter, setAddingCharacter] = useState(false);
+  const [pickingCharacter, setPickingCharacter] = useState(false);
+  const scrollTarget = useAppStore((s) => s.scrollTarget);
+  const clearScrollTarget = useAppStore((s) => s.clearScrollTarget);
   const { graph, error, reload } = useCanvasGraph(projectName, agentOpen);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -187,6 +205,23 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   }, [activeTaskIds, reload]);
 
   const busyNodeIds = useMemo(() => new Set(activeTaskIds.map((taskId) => tracked[taskId])), [activeTaskIds, tracked]);
+
+  const characterContext = useMemo<CharacterNodeContext>(
+    () => ({ characters: characters ?? {}, assets: characterAssets, voiceBinding }),
+    [characters, characterAssets, voiceBinding],
+  );
+
+  // 角色的增删与资产图变化（生成完成、版本恢复）发生在项目数据里，画布上对应的角色节点要跟着重读。
+  const characterSignature = useMemo(
+    () => Object.entries(characters ?? {}).map(([name, c]) => `${name}:${c.character_sheet ?? ""}`).join("|"),
+    [characters],
+  );
+  const previousSignature = useRef(characterSignature);
+  useEffect(() => {
+    if (previousSignature.current === characterSignature) return;
+    previousSignature.current = characterSignature;
+    void reload();
+  }, [characterSignature, reload]);
 
   const guarded = useCallback(
     async (action: () => Promise<unknown>, failureKey: "node_canvas_action_failed" | "node_canvas_run_failed" = "node_canvas_action_failed") => {
@@ -284,6 +319,34 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     void guarded(() => API.updateCanvasLayout(projectName, positions));
   }, [graph, guarded, projectName]);
 
+  // 通知 / 任务失败提示点进来的「定位到某个角色」：把画布平移缩放到该角色节点并选中它。
+  useEffect(() => {
+    if (!scrollTarget || scrollTarget.type !== "character") return;
+    const nodeId = `p:character:${scrollTarget.id}`;
+    if (!nodes.some((n) => n.id === nodeId)) {
+      if (Date.now() >= scrollTarget.expires_at) clearScrollTarget(scrollTarget.request_id);
+      return;
+    }
+    setNodes((prev) => prev.map((n) => (n.selected === (n.id === nodeId) ? n : { ...n, selected: n.id === nodeId })));
+    void fitView({ nodes: [{ id: nodeId }], padding: 0.4, maxZoom: 1, duration: 400 });
+    clearScrollTarget(scrollTarget.request_id);
+  }, [scrollTarget, nodes, fitView, setNodes, clearScrollTarget]);
+
+  const importCharacters = useCallback(
+    async (ids: string[]) => {
+      try {
+        await API.applyAssetsToProject({ asset_ids: ids, target_project: projectName, conflict_policy: "skip" });
+        pushToast(t("assets:import_count", { count: ids.length }), "success");
+        await characterAssets.refresh();
+      } catch (err) {
+        pushToast(errMsg(err), "error");
+      } finally {
+        setPickingCharacter(false);
+      }
+    },
+    [characterAssets, projectName, pushToast, t],
+  );
+
   const viewportCenter = useCallback(() => {
     const rect = surfaceRef.current?.getBoundingClientRect();
     const jitter = (Math.random() - 0.5) * 2 * NEW_NODE_JITTER_PX;
@@ -350,6 +413,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   return (
     <CanvasActionsContext.Provider value={actions}>
       <CanvasBusyContext.Provider value={busyNodeIds}>
+      <CharacterNodeContextValue.Provider value={characterContext}>
       <div ref={surfaceRef} className="relative h-full w-full" data-testid="node-canvas">
         <ReactFlow<CanvasFlowNode, Edge>
           nodes={shownNodes}
@@ -462,6 +526,14 @@ function CanvasSurface({ projectName }: { projectName: string }) {
               </div>
             </>
           )}
+          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => setAddingCharacter(true)}>
+            <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_add_character")}
+          </button>
+          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => setPickingCharacter(true)}>
+            <Library className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_import_characters")}
+          </button>
           <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={tidy}>
             <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_tidy")}
@@ -534,6 +606,29 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           />
         </div>
 
+        {addingCharacter && (
+          <AssetFormModal
+            type="character"
+            mode="create"
+            onClose={() => setAddingCharacter(false)}
+            onSubmit={async ({ name, description, voice_style, image }) => {
+              await characterAssets.add(name, description, voice_style, image ?? null);
+              setAddingCharacter(false);
+            }}
+          />
+        )}
+
+        {pickingCharacter && (
+          <AssetPickerModal
+            type="character"
+            existingNames={new Set(Object.keys(characters ?? {}))}
+            onClose={() => setPickingCharacter(false)}
+            onImport={(ids) => {
+              void importCharacters(ids);
+            }}
+          />
+        )}
+
         {branch && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label={t("node_canvas_branch_title")}>
             <div className="w-full max-w-md rounded-[14px] border border-hairline bg-bg-grad-a p-4 shadow-2xl">
@@ -595,6 +690,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           </p>
         )}
       </div>
+      </CharacterNodeContextValue.Provider>
       </CanvasBusyContext.Provider>
     </CanvasActionsContext.Provider>
   );

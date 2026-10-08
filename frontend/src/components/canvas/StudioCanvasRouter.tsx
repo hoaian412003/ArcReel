@@ -39,7 +39,6 @@ import { EpisodeSourceReview } from "./EpisodeSourceReview";
 import { EditTimelineCanvas } from "./edit-timeline/EditTimelineCanvas";
 import { API, NarratedVideoDurationError } from "@/api";
 import {
-  enqueueCharacter,
   enqueueEpisodeNarration,
   enqueueGrid,
   enqueueNarration,
@@ -49,7 +48,6 @@ import {
   enqueueStoryboard,
   enqueueVideo,
 } from "@/actions/generation";
-import { buildEntityRevisionKey } from "@/utils/project-changes";
 import {
   durationOutOfRangeReason,
   useModelCapabilities,
@@ -62,6 +60,9 @@ import type {
   ReferenceGenerationRequestOptions,
 } from "@/types";
 import type { EpisodeScript } from "@/types/script";
+
+const noop = () => undefined;
+const noopAsync = () => Promise.resolve();
 
 /** 集级路由 path，与渲染该集的 `<Route>` 共用一份。 */
 const EPISODE_ROUTE_PATH = `/${WORKSPACE_ROUTE_EPISODES}/:episodeId`;
@@ -129,7 +130,6 @@ export function StudioCanvasRouter() {
   });
 
   // 从任务队列派生 loading 状态（替代本地 state）：活跃 + 最新行胜出两条不变量下沉到 store selector
-  const generatingCharacterNames = useActiveResourceIds("character", currentProjectName);
   const generatingSceneNames = useActiveResourceIds("scene", currentProjectName);
   const generatingPropNames = useActiveResourceIds("prop", currentProjectName);
   const generatingProductNames = useActiveResourceIds("product", currentProjectName);
@@ -348,89 +348,6 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, currentScripts, ensureAudioProviderConfigured]);
 
-  // ---- Character CRUD callbacks ----
-  const handleSaveCharacter = useCallback(async (
-    name: string,
-    payload: {
-      description: string;
-      voiceStyle: string;
-      referenceFile?: File | null;
-      audioFile?: File | null;
-    },
-  ) => {
-    if (!currentProjectName) return;
-    const invalidateKeys = payload.referenceFile || payload.audioFile
-      ? [buildEntityRevisionKey("character", name)]
-      : [];
-    try {
-      await API.updateCharacter(currentProjectName, name, {
-        description: payload.description,
-        voice_style: payload.voiceStyle,
-      });
-
-      if (payload.referenceFile) {
-        await API.uploadFile(
-          currentProjectName,
-          "character_ref",
-          payload.referenceFile,
-          name,
-        );
-      }
-
-      if (payload.audioFile) {
-        await API.uploadFile(
-          currentProjectName,
-          "character_audio_ref",
-          payload.audioFile,
-          name,
-        );
-      }
-
-      useAppStore.getState().pushToast(tRef.current("character_updated_toast", { name }), "success");
-    } catch (err) {
-      useAppStore.getState().pushToast(tRef.current("update_character_failed", { message: errMsg(err) }), "error");
-    } finally {
-      // 三步写操作顺序执行，任一步失败时前面已持久化的变更（描述/参考图）也要反映到本地
-      // store，否则用户会误以为整个保存失败而重复提交
-      await refreshProject(invalidateKeys);
-    }
-  }, [currentProjectName, refreshProject]);
-
-  const handleGenerateCharacter = useCallback(async (name: string) => {
-    if (!currentProjectName) return;
-    try {
-      await enqueueCharacter(currentProjectName, name);
-    } catch (err) {
-      useAppStore.getState().pushToast(tRef.current("submit_failed", { message: errMsg(err) }), "error");
-    }
-  }, [currentProjectName]);
-
-  const handleAddCharacterSubmit = useCallback(async (
-    name: string,
-    description: string,
-    voiceStyle: string,
-    referenceFile?: File | null,
-  ) => {
-    if (!currentProjectName) return;
-    try {
-      await API.addCharacter(currentProjectName, name, description, voiceStyle);
-
-      if (referenceFile) {
-        await API.uploadFile(currentProjectName, "character_ref", referenceFile, name);
-      }
-
-      await refreshProject(
-        referenceFile
-          ? [buildEntityRevisionKey("character", name)]
-          : [],
-      );
-      useAppStore.getState().pushToast(tRef.current("character_added_toast", { name }), "success");
-    } catch (err) {
-      useAppStore.getState().pushToast(tRef.current("add_failed", { message: errMsg(err) }), "error");
-      throw err; // AssetFormModal onSubmit 消费：失败时阻止 setAdding(false) 关闭对话框
-    }
-  }, [currentProjectName, refreshProject]);
-
   // ---- Scene CRUD callbacks ----
   const handleUpdateScene = useCallback(async (name: string, updates: Partial<Scene>) => {
     if (!currentProjectName) return;
@@ -540,9 +457,6 @@ export function StudioCanvasRouter() {
     await refreshProject();
   }, [refreshProject]);
 
-  const handleGenerateCharacterVoid = useCallback((...args: Parameters<typeof handleGenerateCharacter>) => {
-    void handleGenerateCharacter(...args).catch(console.error);
-  }, [handleGenerateCharacter]);
   const handleUpdateSceneVoid = useCallback((...args: Parameters<typeof handleUpdateScene>) => {
     void handleUpdateScene(...args).catch(console.error);
   }, [handleUpdateScene]);
@@ -609,19 +523,20 @@ export function StudioCanvasRouter() {
       </Route>
 
       <Route path={`/${WORKSPACE_ROUTE_CHARACTERS}`}>
-        <CharactersPage
-          key={currentProjectName}
-          projectName={currentProjectName}
-          characters={currentProjectData?.characters ?? {}}
-          readOnly={demoMode}
-          onSaveCharacter={handleSaveCharacter}
-          onGenerateCharacter={handleGenerateCharacterVoid}
-          onAddCharacter={handleAddCharacterSubmit}
-          onRestoreCharacterVersion={handleRestoreAsset}
-          onRefreshProject={refreshProject}
-          generatingCharacterNames={generatingCharacterNames}
-          voiceBinding={currentProjectData?.character_voice_binding}
-        />
+        {/* 角色已并入创作画布；演示项目没有后端，画布不可用，引导流程仍展示只读的角色页。 */}
+        {demoMode ? (
+          <CharactersPage
+            key={currentProjectName}
+            projectName={currentProjectName}
+            characters={currentProjectData?.characters ?? {}}
+            readOnly
+            onSaveCharacter={noopAsync}
+            onGenerateCharacter={noop}
+            onAddCharacter={noopAsync}
+          />
+        ) : (
+          <Redirect to={`/${WORKSPACE_ROUTE_NODE_CANVAS}`} />
+        )}
       </Route>
 
       <Route path={`/${WORKSPACE_ROUTE_SCENES}`}>

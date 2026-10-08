@@ -99,3 +99,43 @@ def test_writer_edges_attach_to_the_h3_nodes_of_connected_units():
     out = canvas_view.writer_output_edges(stored, {h3})
     assert [(e["source"], e["sourceHandle"], e["target"]) for e in out] == [("h3_writer_a", "h3", h3)]
     assert canvas_view.writer_output_edges(stored, set()) == []
+
+
+CHARACTER_PROJECT = {
+    "generation_mode": "storyboard",
+    "characters": {
+        "阿离": {"description": "少女", "character_sheet": "characters/阿离.png"},
+        "阿宁": {"description": "少年", "character_sheet": ""},
+    },
+}
+
+
+def test_every_project_gets_character_nodes_with_their_sheet_as_the_image_output(patched):
+    (patched.root / "characters").mkdir()
+    (patched.root / "characters" / "阿离.png").write_bytes(b"png")
+
+    nodes, edges = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, [], {})
+
+    by_id = {n["id"]: n for n in nodes}
+    hero = by_id[derived_id("character", "阿离")]
+    assert hero["type"] == "character"
+    assert hero["derived"] is True
+    assert (hero["data"]["name"], hero["data"]["path"]) == ("阿离", "characters/阿离.png")
+    assert hero["data"]["version"] is not None
+    # 还没有资产图的角色也有节点（用来生成），只是没有可连的路径。
+    assert by_id[derived_id("character", "阿宁")]["data"]["path"] is None
+    assert edges == []
+
+
+def test_character_positions_use_overrides_and_default_to_a_grid_left_of_the_episodes(patched):
+    placed = {derived_id("character", "阿宁"): {"x": 12, "y": 34}}
+    nodes, _ = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, [], placed)
+    by_name = {n["data"]["name"]: n for n in nodes}
+    assert by_name["阿宁"]["position"] == {"x": 12.0, "y": 34.0}
+    assert by_name["阿离"]["position"]["x"] < 0
+
+
+def test_characters_sit_alongside_episode_groups_in_reference_projects(patched):
+    project = {**PROJECT, "characters": {"阿离": {"character_sheet": ""}}}
+    nodes, _ = canvas_view.build_project_view(patched, "demo", project, [1], {}, h3_status=_status)
+    assert {n["type"] for n in nodes} >= {"character", "episode", "unit"}

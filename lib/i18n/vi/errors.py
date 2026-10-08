@@ -636,4 +636,5 @@ MESSAGES = {
     "canvas_worker_offline": "Dịch vụ hàng đợi chưa chạy nên không thể gửi tác vụ tạo",
     "canvas_template_empty": "Không có node nào được chọn có thể lưu thành mẫu (văn bản, nhà cung cấp ảnh, viết H3)",
     "canvas_template_not_found": "Không tìm thấy mẫu canvas '{id}'",
+    "canvas_character_description_required": "Nhân vật '{name}' chưa có mô tả; hãy viết mô tả trên thẻ rồi mới tạo ảnh",
 }

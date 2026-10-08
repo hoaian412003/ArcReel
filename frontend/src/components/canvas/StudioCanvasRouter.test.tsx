@@ -15,6 +15,10 @@ vi.mock("./OverviewCanvas", () => ({
   OverviewCanvas: () => <div data-testid="overview-canvas">Overview</div>,
 }));
 
+vi.mock("./node-canvas/NodeCanvasPage", () => ({
+  NodeCanvasPage: ({ projectName }: { projectName: string }) => <div data-testid="node-canvas">{projectName}</div>,
+}));
+
 vi.mock("./SourceFileViewer", () => ({
   SourceFileViewer: ({ filename }: { filename: string }) => (
     <div data-testid="source-file-viewer">{filename}</div>
@@ -457,7 +461,9 @@ describe("StudioCanvasRouter", () => {
     });
 
     const viewCharacters = renderAt("/characters");
-    expect(screen.getByTestId("character-card")).toHaveAttribute("data-name", "Hero");
+    // 角色并入了创作画布：真实项目的 /characters 跳到画布。
+    expect(screen.getByTestId("node-canvas")).toHaveTextContent("demo");
+    expect(screen.queryByTestId("character-card")).not.toBeInTheDocument();
     viewCharacters.unmount();
 
     const viewScenes = renderAt("/scenes");
@@ -573,6 +579,19 @@ describe("StudioCanvasRouter", () => {
     expect(capabilitiesSpy).not.toHaveBeenCalledWith(DEMO_PROJECT_NAME, expect.anything());
   });
 
+  it("keeps the read-only characters page for the onboarding demo project", () => {
+    useProjectsStore.setState({
+      currentProjectName: DEMO_PROJECT_NAME,
+      currentProjectData: makeProjectData(),
+      currentScripts: {},
+    });
+
+    renderAtProjectRoute(DEMO_PROJECT_NAME, "/characters");
+
+    expect(screen.getByTestId("character-card")).toHaveAttribute("data-name", "Hero");
+    expect(screen.queryByTestId("node-canvas")).not.toBeInTheDocument();
+  });
+
   // script_status 的三个取值来自项目摘要（由 script_plan 与正式脚本的产物态派生），
   // 路由据此决定该集去源文审阅页还是画布——三种情况各钉一条。
   it("sends an episode with no script_plan and no script to the source review", () => {
@@ -624,83 +643,6 @@ describe("StudioCanvasRouter", () => {
     expect(screen.getByTestId("timeline-canvas")).toBeInTheDocument();
     expect(screen.getByTestId("timeline-has-script")).toHaveTextContent("yes");
     expect(screen.queryByTestId("episode-source-review")).not.toBeInTheDocument();
-  });
-
-  it("runs character callbacks and reports API failures with toast", async () => {
-    useProjectsStore.setState({
-      currentProjectName: "demo",
-      currentProjectData: makeProjectData(),
-      currentScripts: { "episode_1.json": makeScript() },
-    });
-
-    vi.spyOn(API, "getProject").mockResolvedValue({
-      project: makeProjectData(),
-      scripts: { "episode_1.json": makeScript() },
-    });
-    vi.spyOn(API, "updateCharacter").mockResolvedValue({ success: true });
-    vi.spyOn(API, "uploadFile").mockResolvedValue({ success: true, path: "x", url: "y" });
-    vi.spyOn(API, "generateCharacter").mockResolvedValue({ success: true, task_id: "t-1", deduped: false, message: "已提交" });
-
-    renderAt("/characters");
-
-    fireEvent.click(screen.getByText("update-character"));
-    await waitFor(() => {
-      expect(API.updateCharacter).toHaveBeenCalledWith("demo", "Hero", {
-        description: "new desc",
-        voice_style: "new voice",
-      });
-      expect(API.uploadFile).toHaveBeenNthCalledWith(
-        1,
-        "demo",
-        "character_ref",
-        expect.any(File),
-        "Hero",
-      );
-      expect(API.getProject).toHaveBeenCalled();
-    });
-
-    fireEvent.click(screen.getByText("generate-character"));
-    await waitFor(() => {
-      expect(API.generateCharacter).toHaveBeenCalledWith("demo", "Hero");
-      expect(useAppStore.getState().toast?.text).toContain("生成任务已提交");
-      expect(useAppStore.getState().toast?.tone).toBe("success");
-      // 入队成功后应立即乐观占用该角色，避免 SSE 轮询落地前的空窗被误判为空闲
-      // 而并发触发 image_edit（见 tasks-store.ts 乐观占用小节）。
-      const { tasks, optimisticActive } = useTasksStore.getState();
-      expect(selectActiveResourceIds(tasks, "character", "demo", optimisticActive).has("Hero")).toBe(true);
-    });
-  });
-
-  it("refreshes the project even when the audio upload step fails partway through save", async () => {
-    useProjectsStore.setState({
-      currentProjectName: "demo",
-      currentProjectData: makeProjectData(),
-      currentScripts: { "episode_1.json": makeScript() },
-    });
-
-    vi.spyOn(API, "getProject").mockResolvedValue({
-      project: makeProjectData(),
-      scripts: { "episode_1.json": makeScript() },
-    });
-    vi.spyOn(API, "updateCharacter").mockResolvedValue({ success: true });
-    vi.spyOn(API, "uploadFile").mockRejectedValue(new Error("audio_duration_out_of_range"));
-
-    renderAt("/characters");
-
-    fireEvent.click(screen.getByText("update-character-with-audio"));
-    await waitFor(() => {
-      expect(API.uploadFile).toHaveBeenCalledWith(
-        "demo",
-        "character_audio_ref",
-        expect.any(File),
-        expect.any(String),
-      );
-      // description/voice_style 已持久化成功，仅音频上传失败：即便整体 catch 到错误，
-      // 也要刷新 store 让已保存的部分反映到 UI，而不是让用户误以为整个保存都没生效
-      expect(API.getProject).toHaveBeenCalled();
-      expect(useAppStore.getState().toast?.text).toContain("更新角色失败");
-      expect(useAppStore.getState().toast?.tone).toBe("error");
-    });
   });
 
   it("runs scene callbacks and reports API failures with toast", async () => {
@@ -1307,29 +1249,6 @@ describe("StudioCanvasRouter", () => {
       );
       const { tasks, optimisticActive } = useTasksStore.getState();
       expect(selectActiveResourceIds(tasks, "storyboard", "demo", optimisticActive).has("SEG-1")).toBe(true);
-    });
-  });
-
-  it("reports character generation failure with an error toast", async () => {
-    useProjectsStore.setState({
-      currentProjectName: "demo",
-      currentProjectData: makeProjectData(),
-      currentScripts: { "episode_1.json": makeScript() },
-    });
-
-    vi.spyOn(API, "getProject").mockResolvedValue({
-      project: makeProjectData(),
-      scripts: { "episode_1.json": makeScript() },
-    });
-    vi.spyOn(API, "generateCharacter").mockRejectedValue(new Error("character generate failed"));
-
-    renderAt("/characters");
-
-    fireEvent.click(screen.getByText("generate-character"));
-    await waitFor(() => {
-      expect(API.generateCharacter).toHaveBeenCalledWith("demo", "Hero");
-      expect(useAppStore.getState().toast?.text).toContain("提交失败");
-      expect(useAppStore.getState().toast?.tone).toBe("error");
     });
   });
 

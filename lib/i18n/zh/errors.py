@@ -569,4 +569,5 @@ MESSAGES = {
     "canvas_worker_offline": "任务队列服务未运行，无法提交生成任务",
     "canvas_template_empty": "选中的节点里没有可存成模板的节点（文本、图片供应商、H3 写作）",
     "canvas_template_not_found": "画布模板 '{id}' 不存在",
+    "canvas_character_description_required": "角色 '{name}' 还没有描述，先在角色卡里填写描述再生成",
 }

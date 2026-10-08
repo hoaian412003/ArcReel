@@ -112,7 +112,13 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
       ? []
       : [
           { key: "reviews", path: "/reviews", label: t("dashboard:review_inbox_nav"), icon: Columns3 },
-          { key: "node-canvas", path: "/canvas", label: t("dashboard:node_canvas_nav"), icon: Workflow },
+          {
+            key: "node-canvas",
+            path: "/canvas",
+            label: t("dashboard:node_canvas_nav"),
+            icon: Workflow,
+            meta: characterCount,
+          },
           {
             key: "source",
             path: "/source",
@@ -121,13 +127,18 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
             meta: sourceCount,
           },
         ]),
-    {
-      key: "characters",
-      path: "/characters",
-      label: t("dashboard:workspace_nav_characters"),
-      icon: Users,
-      meta: characterCount,
-    },
+    // 真实项目的角色在创作画布里管理；演示项目没有画布，引导流程仍走只读的角色页。
+    ...(demoMode
+      ? [
+          {
+            key: "characters",
+            path: "/characters",
+            label: t("dashboard:workspace_nav_characters"),
+            icon: Users,
+            meta: characterCount,
+          },
+        ]
+      : []),
     {
       key: "scenes",
       path: "/scenes",

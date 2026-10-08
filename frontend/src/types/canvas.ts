@@ -2,7 +2,7 @@
 
 export type CanvasNodeType = "text" | "image" | "image_generate" | "h3_writer" | "video_generate" | "audio_generate";
 /** 由项目数据推导的只读节点：集分组、视频单元、起始帧联合图、H3 提示词。 */
-export type CanvasDerivedType = "episode" | "unit" | "keyframe" | "h3_prompt";
+export type CanvasDerivedType = "episode" | "unit" | "keyframe" | "h3_prompt" | "character";
 /** 运行产出的媒体节点。 */
 export type CanvasMediaNodeType = "video" | "audio";
 export type CanvasAnyNodeType = CanvasNodeType | CanvasDerivedType | CanvasMediaNodeType;
@@ -34,7 +34,9 @@ export interface CanvasNodeData {
   prompt?: string;
   /** 读时算出：这张图的输入已不同于生成它时的输入。 */
   stale?: boolean;
-  /** 派生节点：episode / unit / keyframe / h3_prompt。 */
+  /** 派生节点：episode / unit / keyframe / h3_prompt / character。 */
+  /** character 节点：角色名（角色卡的内容取自项目数据）。 */
+  name?: string;
   episode?: number;
   title?: string;
   unit_count?: number;

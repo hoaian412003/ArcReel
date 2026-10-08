@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from lib.canvas.graph import KIND_EPISODE, KIND_H3_PROMPT, KIND_KEYFRAME, KIND_UNIT, derived_id
+from lib.canvas.graph import KIND_CHARACTER, KIND_EPISODE, KIND_H3_PROMPT, KIND_KEYFRAME, KIND_UNIT, derived_id
 from lib.project.project_manager import ProjectManager, find_episode
 from lib.prompts.video_prompt_profile import is_h3_ref2va
 from lib.script.reference_video.h3_prompt import (
@@ -32,6 +32,12 @@ UNIT_ROW_HEIGHT = 200
 KEYFRAME_ROW_HEIGHT = 260
 GROUP_WIDTH = 1060
 GROUP_GAP = 80
+
+#: 角色节点在画布左侧按网格排布（项目任何生成模式都有角色），每行列数与单元格尺寸。
+CHARACTER_COLUMNS = 2
+CHARACTER_CELL_WIDTH = 400
+CHARACTER_ROW_HEIGHT = 760
+CHARACTER_ORIGIN_X = -CHARACTER_COLUMNS * CHARACTER_CELL_WIDTH - 120
 
 #: 未登记摆放位置的节点之间保留的最小分组高度。
 GROUP_MIN_HEIGHT = 320
@@ -82,15 +88,16 @@ def build_project_view(
     *,
     h3_status: Callable[[dict[str, Any]], str] = _h3_status,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """返回 ``(派生节点, 虚拟连线)``。不适用的项目或不存在的集被跳过。
+    """返回 ``(派生节点, 虚拟连线)``。角色节点对所有项目都有；集相关节点只在参考生视频项目里有，不存在的集被跳过。
 
     ``h3_status`` 判定单元的 H3 提示词是 current / stale / missing，默认按脚本里的载荷机械校验。
     """
+    characters = _character_nodes(pm, project_name, project, overrides)
     if not applicable(project):
-        return [], []
+        return characters, []
     project_path = pm.get_project_path(project_name)
     h3 = is_h3_ref2va(project)
-    nodes: list[dict[str, Any]] = []
+    nodes: list[dict[str, Any]] = [*characters]
     edges: list[dict[str, Any]] = []
     cursor_x = 0.0
     keyframes = KeyframeBoardService(pm)
@@ -207,6 +214,39 @@ def build_project_view(
                 )
                 edges.append(_virtual_edge(unit_node_id, "unit", h3_node_id, "in"))
     return nodes, edges
+
+
+def _character_nodes(
+    pm: ProjectManager,
+    project_name: str,
+    project: Mapping[str, Any],
+    overrides: Mapping[str, Mapping[str, float]],
+) -> list[dict[str, Any]]:
+    """项目里的每个角色一个节点：界面用角色卡渲染，这里只给出连线与「图N」编号要用的资产图路径。"""
+    characters = project.get("characters")
+    if not isinstance(characters, Mapping) or not characters:
+        return []
+    project_path = pm.get_project_path(project_name)
+    nodes: list[dict[str, Any]] = []
+    for index, (name, entry) in enumerate(characters.items()):
+        sheet = entry.get("character_sheet") if isinstance(entry, Mapping) else None
+        sheet = sheet if isinstance(sheet, str) and sheet else None
+        node_id = derived_id(KIND_CHARACTER, name)
+        default = {
+            "x": float(CHARACTER_ORIGIN_X + (index % CHARACTER_COLUMNS) * CHARACTER_CELL_WIDTH),
+            "y": float((index // CHARACTER_COLUMNS) * CHARACTER_ROW_HEIGHT),
+        }
+        position = dict(overrides.get(node_id) or default)
+        nodes.append(
+            {
+                "id": node_id,
+                "type": KIND_CHARACTER,
+                "derived": True,
+                "position": {"x": float(position["x"]), "y": float(position["y"])},
+                "data": {"name": name, "path": sheet, "version": _version(project_path, sheet)},
+            }
+        )
+    return nodes
 
 
 def _virtual_edge(source: str, source_handle: str, target: str, target_handle: str) -> dict[str, Any]:

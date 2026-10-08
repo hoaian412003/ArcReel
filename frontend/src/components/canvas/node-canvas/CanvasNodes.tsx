@@ -1,12 +1,13 @@
 import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Clapperboard, Film, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Sparkles, Type, Video, X } from "lucide-react";
+import { AlertTriangle, Clapperboard, Film, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Sparkles, Type, User, Video, X } from "lucide-react";
 import { API } from "@/api";
 import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/types/canvas";
 import { ACCENT_BTN_SM_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
-import { useBusyNodeIds, useCanvasActions } from "./canvas-context";
+import { CharacterCard } from "@/components/canvas/lorebook/CharacterCard";
+import { useBusyNodeIds, useCanvasActions, useCharacterNodeContext } from "./canvas-context";
 import { ASPECT_RATIOS, PASSIVE_INPUT_HANDLE, isBusy } from "./canvas-rules";
 
 export type CanvasFlowNode = Node<CanvasNodeData, CanvasAnyNodeType>;
@@ -408,6 +409,42 @@ function H3WriterNodeView({ id, selected }: NodeProps<CanvasFlowNode>) {
   );
 }
 
+function CharacterNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
+  const { t } = useTranslation("dashboard");
+  const { projectName } = useCanvasActions();
+  const context = useCharacterNodeContext();
+  const name = data.name ?? "";
+  const character = context?.characters[name];
+  return (
+    <NodeShell
+      selected={selected}
+      width={344}
+      icon={<User className="h-3.5 w-3.5" aria-hidden="true" />}
+      title={name}
+    >
+      {context && character ? (
+        // 角色卡自己管输入、上传与按钮：整块不参与拖动 / 滚轮缩放，节点靠标题栏拖动。
+        <div className="nodrag nowheel">
+          <CharacterCard
+            name={name}
+            character={character}
+            projectName={projectName}
+            onSave={context.assets.save}
+            onGenerate={context.assets.generate}
+            onRestoreVersion={context.assets.refresh}
+            onReload={context.assets.refresh}
+            generating={context.assets.generating.has(name)}
+            voiceBinding={context.voiceBinding}
+          />
+        </div>
+      ) : (
+        <p className="text-[12px] text-text-4">{t("node_canvas_character_missing")}</p>
+      )}
+      <Handle type="source" position={Position.Right} id="image" style={handleStyle("image")} />
+    </NodeShell>
+  );
+}
+
 const DURATIONS = [4, 5, 6, 8, 10, 12, 15] as const;
 
 /** 运行产出的视频 / 语音节点的共同外壳：占位、失败、播放器三态。 */
@@ -597,6 +634,7 @@ function AudioGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
 }
 
 export const canvasNodeTypes = {
+  character: memo(CharacterNodeView),
   video: memo(VideoNodeView),
   audio: memo(AudioNodeView),
   video_generate: memo(VideoGenerateNodeView),

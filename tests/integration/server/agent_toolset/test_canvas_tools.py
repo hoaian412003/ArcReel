@@ -201,3 +201,37 @@ async def test_long_texts_are_truncated_in_the_agent_digest(ctx: Services) -> No
     )
     node = (await _canvas(ctx))["nodes"][0]
     assert len(node["data"]["text"]) < 700
+
+
+async def test_character_nodes_are_listed_wired_as_references_and_runnable(ctx: Services) -> None:
+    ctx.projects.add_character("demo", "阿离", "少女，黑色短发")
+    ctx.projects.add_character("demo", "阿宁", "")
+    hero = "p:character:阿离"
+
+    view = await _canvas(ctx)
+    assert {n["id"] for n in view["nodes"] if n["type"] == "character"} == {hero, "p:character:阿宁"}
+    assert all(n["read_only"] for n in view["nodes"] if n["type"] == "character")
+
+    generator = await _call(
+        canvas_tools.canvas_add_node,
+        canvas_tools.CanvasAddNodeRequest(type="image_generate", position={"x": 600, "y": 0}),
+        ctx,
+    )
+    assert generator.value is not None
+    wired = await _call(
+        canvas_tools.canvas_connect,
+        canvas_tools.CanvasConnectRequest(
+            source=hero, source_handle="image", target=generator.value["node"]["id"], target_handle="refs"
+        ),
+        ctx,
+    )
+    assert wired.problem is None
+
+    run = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id=hero), ctx)
+    assert run.problem is None
+    call = _queue(ctx).calls[0]
+    assert (call["task_type"], call["resource_id"], call["media_type"]) == ("character", "阿离", "image")
+
+    blank = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:character:阿宁"), ctx)
+    assert blank.problem is not None
+    assert blank.problem.code == "canvas_character_description_required"

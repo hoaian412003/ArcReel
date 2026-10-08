@@ -18,6 +18,7 @@ const OUTPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHan
   audio_generate: { text: "text", audio: "audio" },
   unit: { unit: "unit", text: "text" },
   keyframe: { image: "image" },
+  character: { image: "image" },
 };
 
 /** 自动挂出 / 推导出的节点上，只承接来源连线的被动输入句柄。 */

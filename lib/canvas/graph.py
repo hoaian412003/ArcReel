@@ -37,13 +37,14 @@ PROVIDER_MEDIA: dict[str, tuple[str, str]] = {
     NODE_AUDIO_GENERATE: ("audio", NODE_AUDIO),
 }
 
-#: 由项目数据推导、不落盘的节点（集 / 视频单元 / 起始帧联合图 / H3 提示词），id 形如 ``p:<kind>:...``。
+#: 由项目数据推导、不落盘的节点（集 / 视频单元 / 起始帧联合图 / H3 提示词 / 角色），id 形如 ``p:<kind>:...``。
 DERIVED_PREFIX = "p:"
 KIND_EPISODE = "episode"
 KIND_UNIT = "unit"
 KIND_KEYFRAME = "keyframe"
 KIND_H3_PROMPT = "h3_prompt"
-DERIVED_KINDS = (KIND_EPISODE, KIND_UNIT, KIND_KEYFRAME, KIND_H3_PROMPT)
+KIND_CHARACTER = "character"
+DERIVED_KINDS = (KIND_EPISODE, KIND_UNIT, KIND_KEYFRAME, KIND_H3_PROMPT, KIND_CHARACTER)
 
 #: 句柄的数据类型。连线只允许同类型句柄相连。
 HANDLE_TEXT = "text"
@@ -71,6 +72,7 @@ OUTPUT_HANDLES: dict[str, dict[str, str]] = {
     NODE_AUDIO_GENERATE: {"text": HANDLE_TEXT, "audio": HANDLE_AUDIO},
     KIND_UNIT: {"unit": HANDLE_UNIT, "text": HANDLE_TEXT},
     KIND_KEYFRAME: {"image": HANDLE_IMAGE},
+    KIND_CHARACTER: {"image": HANDLE_IMAGE},
 }
 
 #: 只由服务端写入的 data 字段。
@@ -319,6 +321,8 @@ def resolve_reference_labels(
         data = n["data"]
         if n["type"] == KIND_KEYFRAME:
             labels.append(f"keyframe {data.get('sheet_id') or ''}".strip())
+        elif n["type"] == KIND_CHARACTER:
+            labels.append(str(data.get("name") or ""))
         else:
             labels.append(str(data.get("label") or ""))
     return labels

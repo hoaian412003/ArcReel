@@ -91,3 +91,18 @@ describe("video and audio providers", () => {
     expect(isValidCanvasConnection(media, { source: "clip", sourceHandle: "video", target: "v", targetHandle: "frame" })).toBe(false);
   });
 });
+
+describe("character nodes", () => {
+  const nodes: CanvasNode[] = [
+    { id: "p:character:Hero", type: "character", position: { x: 0, y: 0 }, data: {}, derived: true },
+    { id: "g", type: "image_generate", position: { x: 0, y: 0 }, data: {} },
+    { id: "v", type: "video_generate", position: { x: 0, y: 0 }, data: {} },
+  ];
+
+  it("offers the character sheet as a reference image or a video start frame, never as text", () => {
+    const hero = { source: "p:character:Hero", sourceHandle: "image" };
+    expect(isValidCanvasConnection(nodes, { ...hero, target: "g", targetHandle: "refs" })).toBe(true);
+    expect(isValidCanvasConnection(nodes, { ...hero, target: "v", targetHandle: "frame" })).toBe(true);
+    expect(isValidCanvasConnection(nodes, { ...hero, target: "g", targetHandle: "prompt" })).toBe(false);
+  });
+});

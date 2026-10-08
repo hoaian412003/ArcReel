@@ -2878,4 +2878,7 @@ export default {
   'node_canvas_duration': 'Duration',
   'node_canvas_voice': 'Voice',
   'node_canvas_voice_placeholder': 'Project narration voice',
+  'node_canvas_character_missing': 'This character no longer exists',
+  'node_canvas_add_character': 'Add character',
+  'node_canvas_import_characters': 'From library',
 };

@@ -273,3 +273,28 @@ def test_a_video_provider_can_take_a_generators_latest_image_as_its_start_frame(
     connect(graph, upstream["id"], "image", video["id"], "frame")
     _finished_run(graph, upstream["id"], "canvas/images/frame.png")
     assert resolve_generate_inputs(graph, video["id"])[1] == ["canvas/images/frame.png"]
+
+
+def test_character_nodes_feed_references_and_label_them_by_name():
+    from lib.canvas.graph import derived_id, reference_legend, resolve_reference_labels
+
+    graph = empty_graph()
+    gen = _add(graph, "image_generate")
+    hero = derived_id("character", "阿离")
+    connect(graph, hero, "image", gen["id"], "refs")
+    with pytest.raises(CanvasGraphError):
+        connect(graph, hero, "image", gen["id"], "prompt")
+    derived = {
+        hero: {
+            "id": hero,
+            "type": "character",
+            "position": {"x": 0, "y": 0},
+            "data": {"name": "阿离", "path": "characters/阿离.png"},
+        }
+    }
+
+    assert resolve_generate_inputs(graph, gen["id"], derived)[1] == ["characters/阿离.png"]
+    assert reference_legend(resolve_reference_labels(graph, gen["id"], derived)).endswith("图1: 阿离")
+    # 角色还没有资产图时不提供参考图。
+    derived[hero]["data"]["path"] = None
+    assert resolve_generate_inputs(graph, gen["id"], derived)[1] == []

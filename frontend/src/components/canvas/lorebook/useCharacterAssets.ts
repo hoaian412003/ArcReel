@@ -1,0 +1,106 @@
+import { useCallback, useMemo } from "react";
+import { API } from "@/api";
+import { enqueueCharacter } from "@/actions/generation";
+import i18n from "@/i18n";
+import { useAppStore } from "@/stores/app-store";
+import { useProjectsStore } from "@/stores/projects-store";
+import { useActiveResourceIds } from "@/stores/tasks-store";
+import { errMsg } from "@/utils/async";
+import { buildEntityRevisionKey } from "@/utils/project-changes";
+
+export interface CharacterSavePayload {
+  description: string;
+  voiceStyle: string;
+  referenceFile?: File | null;
+  audioFile?: File | null;
+}
+
+export interface CharacterAssets {
+  generating: Set<string>;
+  save: (name: string, payload: CharacterSavePayload) => Promise<void>;
+  /** 入队失败已转 toast，不会抛出。 */
+  generate: (name: string) => void;
+  /** 失败时 toast 后继续抛出，供新增对话框据此保持打开。 */
+  add: (name: string, description: string, voiceStyle: string, referenceFile?: File | null) => Promise<void>;
+  /** 版本恢复 / 外部变更后重新拉取项目。 */
+  refresh: () => Promise<void>;
+}
+
+/**
+ * 角色资产的写操作与占用态：新增、保存（描述 / 声音 / 参考图 / 参考音频）、生成资产图。
+ * 画布上的角色节点与演示项目的角色页共用同一套。保存是多步写入，任一步失败都要刷新项目，
+ * 让已持久化的部分反映到界面。
+ */
+export function useCharacterAssets(projectName: string | null): CharacterAssets {
+  const generating = useActiveResourceIds("character", projectName);
+
+  const refreshProject = useCallback(
+    async (invalidateKeys: string[] = []): Promise<void> => {
+      if (!projectName) return;
+      await useProjectsStore.getState().refreshProject(projectName, { invalidateKeys });
+    },
+    [projectName],
+  );
+
+  const save = useCallback(
+    async (name: string, payload: CharacterSavePayload) => {
+      if (!projectName) return;
+      const invalidateKeys =
+        payload.referenceFile || payload.audioFile ? [buildEntityRevisionKey("character", name)] : [];
+      try {
+        await API.updateCharacter(projectName, name, {
+          description: payload.description,
+          voice_style: payload.voiceStyle,
+        });
+        if (payload.referenceFile) {
+          await API.uploadFile(projectName, "character_ref", payload.referenceFile, name);
+        }
+        if (payload.audioFile) {
+          await API.uploadFile(projectName, "character_audio_ref", payload.audioFile, name);
+        }
+        useAppStore.getState().pushToast(i18n.t("dashboard:character_updated_toast", { name }), "success");
+      } catch (err) {
+        useAppStore
+          .getState()
+          .pushToast(i18n.t("dashboard:update_character_failed", { message: errMsg(err) }), "error");
+      } finally {
+        // 三步写操作顺序执行，任一步失败时前面已持久化的变更（描述 / 参考图）也要反映到本地
+        // store，否则用户会误以为整个保存失败而重复提交。
+        await refreshProject(invalidateKeys);
+      }
+    },
+    [projectName, refreshProject],
+  );
+
+  const generate = useCallback(
+    (name: string) => {
+      if (!projectName) return;
+      enqueueCharacter(projectName, name).catch((err: unknown) => {
+        useAppStore.getState().pushToast(i18n.t("dashboard:submit_failed", { message: errMsg(err) }), "error");
+      });
+    },
+    [projectName],
+  );
+
+  const add = useCallback(
+    async (name: string, description: string, voiceStyle: string, referenceFile?: File | null) => {
+      if (!projectName) return;
+      try {
+        await API.addCharacter(projectName, name, description, voiceStyle);
+        if (referenceFile) {
+          await API.uploadFile(projectName, "character_ref", referenceFile, name);
+        }
+        await refreshProject(referenceFile ? [buildEntityRevisionKey("character", name)] : []);
+        useAppStore.getState().pushToast(i18n.t("dashboard:character_added_toast", { name }), "success");
+      } catch (err) {
+        useAppStore.getState().pushToast(i18n.t("dashboard:add_failed", { message: errMsg(err) }), "error");
+        throw err;
+      }
+    },
+    [projectName, refreshProject],
+  );
+
+  const refresh = useCallback(() => refreshProject(), [refreshProject]);
+
+  return useMemo(() => ({ generating, save, generate, add, refresh }), [generating, save, generate, add, refresh]);
+}

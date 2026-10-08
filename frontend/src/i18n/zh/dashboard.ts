@@ -2877,4 +2877,7 @@ export default {
   'node_canvas_duration': '时长',
   'node_canvas_voice': '音色',
   'node_canvas_voice_placeholder': '项目旁白音色',
+  'node_canvas_character_missing': '这个角色已不存在',
+  'node_canvas_add_character': '新增角色',
+  'node_canvas_import_characters': '从资产库导入',
 } satisfies Record<keyof typeof enDashboard, string>;
