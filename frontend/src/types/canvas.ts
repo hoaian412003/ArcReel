@@ -16,6 +16,8 @@ export interface CanvasNodeData {
   label?: string;
   /** image_generate 节点的画幅。 */
   aspect_ratio?: string;
+  /** image_generate 节点指定的图像模型，形如 `供应商/模型`；缺省用项目默认。 */
+  model?: string | null;
   /** 以下字段只由服务端写入。 */
   status?: CanvasNodeStatus;
   task_id?: string;
@@ -70,6 +72,18 @@ export interface CanvasEpisodeOption {
   title: string;
 }
 
+export interface CanvasTemplateSummary {
+  id: string;
+  name: string;
+  node_count: number;
+}
+
+export interface CanvasBranchStep {
+  id: string;
+  type: string;
+  reason: "missing" | "stale" | "target";
+}
+
 export interface CanvasGraph {
   revision: number;
   nodes: CanvasNode[];
@@ -78,11 +92,13 @@ export interface CanvasGraph {
   view: { episodes: number[] };
   /** 可展示的集（仅参考生视频项目有）。 */
   episodes: CanvasEpisodeOption[];
+  templates: CanvasTemplateSummary[];
 }
 
 export interface CanvasRunResult {
   success: boolean;
   task_id: string;
+  task_ids: string[];
   text_node_id: string;
   image_node_id: string;
 }

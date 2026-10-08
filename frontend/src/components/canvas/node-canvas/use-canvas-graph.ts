@@ -14,12 +14,18 @@ export function useCanvasGraph(projectName: string, live = false) {
   const [error, setError] = useState<unknown>(null);
   const latestRevision = useRef(-1);
 
+  const lastSnapshot = useRef("");
+
   const apply = useCallback((next: CanvasGraph) => {
     setError(null);
-    if (next.revision >= latestRevision.current) {
-      latestRevision.current = next.revision;
-      setGraph(next);
-    }
+    if (next.revision < latestRevision.current) return;
+    latestRevision.current = next.revision;
+    // 项目推导的节点（H3 状态、联合图）不改画布 revision，所以按内容比较：轮询到完全相同的画布时
+    // 保持原对象，下游不重算、不重绘。
+    const snapshot = JSON.stringify(next);
+    if (snapshot === lastSnapshot.current) return;
+    lastSnapshot.current = snapshot;
+    setGraph(next);
   }, []);
 
   const reload = useCallback(async () => {
@@ -32,6 +38,7 @@ export function useCanvasGraph(projectName: string, live = false) {
 
   useEffect(() => {
     latestRevision.current = -1;
+    lastSnapshot.current = "";
     const controller = new AbortController();
     API.getCanvas(projectName, { signal: controller.signal })
       .then((next) => {
@@ -47,7 +54,10 @@ export function useCanvasGraph(projectName: string, live = false) {
   const busy = (graph ? graphHasBusyNode(graph.nodes) : false) || live;
   useEffect(() => {
     if (!busy) return;
-    const timer = setInterval(() => void reload(), POLL_INTERVAL_MS);
+    // 标签页在后台时不轮询；切回来由下一次计时器补上。
+    const timer = setInterval(() => {
+      if (!document.hidden) void reload();
+    }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [busy, reload]);
 

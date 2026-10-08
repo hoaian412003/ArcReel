@@ -154,6 +154,8 @@ SAMPLE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "canvas_disconnect": {"edge_id": "e"},
     "canvas_set_episodes": {"episodes": [1]},
     "canvas_run_node": {"node_id": "n"},
+    "canvas_save_template": {"name": "t", "node_ids": ["n"]},
+    "canvas_use_template": {"template_id": "t", "position": {"x": 0, "y": 0}},
     "submit_keyframe_plan": {
         "episode": 1,
         "cells": [
@@ -508,6 +510,8 @@ _PROBLEM_ON_SAMPLE = frozenset(
         "canvas_connect",
         "canvas_disconnect",
         "canvas_run_node",
+        "canvas_save_template",
+        "canvas_use_template",
         # 测试项目不是参考生视频项目：单元拆解的简报与提交只服务该路线。
         "get_script_plan_brief",
         "submit_script_plan",

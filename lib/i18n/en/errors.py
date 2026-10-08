@@ -633,4 +633,6 @@ MESSAGES = {
     "canvas_h3_profile_required": "The H3 writer only applies to projects that use the H3 Ref2VA prompt profile",
     "canvas_run_failed": "{message}",
     "canvas_worker_offline": "The task queue service is not running; cannot submit generation tasks",
+    "canvas_template_empty": "None of the selected nodes can go into a template (text, image provider, H3 writer)",
+    "canvas_template_not_found": "Canvas template '{id}' does not exist",
 }

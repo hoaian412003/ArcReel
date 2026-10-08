@@ -139,3 +139,102 @@ def test_generated_image_goes_stale_when_prompt_inputs_change():
     assert stale_generated_images(graph, {}) == set()
     text["data"]["text"] = "a red fox"
     assert stale_generated_images(graph, {}) == {image["id"]}
+
+
+def test_reference_labels_follow_the_reference_order_and_build_a_legend():
+    from lib.canvas.graph import derived_id, reference_legend, resolve_reference_labels
+
+    graph = empty_graph()
+    gen = _add(graph, "image_generate")
+    first = add_node(graph, make_node("image", {"x": 0, "y": 10}, {"label": "hero.png"}, server_data={"path": "a.png"}))
+    sheet = derived_id("keyframe", 1, "S1")
+    connect(graph, first["id"], "image", gen["id"], "refs")
+    connect(graph, sheet, "image", gen["id"], "refs")
+    derived = {
+        sheet: {
+            "id": sheet,
+            "type": "keyframe",
+            "position": {"x": 0, "y": 99},
+            "data": {"path": "k.png", "sheet_id": "S1"},
+        }
+    }
+
+    labels = resolve_reference_labels(graph, gen["id"], derived)
+
+    assert labels == ["hero.png", "keyframe S1"]
+    assert reference_legend(labels).endswith("图1: hero.png\n图2: keyframe S1")
+    assert reference_legend([]) == ""
+
+
+def _finished_run(graph, generator_id, path, prompt="a fox"):
+    _, image = add_run_outputs(graph, generator_id, prompt)
+    image["data"].update(status="done", path=path)
+    return image
+
+
+def test_connecting_a_generator_feeds_downstream_with_its_latest_finished_image():
+    graph = empty_graph()
+    upstream = _add(graph, "image_generate")
+    downstream = _add(graph, "image_generate")
+    connect(graph, upstream["id"], "image", downstream["id"], "refs")
+    assert resolve_generate_inputs(graph, downstream["id"])[1] == []  # 上游还没跑过
+    _finished_run(graph, upstream["id"], "canvas/images/old.png")
+    _finished_run(graph, upstream["id"], "canvas/images/new.png")
+    assert resolve_generate_inputs(graph, downstream["id"])[1] == ["canvas/images/new.png"]
+
+
+def test_branch_plan_lists_only_upstream_nodes_that_need_a_run():
+    from lib.canvas.graph import branch_plan
+
+    graph = empty_graph()
+    text = _add(graph, "text", text="a fox")
+    first = _add(graph, "image_generate")
+    second = _add(graph, "image_generate")
+    connect(graph, text["id"], "text", first["id"], "prompt")
+    connect(graph, first["id"], "image", second["id"], "refs")
+
+    plan = branch_plan(graph, second["id"])
+    assert [(p["id"], p["reason"]) for p in plan] == [(first["id"], "missing"), (second["id"], "target")]
+
+    _finished_run(graph, first["id"], "canvas/images/a.png")
+    assert [p["id"] for p in branch_plan(graph, second["id"])] == [second["id"]]
+
+    text["data"]["text"] = "a red fox"  # 上游输入变了 → 它的产物过期，需要先重跑
+    first_plan = branch_plan(graph, second["id"])
+    assert [(p["id"], p["reason"]) for p in first_plan] == [(first["id"], "stale"), (second["id"], "target")]
+
+
+def test_template_round_trip_keeps_structure_but_not_outputs_or_status():
+    from lib.canvas.graph import instantiate_template, make_template
+
+    graph = empty_graph()
+    text = _add(graph, "text", x=100, y=50, text="a fox")
+    gen = _add(graph, "image_generate", x=500, y=50, aspect_ratio="16:9")
+    connect(graph, text["id"], "text", gen["id"], "prompt")
+    _finished_run(graph, gen["id"], "canvas/images/a.png")
+    gen["data"]["status"] = "done"
+    everything = [n["id"] for n in graph["nodes"]]
+
+    template = make_template(graph, "fox", everything)
+
+    assert sorted(n["type"] for n in template["nodes"]) == ["image_generate", "text"]
+    assert len(template["edges"]) == 1
+    assert all("status" not in n["data"] and "path" not in n["data"] for n in template["nodes"])
+
+    fresh = empty_graph()
+    created = instantiate_template(fresh, template, {"x": 1000, "y": 0})
+    assert {n["data"].get("aspect_ratio") for n in created if n["type"] == "image_generate"} == {"16:9"}
+    assert min(n["position"]["x"] for n in created) == 1000
+    assert fresh["edges"][0]["sourceHandle"] == "text"
+    assert {n["id"] for n in created}.isdisjoint(everything)
+    prompt, _ = resolve_generate_inputs(fresh, next(n["id"] for n in created if n["type"] == "image_generate"))
+    assert prompt == "a fox"
+
+
+def test_empty_template_is_refused():
+    from lib.canvas.graph import make_template
+
+    graph = empty_graph()
+    image = add_node(graph, make_node("image", {"x": 0, "y": 0}, server_data={"path": "a.png"}))
+    with pytest.raises(CanvasGraphError):
+        make_template(graph, "x", [image["id"]])

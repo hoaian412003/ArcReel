@@ -14,16 +14,18 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Bot, Check, ImagePlus, Layers, Loader2, PenLine, Sparkles, Type } from "lucide-react";
+import { Bot, Check, ImagePlus, LayoutGrid, Layers, Loader2, PenLine, Save, Sparkles, Trash2, Type, Workflow } from "lucide-react";
 import { API } from "@/api";
 import { enqueueKeyframeSheet } from "@/actions/generation";
 import { isActiveStatus, useTaskRowsByIds } from "@/stores/tasks-store";
 import { useAppStore } from "@/stores/app-store";
 import { useClaudeStore } from "@/stores/claude-store";
 import { errMsg } from "@/utils/async";
-import type { CanvasGraph, CanvasNodeData, CanvasNodeType } from "@/types/canvas";
-import { GHOST_BTN_CLS } from "@/components/ui/darkroom-tokens";
-import { CanvasActionsContext, type CanvasActions } from "./canvas-context";
+import type { CanvasBranchStep, CanvasGraph, CanvasNodeData, CanvasNodeType } from "@/types/canvas";
+import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS } from "@/components/ui/darkroom-tokens";
+import { CanvasActionsContext, CanvasBusyContext, type CanvasActions, type ImageModelChoices } from "./canvas-context";
+import { tidyLayout } from "./canvas-layout";
+import { BranchStepFailed, runBranch } from "./branch-runner";
 import { isValidCanvasConnection, lineageOf } from "./canvas-rules";
 import { canvasNodeTypes, type CanvasFlowNode } from "./CanvasNodes";
 import { useCanvasGraph } from "./use-canvas-graph";
@@ -32,41 +34,80 @@ const NEW_NODE_JITTER_PX = 24;
 
 const DIMMED_OPACITY = 0.28;
 
-function toFlowNodes(graph: CanvasGraph, previous: readonly CanvasFlowNode[]): CanvasFlowNode[] {
+/** 节点内容签名：服务端数据没变（位置、data、分组）就沿用上一个节点对象，React Flow 不会重绘它。 */
+function nodeSignature(node: CanvasGraph["nodes"][number]): string {
+  return JSON.stringify([node.type, node.position, node.parentId, node.width, node.height, node.data]);
+}
+
+function toFlowNodes(
+  graph: CanvasGraph,
+  previous: readonly CanvasFlowNode[],
+  signatures: Map<string, string>,
+): CanvasFlowNode[] {
   const local = new Map(previous.map((n) => [n.id, n]));
-  return graph.nodes.map((node) => {
+  const next = graph.nodes.map((node) => {
     const existing = local.get(node.id);
+    const signature = nodeSignature(node);
+    // 拖动中的位置属于本地：服务端只在拖动结束后才会收到新位置。
+    if (existing && (existing.dragging || signatures.get(node.id) === signature)) {
+      signatures.set(node.id, existing.dragging ? (signatures.get(node.id) ?? signature) : signature);
+      return existing;
+    }
+    signatures.set(node.id, signature);
     const derived = node.derived === true;
     const group = node.type === "episode";
-    return {
+    const flowNode: CanvasFlowNode = {
       id: node.id,
       type: node.type,
-      // 拖动中的位置属于本地：服务端只在拖动结束后才会收到新位置。
-      position: existing?.dragging ? existing.position : node.position,
+      position: node.position,
       data: node.data,
       selected: existing?.selected ?? false,
-      dragging: existing?.dragging ?? false,
       ...(node.parentId ? { parentId: node.parentId } : {}),
       ...(group ? { style: { width: node.width, height: node.height }, zIndex: -1 } : {}),
       // 项目推导的节点只读：不能删，也不能单独拖离集分组（拖动整个分组）。
       draggable: !derived || group,
       deletable: !derived,
     };
+    return flowNode;
   });
+  for (const id of [...signatures.keys()]) if (!graph.nodes.some((n) => n.id === id)) signatures.delete(id);
+  const unchanged = next.length === previous.length && next.every((n, i) => n === previous[i]);
+  return unchanged ? (previous as CanvasFlowNode[]) : next;
 }
 
-function toFlowEdges(graph: CanvasGraph): Edge[] {
-  return graph.edges.map((e) => ({
-    id: e.id,
-    source: e.source,
-    sourceHandle: e.sourceHandle,
-    target: e.target,
-    targetHandle: e.targetHandle,
-    deletable: !e.virtual,
-    animated: graph.nodes.find((n) => n.id === e.target)?.data.status === "running",
-    ...(e.virtual ? { style: { strokeDasharray: "4 4", opacity: 0.6 } } : {}),
-  }));
+function toFlowEdges(graph: CanvasGraph, previous: readonly Edge[]): Edge[] {
+  const statusOf = new Map(graph.nodes.map((n) => [n.id, n.data.status]));
+  const before = new Map(previous.map((e) => [e.id, e]));
+  const next = graph.edges.map((e) => {
+    const animated = statusOf.get(e.target) === "running";
+    const existing = before.get(e.id);
+    if (
+      existing &&
+      existing.source === e.source &&
+      existing.target === e.target &&
+      existing.sourceHandle === e.sourceHandle &&
+      existing.targetHandle === e.targetHandle &&
+      Boolean(existing.animated) === animated
+    ) {
+      return existing;
+    }
+    const edge: Edge = {
+      id: e.id,
+      source: e.source,
+      sourceHandle: e.sourceHandle,
+      target: e.target,
+      targetHandle: e.targetHandle,
+      deletable: !e.virtual,
+      animated,
+      ...(e.virtual ? { style: VIRTUAL_EDGE_STYLE } : {}),
+    };
+    return edge;
+  });
+  const unchanged = next.length === previous.length && next.every((e, i) => e === previous[i]);
+  return unchanged ? (previous as Edge[]) : next;
 }
+
+const VIRTUAL_EDGE_STYLE = { strokeDasharray: "4 4", opacity: 0.6 };
 
 /** 派生单元节点 id `p:unit:<集>:<单元>` → 集号与单元 id。 */
 function parseUnitNodeId(id: string): { episode: number; unitId: string } | null {
@@ -90,7 +131,14 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const fitted = useRef(false);
+  const signatures = useRef(new Map<string, string>());
+  const graphRef = useRef(graph);
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [branch, setBranch] = useState<{ steps: CanvasBranchStep[]; current: number | null } | null>(null);
+  const [imageModels, setImageModels] = useState<ImageModelChoices>({ options: [], providerNames: {}, modelNames: {} });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [instruction, setInstruction] = useState("");
   // 已入队、正在跟踪的任务 → 它所属的节点键（H3 写作节点 id / `集:联合图`）。
@@ -98,9 +146,26 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const trackedRows = useTaskRowsByIds(Object.keys(tracked));
 
   useEffect(() => {
+    graphRef.current = graph;
+  }, [graph]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    API.getModelCandidates({ signal: controller.signal })
+      .then((res) => {
+        if (controller.signal.aborted) return;
+        setImageModels({ options: res.image.default, providerNames: res.provider_names, modelNames: res.model_names });
+      })
+      .catch(() => {
+        // 候选拿不到时模型下拉为空，节点仍按项目默认运行。
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
     if (!graph) return;
-    setNodes((prev) => toFlowNodes(graph, prev));
-    setEdges(toFlowEdges(graph));
+    setNodes((prev) => toFlowNodes(graph, prev, signatures.current));
+    setEdges((prev) => toFlowEdges(graph, prev));
     if (!fitted.current && graph.nodes.length > 0) {
       fitted.current = true;
       requestAnimationFrame(() => void fitView({ padding: 0.3, maxZoom: 1 }));
@@ -142,16 +207,29 @@ function CanvasSurface({ projectName }: { projectName: string }) {
       setText: (nodeId, text) => guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { text } })),
       setAspectRatio: (nodeId, aspectRatio) =>
         guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { aspect_ratio: aspectRatio } })),
-      run: (nodeId) =>
-        guarded(async () => {
+      setModel: (nodeId, model) => guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { model: model || null } })),
+      imageModels,
+      run: async (nodeId) => {
+        // 上游还有没产出或已过期的节点时，先让用户确认整条链再按顺序跑。
+        try {
+          const plan = await API.getCanvasBranch(projectName, nodeId);
+          if (plan.nodes.length > 1) {
+            setBranch({ steps: plan.nodes, current: null });
+            return;
+          }
+        } catch {
+          // 取不到计划就按单个节点运行，运行本身会报出具体原因。
+        }
+        await guarded(async () => {
           await API.runCanvasNode(projectName, nodeId);
           pushToast(t("node_canvas_run_started"), "success");
-        }, "node_canvas_run_failed"),
+        }, "node_canvas_run_failed");
+      },
       remove: (nodeId) => guarded(() => API.deleteCanvasNode(projectName, nodeId)),
       runWriter: (nodeId) =>
         guarded(async () => {
           const byEpisode = new Map<number, string[]>();
-          for (const edge of graph?.edges ?? []) {
+          for (const edge of graphRef.current?.edges ?? []) {
             if (edge.target !== nodeId || edge.targetHandle !== "units") continue;
             const unit = parseUnitNodeId(edge.source);
             if (unit) byEpisode.set(unit.episode, [...(byEpisode.get(unit.episode) ?? []), unit.unitId]);
@@ -168,10 +246,40 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           const res = await enqueueKeyframeSheet(projectName, episode, sheetId);
           setTracked((prev) => ({ ...prev, ...Object.fromEntries(res.taskIds.map((id) => [id, `${episode}:${sheetId}`])) }));
         }, "node_canvas_run_failed"),
-      busyNodeIds,
     }),
-    [busyNodeIds, graph, guarded, projectName, pushToast, t],
+    [guarded, imageModels, projectName, pushToast, t],
   );
+
+  const executeBranch = useCallback(async () => {
+    if (!branch) return;
+    try {
+      await runBranch(branch.steps, {
+        onStep: (_step, index) => setBranch((prev) => (prev ? { ...prev, current: index } : prev)),
+        getTask: (taskId) => API.getTask(taskId),
+        runStep: async (step) => {
+          if (step.type === "keyframe") {
+            const [, , episode, sheetId] = step.id.split(":");
+            return (await enqueueKeyframeSheet(projectName, Number(episode), sheetId)).taskIds;
+          }
+          return (await API.runCanvasNode(projectName, step.id)).task_ids;
+        },
+      });
+      pushToast(t("node_canvas_branch_done"), "success");
+    } catch (err) {
+      const failed = err instanceof BranchStepFailed ? ` (${err.step.id})` : "";
+      pushToast(t("node_canvas_run_failed", { message: `${errMsg(err)}${failed}` }), "error");
+    } finally {
+      setBranch(null);
+      await reload();
+    }
+  }, [branch, projectName, pushToast, reload, t]);
+
+  const tidy = useCallback(() => {
+    if (!graph) return;
+    const positions = tidyLayout(graph.nodes, graph.edges.filter((e) => !e.virtual));
+    if (Object.keys(positions).length === 0) return;
+    void guarded(() => API.updateCanvasLayout(projectName, positions));
+  }, [graph, guarded, projectName]);
 
   const viewportCenter = useCallback(() => {
     const rect = surfaceRef.current?.getBoundingClientRect();
@@ -238,6 +346,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
 
   return (
     <CanvasActionsContext.Provider value={actions}>
+      <CanvasBusyContext.Provider value={busyNodeIds}>
       <div ref={surfaceRef} className="relative h-full w-full" data-testid="node-canvas">
         <ReactFlow<CanvasFlowNode, Edge>
           nodes={shownNodes}
@@ -256,7 +365,10 @@ function CanvasSurface({ projectName }: { projectName: string }) {
               }),
             )
           }
-          onSelectionChange={({ nodes: picked }) => setFocusId(picked.length === 1 ? picked[0].id : null)}
+          onSelectionChange={({ nodes: picked }) => {
+            setFocusId(picked.length === 1 ? picked[0].id : null);
+            setSelectedIds(picked.map((n) => n.id));
+          }}
           onNodeDragStop={(_, __, dragged) =>
             void guarded(() =>
               API.updateCanvasLayout(
@@ -276,6 +388,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
               ]),
             );
           }}
+          onlyRenderVisibleElements
           minZoom={0.2}
           maxZoom={1.5}
           proOptions={{ hideAttribution: true }}
@@ -338,6 +451,66 @@ function CanvasSurface({ projectName }: { projectName: string }) {
               </div>
             </>
           )}
+          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={tidy}>
+            <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_tidy")}
+          </button>
+          <div className="pointer-events-auto relative">
+            <button type="button" className={GHOST_BTN_CLS} aria-expanded={templatesOpen} onClick={() => setTemplatesOpen((open) => !open)}>
+              <Workflow className="h-3.5 w-3.5" aria-hidden="true" />
+              {t("node_canvas_templates_button", { count: graph.templates.length })}
+            </button>
+            {templatesOpen && (
+              <div className="absolute left-0 top-full z-10 mt-1 w-72 rounded-[10px] border border-hairline bg-bg-grad-a/95 p-2 shadow-xl backdrop-blur">
+                <ul className="mb-2 max-h-56 overflow-y-auto">
+                  {graph.templates.length === 0 && <li className="px-2 py-1.5 text-[12px] text-text-4">{t("node_canvas_templates_empty")}</li>}
+                  {graph.templates.map((tpl) => (
+                    <li key={tpl.id} className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="flex-1 truncate rounded-[6px] px-2 py-1.5 text-left text-[12px] text-text-2 hover:bg-white/5"
+                        onClick={() => {
+                          setTemplatesOpen(false);
+                          void guarded(() => API.instantiateCanvasTemplate(projectName, tpl.id, viewportCenter()));
+                        }}
+                      >
+                        {tpl.name} <span className="text-text-4">· {t("node_canvas_template_nodes", { count: tpl.node_count })}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-[6px] p-1.5 text-text-4 hover:bg-white/5 hover:text-text"
+                        aria-label={t("node_canvas_template_delete")}
+                        onClick={() => void guarded(() => API.deleteCanvasTemplate(projectName, tpl.id))}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <form
+                  className="flex items-center gap-1 border-t border-hairline pt-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const name = templateName.trim();
+                    if (!name || selectedIds.length === 0) return;
+                    void guarded(() => API.saveCanvasTemplate(projectName, name, selectedIds)).then(() => setTemplateName(""));
+                  }}
+                >
+                  <input
+                    className="min-w-0 flex-1 rounded-[6px] border border-hairline bg-transparent px-2 py-1 text-[12px] text-text placeholder:text-text-4 focus-visible:outline-none"
+                    value={templateName}
+                    placeholder={t("node_canvas_template_name_placeholder")}
+                    aria-label={t("node_canvas_template_name_placeholder")}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                  />
+                  <button type="submit" className={GHOST_BTN_CLS} disabled={selectedIds.length === 0 || templateName.trim() === ""} title={t("node_canvas_template_save_hint")}>
+                    <Save className="h-3.5 w-3.5" aria-hidden="true" />
+                    {t("node_canvas_template_save")}
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
           <input
             ref={fileInput}
             type="file"
@@ -349,6 +522,34 @@ function CanvasSurface({ projectName }: { projectName: string }) {
             }}
           />
         </div>
+
+        {branch && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label={t("node_canvas_branch_title")}>
+            <div className="w-full max-w-md rounded-[14px] border border-hairline bg-bg-grad-a p-4 shadow-2xl">
+              <h2 className="mb-1 text-[14px] font-semibold text-text">{t("node_canvas_branch_title")}</h2>
+              <p className="mb-3 text-[12px] text-text-3">{t("node_canvas_branch_hint", { count: branch.steps.length })}</p>
+              <ol className="mb-4 space-y-1.5">
+                {branch.steps.map((step, index) => (
+                  <li key={step.id} className="flex items-center gap-2 text-[12px] text-text-2">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/5 text-[10px]">
+                      {branch.current === index ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : index + 1}
+                    </span>
+                    <span className="truncate">{step.id}</span>
+                    <span className="ml-auto text-[10.5px] text-text-4">{t(`node_canvas_branch_reason_${step.reason}`)}</span>
+                  </li>
+                ))}
+              </ol>
+              <div className="flex justify-end gap-2">
+                <button type="button" className={GHOST_BTN_CLS} disabled={branch.current !== null} onClick={() => setBranch(null)}>
+                  {t("node_canvas_branch_cancel")}
+                </button>
+                <button type="button" className={ACCENT_BTN_SM_CLS} disabled={branch.current !== null} onClick={() => void executeBranch()}>
+                  {t("node_canvas_branch_run")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <form
           className="absolute inset-x-0 bottom-4 mx-auto flex w-[min(34rem,calc(100%-2rem))] items-center gap-2 rounded-[12px] border border-hairline bg-bg-grad-a/90 p-2 shadow-xl backdrop-blur"
@@ -383,6 +584,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           </p>
         )}
       </div>
+      </CanvasBusyContext.Provider>
     </CanvasActionsContext.Provider>
   );
 }

@@ -77,6 +77,7 @@ async def test_success_writes_path_and_version(seeded):
         "generator_id": ids["gen"],
         "aspect_ratio": "16:9",
         "references": ["ref.png", "../escape.png", "missing.png"],
+        "reference_labels": ["hero.png", "x", "y"],
     }
 
     result = await canvas_tasks.execute_canvas_image_task("demo", ids["image"], payload, task_id="t1")
@@ -85,7 +86,8 @@ async def test_success_writes_path_and_version(seeded):
     image = _data(root, ids["image"])
     assert (image["status"], image["path"], image["version"]) == ("done", result["file_path"], 3)
     assert _data(root, ids["gen"])["status"] == "done"
-    _, resource_type, resource_id, kwargs = generator.calls[0]
+    sent_prompt, resource_type, resource_id, kwargs = generator.calls[0]
+    assert sent_prompt == "Reference images (cite them in the prompt as 图N):\n图1: hero.png\n\na fox"
     assert (resource_type, resource_id, kwargs["aspect_ratio"]) == ("canvas_images", ids["image"], "16:9")
     assert kwargs["reference_images"] == [root / "ref.png"]
 

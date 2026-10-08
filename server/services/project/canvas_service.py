@@ -19,14 +19,18 @@ from lib.canvas.graph import (
     CanvasGraphError,
     add_node,
     add_run_outputs,
+    branch_plan,
     connect,
     derived_kind,
     disconnect,
     find_node,
+    instantiate_template,
     make_node,
+    make_template,
     patch_node,
     remove_node,
     resolve_generate_inputs,
+    resolve_reference_labels,
     stale_generated_images,
 )
 from lib.canvas.store import load_canvas, mutate_canvas
@@ -42,6 +46,20 @@ from server.text_generation import TextGenerationError, TextGenerationRequest, p
 from server.tool_runtime import TEXT_EPISODE_SCRIPT_TASK_TYPE
 
 UNIT_NODE_PREFIX = "p:unit:"
+
+
+def _model_override(model: object) -> dict[str, str]:
+    """节点上选的 ``供应商/模型`` → 任务 payload 的 ``image_provider`` / ``image_model``；未选或格式不对即不覆盖。"""
+    if isinstance(model, str) and "/" in model:
+        provider, _, name = model.partition("/")
+        if provider and name:
+            return {"image_provider": provider, "image_model": name}
+    return {}
+
+
+def _append(items: list[Any], item: Any) -> Any:
+    items.append(item)
+    return item
 
 
 class CanvasService:
@@ -69,6 +87,9 @@ class CanvasService:
             "edges": [*virtual_edges, *writer_output_edges(stored, set(derived)), *stored],
             "view": graph["view"],
             "episodes": list_episodes(project),
+            "templates": [
+                {"id": t["id"], "name": t["name"], "node_count": len(t["nodes"])} for t in graph["templates"]
+            ],
         }
 
     async def view(self, project_name: str) -> dict[str, Any]:
@@ -126,7 +147,55 @@ class CanvasService:
         _, graph = await self.mutate(project_name, lambda g: g["view"].update(episodes=chosen))
         return chosen, graph["revision"]
 
+    # ---- 模板 ----
+
+    async def save_template(self, project_name: str, name: str, node_ids: list[str]) -> tuple[dict[str, Any], int]:
+        template, graph = await self.mutate(
+            project_name, lambda g: _append(g["templates"], make_template(g, name, node_ids))
+        )
+        return {"id": template["id"], "name": template["name"], "node_count": len(template["nodes"])}, graph["revision"]
+
+    async def use_template(
+        self, project_name: str, template_id: str, origin: dict[str, float]
+    ) -> tuple[list[dict[str, Any]], int]:
+        def _apply(graph: dict[str, Any]) -> list[dict[str, Any]]:
+            template = next((t for t in graph["templates"] if t["id"] == template_id), None)
+            if template is None:
+                raise CanvasGraphError("canvas_template_not_found", id=template_id)
+            return instantiate_template(graph, template, origin)
+
+        nodes, graph = await self.mutate(project_name, _apply)
+        return nodes, graph["revision"]
+
+    async def delete_template(self, project_name: str, template_id: str) -> int:
+        def _apply(graph: dict[str, Any]) -> None:
+            before = len(graph["templates"])
+            graph["templates"] = [t for t in graph["templates"] if t["id"] != template_id]
+            if len(graph["templates"]) == before:
+                raise CanvasGraphError("canvas_template_not_found", id=template_id)
+
+        _, graph = await self.mutate(project_name, _apply)
+        return graph["revision"]
+
     # ---- 运行 ----
+
+    async def branch(self, project_name: str, node_id: str) -> list[dict[str, str]]:
+        """运行 ``node_id`` 前须先跑的上游节点（只含缺产物或已过期的），最后一项是它自己。"""
+
+        def _plan() -> list[dict[str, str]]:
+            project_path = self.pm.get_project_path(project_name)
+            graph = load_canvas(project_path)
+            derived_nodes, _ = build_project_view(
+                self.pm, project_name, self.pm.load_project(project_name), graph["view"]["episodes"], graph["overrides"]
+            )
+            derived = {n["id"]: n for n in derived_nodes}
+            stale_ids = stale_generated_images(graph, derived)
+            graph["nodes"] = [
+                {**n, "data": {**n["data"], "stale": True}} if n["id"] in stale_ids else n for n in graph["nodes"]
+            ]
+            return branch_plan(graph, node_id, derived)
+
+        return await asyncio.to_thread(_plan)
 
     async def run(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
         """运行一个节点，立即返回入队结果。图片供应商 / H3 写作 / 起始帧联合图三类节点可运行。"""
@@ -156,10 +225,17 @@ class CanvasService:
             derived_nodes, _ = build_project_view(
                 self.pm, project_name, self.pm.load_project(project_name), graph["view"]["episodes"], graph["overrides"]
             )
-            prompt, references = resolve_generate_inputs(graph, node_id, {n["id"]: n for n in derived_nodes})
+            derived = {n["id"]: n for n in derived_nodes}
+            prompt, references = resolve_generate_inputs(graph, node_id, derived)
             if not prompt:
                 raise CanvasGraphError("canvas_prompt_required")
-            frozen.update(prompt=prompt, references=references, aspect_ratio=node["data"].get("aspect_ratio") or "9:16")
+            frozen.update(
+                prompt=prompt,
+                references=references,
+                reference_labels=resolve_reference_labels(graph, node_id, derived),
+                aspect_ratio=node["data"].get("aspect_ratio") or "9:16",
+                model=node["data"].get("model"),
+            )
             text_node, image_node = add_run_outputs(graph, node_id, prompt)
             node["data"].update(status=STATUS_QUEUED, error=None)
             return text_node, image_node
@@ -173,7 +249,9 @@ class CanvasService:
             extra_payload={
                 "generator_id": node_id,
                 "references": frozen["references"],
+                "reference_labels": frozen["reference_labels"],
                 "aspect_ratio": frozen["aspect_ratio"],
+                **_model_override(frozen["model"]),
             },
         )
         try:

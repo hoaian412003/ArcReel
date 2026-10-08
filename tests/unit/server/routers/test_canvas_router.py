@@ -190,3 +190,77 @@ def test_episode_group_layout_is_stored_as_override(env):
     from lib.canvas.store import load_canvas
 
     assert load_canvas(root)["overrides"] == {"p:episode:2": {"x": 5.0, "y": 6.0}}
+
+
+def test_node_model_choice_becomes_a_provider_override_in_the_task(env):
+    client, queue, _ = env
+    text = _node(client, "text", text="a fox")
+    gen = _node(client, "image_generate", model="gemini-aistudio/imagen-4")
+    client.post(
+        "/api/v1/projects/demo/canvas/edges",
+        json={"source": text["id"], "source_handle": "text", "target": gen["id"], "target_handle": "prompt"},
+    )
+    assert client.post(f"/api/v1/projects/demo/canvas/nodes/{gen['id']}/run").status_code == 200
+    payload = queue.calls[0]["payload"]
+    assert (payload["image_provider"], payload["image_model"]) == ("gemini-aistudio", "imagen-4")
+
+
+def test_a_malformed_model_choice_is_ignored(env):
+    client, queue, _ = env
+    text = _node(client, "text", text="a fox")
+    gen = _node(client, "image_generate", model="nonsense")
+    client.post(
+        "/api/v1/projects/demo/canvas/edges",
+        json={"source": text["id"], "source_handle": "text", "target": gen["id"], "target_handle": "prompt"},
+    )
+    client.post(f"/api/v1/projects/demo/canvas/nodes/{gen['id']}/run")
+    assert "image_provider" not in queue.calls[0]["payload"]
+
+
+def test_template_save_use_and_delete(env):
+    client, _, _ = env
+    text = _node(client, "text", text="a fox")
+    gen = _node(client, "image_generate")
+    client.post(
+        "/api/v1/projects/demo/canvas/edges",
+        json={"source": text["id"], "source_handle": "text", "target": gen["id"], "target_handle": "prompt"},
+    )
+    saved = client.post(
+        "/api/v1/projects/demo/canvas/templates", json={"name": "fox", "node_ids": [text["id"], gen["id"]]}
+    )
+    assert saved.status_code == 200
+    template_id = saved.json()["template"]["id"]
+    assert client.get("/api/v1/projects/demo/canvas").json()["templates"] == [
+        {"id": template_id, "name": "fox", "node_count": 2}
+    ]
+
+    used = client.post(
+        f"/api/v1/projects/demo/canvas/templates/{template_id}/use", json={"position": {"x": 900, "y": 0}}
+    )
+    assert used.status_code == 200
+    assert len(client.get("/api/v1/projects/demo/canvas").json()["nodes"]) == 4
+
+    assert client.delete(f"/api/v1/projects/demo/canvas/templates/{template_id}").status_code == 200
+    assert client.delete(f"/api/v1/projects/demo/canvas/templates/{template_id}").status_code == 404
+    assert (
+        client.post("/api/v1/projects/demo/canvas/templates", json={"name": "x", "node_ids": ["nope"]}).status_code
+        == 422
+    )
+
+
+def test_branch_endpoint_returns_the_plan(env):
+    client, _, _ = env
+    text = _node(client, "text", text="a fox")
+    first = _node(client, "image_generate")
+    second = _node(client, "image_generate")
+    for src, handle, target, th in (
+        (text, "text", first, "prompt"),
+        (first, "image", second, "refs"),
+        (text, "text", second, "prompt"),
+    ):
+        client.post(
+            "/api/v1/projects/demo/canvas/edges",
+            json={"source": src["id"], "source_handle": handle, "target": target["id"], "target_handle": th},
+        )
+    plan = client.get(f"/api/v1/projects/demo/canvas/nodes/{second['id']}/branch").json()["nodes"]
+    assert [item["id"] for item in plan] == [first["id"], second["id"]]

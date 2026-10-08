@@ -30,6 +30,8 @@ def _load(path: Path) -> dict[str, Any]:
     raw_view = raw.get("view")
     episodes = raw_view.get("episodes", []) if isinstance(raw_view, dict) else []
     graph["view"] = {"episodes": [n for n in episodes if isinstance(n, int)]}
+    templates = raw.get("templates")
+    graph["templates"] = [t for t in templates if isinstance(t, dict)] if isinstance(templates, list) else []
     overrides = raw.get("overrides")
     graph["overrides"] = dict(overrides) if isinstance(overrides, dict) else {}
     return graph

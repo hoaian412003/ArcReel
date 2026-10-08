@@ -78,7 +78,7 @@ class CanvasGraphError(Exception):
 
 
 def empty_graph() -> dict[str, Any]:
-    return {"revision": 0, "nodes": [], "edges": [], "view": {"episodes": []}, "overrides": {}}
+    return {"revision": 0, "nodes": [], "edges": [], "view": {"episodes": []}, "overrides": {}, "templates": []}
 
 
 def new_id(prefix: str) -> str:
@@ -203,6 +203,15 @@ def disconnect(graph: dict[str, Any], edge_id: str) -> None:
         raise CanvasGraphError("canvas_edge_not_found", id=edge_id)
 
 
+def latest_output(graph: dict[str, Any], generator_id: str, handle: str) -> dict[str, Any] | None:
+    """供应商节点某输出句柄上最近一次运行的产物节点：图片取已完成的，文本取最新的提示词副本。"""
+    targets = {e["target"] for e in graph["edges"] if e["source"] == generator_id and e["sourceHandle"] == handle}
+    outputs = [n for n in graph["nodes"] if n["id"] in targets and n["data"].get("generated")]
+    if handle == "image":
+        outputs = [n for n in outputs if n["data"].get("status") == STATUS_DONE and n["data"].get("path")]
+    return outputs[-1] if outputs else None
+
+
 def _incoming(
     graph: dict[str, Any], node_id: str, handle: str, derived: Mapping[str, dict[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
@@ -218,7 +227,14 @@ def _incoming(
             if derived is not None and e["source"] in derived:
                 sources.append(derived[e["source"]])
         else:
-            sources.append(find_node(graph, e["source"]))
+            source = find_node(graph, e["source"])
+            if source["type"] == NODE_IMAGE_GENERATE:
+                # 直接连供应商节点的输出句柄 = 取它最近一次运行的产物，重跑它后下游自动用上新结果。
+                latest = latest_output(graph, source["id"], e["sourceHandle"])
+                if latest is not None:
+                    sources.append(latest)
+            else:
+                sources.append(source)
     return sorted(sources, key=lambda n: (_abs_position(n)["y"], _abs_position(n)["x"]))
 
 
@@ -235,8 +251,40 @@ def resolve_generate_inputs(
         raise CanvasGraphError("canvas_node_not_runnable", id=node_id)
     texts = [str(n["data"].get("text") or "").strip() for n in _incoming(graph, node_id, "prompt", derived)]
     prompt = "\n\n".join(t for t in texts if t)
-    refs = [p for n in _incoming(graph, node_id, "refs", derived) if isinstance(p := n["data"].get("path"), str) and p]
+    refs = [n["data"]["path"] for n in _reference_nodes(graph, node_id, derived)]
     return prompt, refs
+
+
+def _reference_nodes(
+    graph: dict[str, Any], node_id: str, derived: Mapping[str, dict[str, Any]] | None
+) -> list[dict[str, Any]]:
+    return [
+        n
+        for n in _incoming(graph, node_id, "refs", derived)
+        if isinstance(n["data"].get("path"), str) and n["data"]["path"]
+    ]
+
+
+def resolve_reference_labels(
+    graph: dict[str, Any], node_id: str, derived: Mapping[str, dict[str, Any]] | None = None
+) -> list[str]:
+    """与 :func:`resolve_generate_inputs` 返回的参考图等长同序的人读名称，用于「图N」编号说明。"""
+    labels = []
+    for n in _reference_nodes(graph, node_id, derived):
+        data = n["data"]
+        if n["type"] == KIND_KEYFRAME:
+            labels.append(f"keyframe {data.get('sheet_id') or ''}".strip())
+        else:
+            labels.append(str(data.get("label") or ""))
+    return labels
+
+
+def reference_legend(labels: list[str]) -> str:
+    """「图N」编号说明：编号即参考图在请求里的位置（从 1 起），提示词里按 图N 指认。空列表返回空串。"""
+    if not labels:
+        return ""
+    lines = [f"图{index}: {label}" if label else f"图{index}" for index, label in enumerate(labels, start=1)]
+    return "Reference images (cite them in the prompt as 图N):\n" + "\n".join(lines)
 
 
 def stale_generated_images(graph: dict[str, Any], derived: Mapping[str, dict[str, Any]]) -> set[str]:
@@ -282,3 +330,108 @@ def add_run_outputs(graph: dict[str, Any], node_id: str, prompt: str) -> tuple[d
             }
         )
     return text_node, image_node
+
+
+def branch_plan(
+    graph: dict[str, Any], target_id: str, derived: Mapping[str, dict[str, Any]] | None = None
+) -> list[dict[str, str]]:
+    """运行 ``target_id`` 之前须先跑的上游节点，先上游后下游，最后一项是 ``target_id`` 自己。
+
+    只收「还没有可用产物」或「产物已过期」的供应商节点与起始帧联合图节点，已是最新的上游不重跑。
+    """
+    node = find_node(graph, target_id)
+    if node["type"] != NODE_IMAGE_GENERATE:
+        raise CanvasGraphError("canvas_node_not_runnable", id=target_id)
+    stale = stale_generated_images(graph, derived or {})
+    order: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def needs_run(upstream: dict[str, Any]) -> str | None:
+        if upstream["type"] == KIND_KEYFRAME:
+            data = upstream["data"]
+            return "missing" if not data.get("path") else ("stale" if data.get("stale") else None)
+        if upstream["type"] != NODE_IMAGE_GENERATE:
+            return None
+        if latest_output(graph, upstream["id"], "image") is None:
+            return "missing"
+        outputs = {e["target"] for e in graph["edges"] if e["source"] == upstream["id"]}
+        return "stale" if outputs & stale else None
+
+    def visit(current_id: str) -> None:
+        if current_id in seen:
+            return
+        seen.add(current_id)
+        for edge in graph["edges"]:
+            if edge["target"] != current_id or edge["targetHandle"] not in {"prompt", "refs"}:
+                continue
+            source_id = edge["source"]
+            source = (derived or {}).get(source_id) if derived_kind(source_id) else _node_or_none(graph, source_id)
+            if source is None:
+                continue
+            visit(source_id)
+            reason = needs_run(source)
+            if reason is not None and all(item["id"] != source_id for item in order):
+                order.append({"id": source_id, "type": source["type"], "reason": reason})
+
+    visit(target_id)
+    order.append({"id": target_id, "type": NODE_IMAGE_GENERATE, "reason": "target"})
+    return order
+
+
+def _node_or_none(graph: dict[str, Any], node_id: str) -> dict[str, Any] | None:
+    return next((n for n in graph["nodes"] if n["id"] == node_id), None)
+
+
+#: 模板里保留的节点类型：只带可复用的结构（文本、供应商），不带随项目走的产物图片与项目推导节点。
+TEMPLATE_NODE_TYPES = (NODE_TEXT, NODE_IMAGE_GENERATE, NODE_H3_WRITER)
+
+
+def make_template(graph: dict[str, Any], name: str, node_ids: list[str]) -> dict[str, Any]:
+    """把选中的节点（及它们之间的连线）存成模板；产物、状态与项目推导节点不入模板。"""
+    chosen = [
+        n
+        for n in graph["nodes"]
+        if n["id"] in set(node_ids) and n["type"] in TEMPLATE_NODE_TYPES and not n["data"].get("generated")
+    ]
+    if not chosen:
+        raise CanvasGraphError("canvas_template_empty")
+    ids = {n["id"] for n in chosen}
+    left = min(n["position"]["x"] for n in chosen)
+    top = min(n["position"]["y"] for n in chosen)
+    return {
+        "id": new_id("tpl"),
+        "name": name,
+        "nodes": [
+            {
+                "ref": n["id"],
+                "type": n["type"],
+                "offset": {"x": n["position"]["x"] - left, "y": n["position"]["y"] - top},
+                "data": _user_data(n["data"]),
+            }
+            for n in chosen
+        ],
+        "edges": [
+            {k: e[k] for k in ("source", "sourceHandle", "target", "targetHandle")}
+            for e in graph["edges"]
+            if e["source"] in ids and e["target"] in ids
+        ],
+    }
+
+
+def instantiate_template(
+    graph: dict[str, Any], template: dict[str, Any], origin: dict[str, float]
+) -> list[dict[str, Any]]:
+    """在 ``origin`` 处展开模板：新建节点与连线（id 全部重新生成），返回新节点。"""
+    created: dict[str, dict[str, Any]] = {}
+    for item in template["nodes"]:
+        position = {"x": origin["x"] + item["offset"]["x"], "y": origin["y"] + item["offset"]["y"]}
+        created[item["ref"]] = add_node(graph, make_node(item["type"], position, dict(item["data"])))
+    for edge in template["edges"]:
+        connect(
+            graph,
+            created[edge["source"]]["id"],
+            edge["sourceHandle"],
+            created[edge["target"]]["id"],
+            edge["targetHandle"],
+        )
+    return list(created.values())

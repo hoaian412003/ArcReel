@@ -1,11 +1,12 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { AlertTriangle, Clapperboard, Film, Image as ImageIcon, Layers, Loader2, PenLine, Play, Sparkles, Type, X } from "lucide-react";
 import { API } from "@/api";
 import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/types/canvas";
 import { ACCENT_BTN_SM_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
-import { useCanvasActions } from "./canvas-context";
+import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
+import { useBusyNodeIds, useCanvasActions } from "./canvas-context";
 import { ASPECT_RATIOS, PASSIVE_INPUT_HANDLE, isBusy } from "./canvas-rules";
 
 export type CanvasFlowNode = Node<CanvasNodeData, CanvasAnyNodeType>;
@@ -18,15 +19,27 @@ const HANDLE_COLOR: Record<CanvasHandleType, string> = {
 };
 const TEXT_SAVE_DELAY_MS = 600;
 
-function handleStyle(type: CanvasHandleType, connectable = true) {
-  return {
-    width: 12,
-    height: 12,
-    background: HANDLE_COLOR[type],
-    border: "2px solid oklch(0.16 0.010 265)",
-    ...(connectable ? {} : { opacity: 0.35 }),
-  };
+const HANDLE_STYLES = new Map<string, CSSProperties>();
+
+/** 同一 (类型, 可连接) 恒返回同一个对象：Handle 的 style 引用稳定，重绘时不会因新对象而被判定为变化。 */
+function handleStyle(type: CanvasHandleType, connectable = true): CSSProperties {
+  const key = `${type}:${connectable}`;
+  let style = HANDLE_STYLES.get(key);
+  if (!style) {
+    style = {
+      width: 12,
+      height: 12,
+      background: HANDLE_COLOR[type],
+      border: "2px solid oklch(0.16 0.010 265)",
+      ...(connectable ? {} : { opacity: 0.35 }),
+    };
+    HANDLE_STYLES.set(key, style);
+  }
+  return style;
 }
+
+const UNIT_HANDLE_STYLE = { ...handleStyle("unit"), top: "35%" };
+const UNIT_TEXT_HANDLE_STYLE = { ...handleStyle("text"), top: "65%" };
 
 function NodeShell({
   selected,
@@ -153,6 +166,8 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
             alt={data.label ?? t("node_canvas_image_label")}
             className="nodrag max-h-[320px] w-full object-contain"
             draggable={false}
+            loading="lazy"
+            decoding="async"
           />
         ) : busy ? (
           <span className="flex items-center gap-2 text-[12px] text-text-3">
@@ -179,7 +194,7 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
 
 function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const { setAspectRatio, run, remove } = useCanvasActions();
+  const { setAspectRatio, setModel, imageModels, run, remove } = useCanvasActions();
   const busy = isBusy(data.status);
   return (
     <NodeShell
@@ -202,6 +217,18 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         <HandleLabel side="right">{t("node_canvas_handle_image")}</HandleLabel>
       </div>
       <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t("node_canvas_refs_hint")}</p>
+      <div className="nodrag mb-2">
+        <ProviderModelSelect
+          value={data.model ?? ""}
+          options={imageModels.options}
+          providerNames={imageModels.providerNames}
+          modelNames={imageModels.modelNames}
+          onChange={(value) => void setModel(id, value)}
+          allowDefault
+          defaultLabel={t("node_canvas_model_default")}
+          aria-label={t("node_canvas_model_label")}
+        />
+      </div>
       <label className="mb-3 flex items-center justify-between gap-2 text-[11.5px] text-text-3">
         {t("node_canvas_aspect_ratio")}
         <select
@@ -265,8 +292,8 @@ function UnitNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
     >
       <p className="nowheel line-clamp-5 whitespace-pre-wrap text-[11.5px] leading-snug text-text-2">{data.text}</p>
       <Handle type="target" position={Position.Left} id="frame" isConnectable={false} style={handleStyle("image", false)} />
-      <Handle type="source" position={Position.Right} id="unit" style={{ ...handleStyle("unit"), top: "35%" }} />
-      <Handle type="source" position={Position.Right} id="text" style={{ ...handleStyle("text"), top: "65%" }} />
+      <Handle type="source" position={Position.Right} id="unit" style={UNIT_HANDLE_STYLE} />
+      <Handle type="source" position={Position.Right} id="text" style={UNIT_TEXT_HANDLE_STYLE} />
       <HandleLabel side="right">{t("node_canvas_handle_unit_text")}</HandleLabel>
     </NodeShell>
   );
@@ -274,7 +301,8 @@ function UnitNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
 
 function KeyframeNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const { projectName, runKeyframe, busyNodeIds } = useCanvasActions();
+  const { projectName, runKeyframe } = useCanvasActions();
+  const busyNodeIds = useBusyNodeIds();
   const nodeKey = `${data.episode}:${data.sheet_id}`;
   const busy = busyNodeIds.has(nodeKey);
   return (
@@ -296,6 +324,8 @@ function KeyframeNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
             alt={t("node_canvas_keyframe_title", { id: data.sheet_id })}
             className="max-h-[200px] w-full object-contain"
             draggable={false}
+            loading="lazy"
+            decoding="async"
           />
         ) : (
           <span className="text-[12px] text-text-4">{t("node_canvas_image_empty")}</span>
@@ -350,7 +380,8 @@ function H3PromptNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
 
 function H3WriterNodeView({ id, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const { runWriter, remove, busyNodeIds } = useCanvasActions();
+  const { runWriter, remove } = useCanvasActions();
+  const busyNodeIds = useBusyNodeIds();
   const busy = busyNodeIds.has(id);
   return (
     <NodeShell

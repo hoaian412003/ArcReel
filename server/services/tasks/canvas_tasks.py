@@ -12,7 +12,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from lib.canvas.graph import STATUS_DONE, STATUS_FAILED, STATUS_RUNNING, CanvasGraphError, find_node
+from lib.canvas.graph import (
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_RUNNING,
+    CanvasGraphError,
+    find_node,
+    reference_legend,
+)
 from lib.canvas.store import mutate_canvas
 from lib.db.base import DEFAULT_USER_ID
 from lib.infra.path_safety import PathTraversalError, safe_join
@@ -41,15 +48,16 @@ async def _patch_nodes(project_name: str, patches: dict[str, dict[str, Any]]) ->
     await asyncio.to_thread(mutate_canvas, pm, project_path, _apply)
 
 
-def _absolute_references(project_path: Path, relative_paths: list[str]) -> list[Path]:
-    resolved: list[Path] = []
-    for rel in relative_paths:
+def _absolute_references(project_path: Path, relative_paths: list[str], labels: list[str]) -> list[tuple[Path, str]]:
+    """可用的参考图及其名称；越界或已不存在的路径被丢弃，名称与图保持同序。"""
+    resolved: list[tuple[Path, str]] = []
+    for index, rel in enumerate(relative_paths):
         try:
             path = safe_join(project_path, rel)
         except PathTraversalError:
             continue
         if path.is_file():
-            resolved.append(path)
+            resolved.append((path, labels[index] if index < len(labels) else ""))
     return resolved
 
 
@@ -69,8 +77,11 @@ async def execute_canvas_image_task(
     project, project_path = await asyncio.gather(
         asyncio.to_thread(pm.load_project, project_name), asyncio.to_thread(pm.get_project_path, project_name)
     )
-    references = await asyncio.to_thread(
-        _absolute_references, project_path, [str(p) for p in payload.get("references") or []]
+    found = await asyncio.to_thread(
+        _absolute_references,
+        project_path,
+        [str(p) for p in payload.get("references") or []],
+        [str(label) for label in payload.get("reference_labels") or []],
     )
 
     def _both(**data: Any) -> dict[str, dict[str, Any]]:
@@ -87,13 +98,16 @@ async def execute_canvas_image_task(
             project=project,
             project_path=project_path,
             user_id=user_id,
-            image=ImageLaneRequest(generation_type="i2i" if references else "t2i"),
+            image=ImageLaneRequest(generation_type="i2i" if found else "t2i"),
         )
         limit = context.image.max_reference_images
         if limit > 0:
-            references = references[:limit]
+            found = found[:limit]
+        references = [path for path, _ in found]
+        # 「图N」编号即参考图在请求里的位置；说明只覆盖实际发出的图（裁剪之后）。
+        legend = reference_legend([label for _, label in found])
         _, version = await context.generator.generate_image_async(
-            prompt,
+            f"{legend}\n\n{prompt}" if legend else prompt,
             CANVAS_IMAGE_RESOURCE_TYPE,
             resource_id,
             reference_images=references,

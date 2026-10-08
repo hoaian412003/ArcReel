@@ -634,4 +634,6 @@ MESSAGES = {
     "canvas_h3_profile_required": "Node viết H3 chỉ áp dụng cho dự án dùng chế độ prompt H3 Ref2VA",
     "canvas_run_failed": "{message}",
     "canvas_worker_offline": "Dịch vụ hàng đợi chưa chạy nên không thể gửi tác vụ tạo",
+    "canvas_template_empty": "Không có node nào được chọn có thể lưu thành mẫu (văn bản, nhà cung cấp ảnh, viết H3)",
+    "canvas_template_not_found": "Không tìm thấy mẫu canvas '{id}'",
 }

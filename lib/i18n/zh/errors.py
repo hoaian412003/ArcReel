@@ -567,4 +567,6 @@ MESSAGES = {
     "canvas_h3_profile_required": "H3 写作只适用于采用 H3 Ref2VA 提示词档的项目",
     "canvas_run_failed": "{message}",
     "canvas_worker_offline": "任务队列服务未运行，无法提交生成任务",
+    "canvas_template_empty": "选中的节点里没有可存成模板的节点（文本、图片供应商、H3 写作）",
+    "canvas_template_not_found": "画布模板 '{id}' 不存在",
 }

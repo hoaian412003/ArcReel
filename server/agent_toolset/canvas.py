@@ -46,6 +46,10 @@ class CanvasAddNodeRequest(BaseModel):
     aspect_ratio: Literal["9:16", "16:9", "1:1", "3:4", "4:3"] | None = Field(
         default=None, description="type=image_generate 时的画幅，缺省 9:16"
     )
+    model: str | None = Field(
+        default=None,
+        description="type=image_generate 时指定的图像模型，形如 供应商/模型（如 gemini-aistudio/imagen-4）；缺省用项目默认",
+    )
 
 
 class CanvasPatchNodeRequest(BaseModel):
@@ -56,6 +60,9 @@ class CanvasPatchNodeRequest(BaseModel):
     text: str | None = Field(default=None, description="新正文，仅文本节点；传空串即清空")
     aspect_ratio: Literal["9:16", "16:9", "1:1", "3:4", "4:3"] | None = Field(
         default=None, description="新画幅，仅图片供应商节点"
+    )
+    model: str | None = Field(
+        default=None, description="新图像模型（供应商/模型），仅图片供应商节点；传空串恢复项目默认"
     )
 
 
@@ -86,6 +93,20 @@ class CanvasSetEpisodesRequest(BaseModel):
     episodes: list[PositiveEpisode] = Field(
         description="画布上展示项目节点（集分组、视频单元、起始帧联合图、H3 提示词）的集；整份替换，空列表即全部隐藏。仅参考生视频项目"
     )
+
+
+class CanvasSaveTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=80, description="模板名")
+    node_ids: list[str] = Field(min_length=1, description="要存进模板的节点 id；节点之间的连线一并保存")
+
+
+class CanvasUseTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    template_id: str = Field(min_length=1, description="模板 id（get_canvas 的 templates 返回）")
+    position: Position = Field(description="展开位置（模板左上角）")
 
 
 def _problem(exc: CanvasGraphError) -> ToolProblem:
@@ -122,6 +143,7 @@ async def get_canvas(
             "revision": view["revision"],
             "shown_episodes": view["view"]["episodes"],
             "available_episodes": view["episodes"],
+            "templates": view["templates"],
             "nodes": [_digest(n) for n in view["nodes"]],
             "edges": [
                 {k: e[k] for k in ("id", "source", "sourceHandle", "target", "targetHandle")}
@@ -141,6 +163,8 @@ async def canvas_add_node(
         data["text"] = value.text
     if value.aspect_ratio is not None:
         data["aspect_ratio"] = value.aspect_ratio
+    if value.model is not None:
+        data["model"] = value.model
     try:
         node, revision = await _service(services).add_node(
             scope.project_name, value.type, value.position.model_dump(), data
@@ -159,6 +183,8 @@ async def canvas_patch_node(
         data["text"] = value.text
     if value.aspect_ratio is not None:
         data["aspect_ratio"] = value.aspect_ratio
+    if value.model is not None:
+        data["model"] = value.model or None
     try:
         node, revision = await _service(services).patch_node(
             scope.project_name, value.node_id, value.position.model_dump() if value.position else None, data
@@ -222,9 +248,35 @@ async def canvas_run_node(
     return ToolOutcome(value=result)
 
 
+async def canvas_save_template(
+    request: ToolRequest[CanvasSaveTemplateRequest], scope: ProjectScope, _caller: CallerContext, services: Services
+) -> ToolOutcome[dict[str, Any]]:
+    try:
+        template, revision = await _service(services).save_template(
+            scope.project_name, request.value.name, list(request.value.node_ids)
+        )
+    except CanvasGraphError as exc:
+        return ToolOutcome(problem=_problem(exc))
+    return ToolOutcome(value={"template": template, "revision": revision})
+
+
+async def canvas_use_template(
+    request: ToolRequest[CanvasUseTemplateRequest], scope: ProjectScope, _caller: CallerContext, services: Services
+) -> ToolOutcome[dict[str, Any]]:
+    value = request.value
+    try:
+        nodes, revision = await _service(services).use_template(
+            scope.project_name, value.template_id, value.position.model_dump()
+        )
+    except CanvasGraphError as exc:
+        return ToolOutcome(problem=_problem(exc))
+    return ToolOutcome(value={"nodes": [_digest(n) for n in nodes], "revision": revision})
+
+
 _HANDLES_NOTE = (
     "句柄（只有同数据类型的句柄能连）：text 节点输出 text；image 节点输出 image；"
     "image_generate 输入 prompt(text)、refs(image)，输出 text、image；h3_writer 输入 units(unit)，输出 h3；"
+    "image_generate 的输出句柄 image 也可直接连到另一个 image_generate 的 refs：运行时取它最近一次产出的图。"
     "视频单元节点 p:unit:<集>:<单元> 输出 unit、text；起始帧联合图节点 p:keyframe:<集>:<联合图> 输出 image。"
 )
 
@@ -313,6 +365,27 @@ CANVAS_RUN_NODE = ToolDeclaration(
     handler=canvas_run_node,
 )
 
+CANVAS_SAVE_TEMPLATE = ToolDeclaration(
+    name="canvas_save_template",
+    description=(
+        "把画布上选中的节点（文本、图片供应商、H3 写作）与它们之间的连线存成模板，便于在别的位置或别的集重用。"
+        "运行产出的图片、上传的图片与项目推导节点不入模板。"
+    ),
+    request_model=CanvasSaveTemplateRequest,
+    migration=BLOCKED,
+    domain_key="canvas_template",
+    handler=canvas_save_template,
+)
+
+CANVAS_USE_TEMPLATE = ToolDeclaration(
+    name="canvas_use_template",
+    description="在指定位置展开一个画布模板：新建其中的节点与连线（id 全部重新生成），返回新节点。",
+    request_model=CanvasUseTemplateRequest,
+    migration=BLOCKED,
+    domain_key="canvas_template",
+    handler=canvas_use_template,
+)
+
 CANVAS_TOOLS = (
     GET_CANVAS,
     CANVAS_ADD_NODE,
@@ -322,6 +395,8 @@ CANVAS_TOOLS = (
     CANVAS_DISCONNECT,
     CANVAS_SET_EPISODES,
     CANVAS_RUN_NODE,
+    CANVAS_SAVE_TEMPLATE,
+    CANVAS_USE_TEMPLATE,
 )
 
 __all__ = ["CANVAS_TOOLS"]

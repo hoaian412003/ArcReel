@@ -42,6 +42,7 @@ _GRAPH_ERRORS: dict[
     "canvas_edge_not_found": NotFoundError,
     "canvas_node_busy": ConflictError,
     "canvas_worker_offline": ServiceUnavailableError,
+    "canvas_template_not_found": NotFoundError,
 }
 
 
@@ -89,6 +90,17 @@ class ConnectRequest(BaseModel):
     source_handle: str
     target: str
     target_handle: str
+
+
+class SaveTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=80)
+    node_ids: list[str] = Field(min_length=1)
+
+
+class UseTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    position: Position
 
 
 class ViewRequest(BaseModel):
@@ -205,3 +217,46 @@ async def run_node(project_name: str, node_id: str, user: CurrentUser):
         return await _service(project_name).run(project_name, node_id, user_id=user.id, source="webui")
     except CanvasGraphError as exc:
         _raise(exc)
+
+
+@router.get("/projects/{project_name}/canvas/nodes/{node_id}/branch")
+async def get_branch(project_name: str, node_id: str):
+    """运行此节点前须先跑的上游节点（缺产物或已过期的），先上游后下游，最后一项是它自己。"""
+    try:
+        return {"nodes": await _service(project_name).branch(project_name, node_id)}
+    except CanvasGraphError as exc:
+        _raise(exc)
+
+
+@router.post("/projects/{project_name}/canvas/templates", dependencies=[Depends(require_project_migration_ok)])
+async def save_template(project_name: str, req: SaveTemplateRequest):
+    """把选中的节点与它们之间的连线存成模板（产物图片与项目推导节点不入模板）。"""
+    try:
+        template, revision = await _service(project_name).save_template(project_name, req.name, req.node_ids)
+    except CanvasGraphError as exc:
+        _raise(exc)
+    return {"template": template, "revision": revision}
+
+
+@router.post(
+    "/projects/{project_name}/canvas/templates/{template_id}/use", dependencies=[Depends(require_project_migration_ok)]
+)
+async def use_template(project_name: str, template_id: str, req: UseTemplateRequest):
+    try:
+        nodes, revision = await _service(project_name).use_template(
+            project_name, template_id, req.position.model_dump()
+        )
+    except CanvasGraphError as exc:
+        _raise(exc)
+    return {"nodes": nodes, "revision": revision}
+
+
+@router.delete(
+    "/projects/{project_name}/canvas/templates/{template_id}", dependencies=[Depends(require_project_migration_ok)]
+)
+async def delete_template(project_name: str, template_id: str):
+    try:
+        revision = await _service(project_name).delete_template(project_name, template_id)
+    except CanvasGraphError as exc:
+        _raise(exc)
+    return {"revision": revision}

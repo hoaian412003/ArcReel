@@ -115,7 +115,16 @@ import type {
 } from "@/types/presentation";
 import type { Asset, AssetType, AssetCreatePayload, AssetUpdatePayload } from "@/types/asset";
 import type { WorkflowPlan, WorkflowPlanRequest } from "@/types/workflow";
-import type { CanvasEdge, CanvasGraph, CanvasNode, CanvasNodeData, CanvasNodeType, CanvasRunResult } from "@/types/canvas";
+import type {
+  CanvasBranchStep,
+  CanvasEdge,
+  CanvasGraph,
+  CanvasNode,
+  CanvasNodeData,
+  CanvasNodeType,
+  CanvasRunResult,
+  CanvasTemplateSummary,
+} from "@/types/canvas";
 import type { DirectionReview, DirectionReviewDecision, FlowBoard, ReviewTask, ReviewTaskKind, ReviewTasksResponse } from "@/types/flow";
 import type { Screenplay, ScreenplayOperation } from "@/types/screenplay";
 import type { KeyframeBoard, KeyframeSheetEnqueueResponse, KeyframeSheetRequest } from "@/types/keyframe";
@@ -1577,6 +1586,39 @@ class API {
     position: { x: number; y: number },
   ): Promise<{ node: CanvasNode; revision: number }> {
     return API.postFileUpload(`${this.canvasBase(projectName)}/images?x=${position.x}&y=${position.y}`, file);
+  }
+
+  /** 运行前须先跑的上游节点（缺产物或已过期的），先上游后下游，最后一项是它自己。 */
+  static async getCanvasBranch(projectName: string, nodeId: string): Promise<{ nodes: CanvasBranchStep[] }> {
+    return this.request(`${this.canvasBase(projectName)}/nodes/${encodeURIComponent(nodeId)}/branch`);
+  }
+
+  static async saveCanvasTemplate(
+    projectName: string,
+    name: string,
+    nodeIds: string[],
+  ): Promise<{ template: CanvasTemplateSummary; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/templates`, {
+      method: "POST",
+      body: JSON.stringify({ name, node_ids: nodeIds }),
+    });
+  }
+
+  static async instantiateCanvasTemplate(
+    projectName: string,
+    templateId: string,
+    position: { x: number; y: number },
+  ): Promise<{ nodes: CanvasNode[]; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/templates/${encodeURIComponent(templateId)}/use`, {
+      method: "POST",
+      body: JSON.stringify({ position }),
+    });
+  }
+
+  static async deleteCanvasTemplate(projectName: string, templateId: string): Promise<{ revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/templates/${encodeURIComponent(templateId)}`, {
+      method: "DELETE",
+    });
   }
 
   /** 运行图片供应商节点：服务端挂出输出节点并入队，立即返回。 */
