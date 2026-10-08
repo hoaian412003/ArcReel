@@ -11,7 +11,18 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from lib.canvas.graph import KIND_CHARACTER, KIND_EPISODE, KIND_H3_PROMPT, KIND_KEYFRAME, KIND_UNIT, derived_id
+from lib.canvas.graph import (
+    KIND_CHAR_GEN,
+    KIND_CHAR_REF,
+    KIND_CHAR_SHEET,
+    KIND_CHAR_TEXT,
+    KIND_CHARACTER,
+    KIND_EPISODE,
+    KIND_H3_PROMPT,
+    KIND_KEYFRAME,
+    KIND_UNIT,
+    derived_id,
+)
 from lib.project.project_manager import ProjectManager, find_episode
 from lib.prompts.video_prompt_profile import is_h3_ref2va
 from lib.script.reference_video.h3_prompt import (
@@ -33,11 +44,16 @@ KEYFRAME_ROW_HEIGHT = 260
 GROUP_WIDTH = 1060
 GROUP_GAP = 80
 
-#: 角色节点在画布左侧按网格排布（项目任何生成模式都有角色），每行列数与单元格尺寸。
-CHARACTER_COLUMNS = 2
-CHARACTER_CELL_WIDTH = 400
-CHARACTER_ROW_HEIGHT = 760
-CHARACTER_ORIGIN_X = -CHARACTER_COLUMNS * CHARACTER_CELL_WIDTH - 120
+#: 角色分组在画布左侧竖排：每个角色一组，组内从左到右是 描述 / 参考图 → 图片供应商 → 资产图。
+CHARACTER_GROUP_WIDTH = 1140
+CHARACTER_GROUP_HEIGHT = 700
+CHARACTER_GROUP_GAP = 60
+CHARACTER_ORIGIN_X = -CHARACTER_GROUP_WIDTH - 160
+#: 组内各子节点的位置（相对分组）。
+_CHAR_TEXT_POS: dict[str, float] = {"x": 24, "y": 64}
+_CHAR_REF_POS: dict[str, float] = {"x": 24, "y": 330}
+_CHAR_GEN_POS: dict[str, float] = {"x": 400, "y": 64}
+_CHAR_SHEET_POS: dict[str, float] = {"x": 790, "y": 64}
 
 #: 未登记摆放位置的节点之间保留的最小分组高度。
 GROUP_MIN_HEIGHT = 320
@@ -92,13 +108,13 @@ def build_project_view(
 
     ``h3_status`` 判定单元的 H3 提示词是 current / stale / missing，默认按脚本里的载荷机械校验。
     """
-    characters = _character_nodes(pm, project_name, project, overrides)
+    characters, character_edges = _character_nodes(pm, project_name, project, overrides)
     if not applicable(project):
-        return characters, []
+        return characters, character_edges
     project_path = pm.get_project_path(project_name)
     h3 = is_h3_ref2va(project)
     nodes: list[dict[str, Any]] = [*characters]
-    edges: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = [*character_edges]
     cursor_x = 0.0
     keyframes = KeyframeBoardService(pm)
 
@@ -216,37 +232,115 @@ def build_project_view(
     return nodes, edges
 
 
+def _char_child(
+    nodes: list[dict[str, Any]],
+    group_id: str,
+    group_pos: Mapping[str, float],
+    name: str,
+    kind: str,
+    node_type: str,
+    position: dict[str, float],
+    data: dict[str, Any],
+) -> str:
+    """角色分组里的一个子节点：位置相对分组，只读（不可单独拖离）。"""
+    node_id = derived_id(kind, name)
+    nodes.append(
+        {
+            "id": node_id,
+            "type": node_type,
+            "derived": True,
+            "parentId": group_id,
+            "position": position,
+            "abs": _abs(group_pos, position),
+            "data": {"name": name, **data},
+        }
+    )
+    return node_id
+
+
 def _character_nodes(
     pm: ProjectManager,
     project_name: str,
     project: Mapping[str, Any],
     overrides: Mapping[str, Mapping[str, float]],
-) -> list[dict[str, Any]]:
-    """项目里的每个角色一个节点：界面用角色卡渲染，这里只给出连线与「图N」编号要用的资产图路径。"""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """项目里的每个角色一个分组（按角色名），组内：描述文本 + 参考图 → 图片供应商 → 角色资产图。
+
+    这些节点的内容都取自项目里存的角色条目（描述、参考图、资产图），生成走既有的角色资产图任务，
+    所以组内的连线是推导出的（只读）；资产图节点的 image 句柄可以再连到别处的图片供应商。
+    """
     characters = project.get("characters")
     if not isinstance(characters, Mapping) or not characters:
-        return []
+        return [], []
     project_path = pm.get_project_path(project_name)
     nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
     for index, (name, entry) in enumerate(characters.items()):
-        sheet = entry.get("character_sheet") if isinstance(entry, Mapping) else None
+        entry = entry if isinstance(entry, Mapping) else {}
+        sheet = entry.get("character_sheet")
         sheet = sheet if isinstance(sheet, str) and sheet else None
-        node_id = derived_id(KIND_CHARACTER, name)
+        reference = entry.get("reference_image")
+        reference = reference if isinstance(reference, str) and reference else None
+        group_id = derived_id(KIND_CHARACTER, name)
         default = {
-            "x": float(CHARACTER_ORIGIN_X + (index % CHARACTER_COLUMNS) * CHARACTER_CELL_WIDTH),
-            "y": float((index // CHARACTER_COLUMNS) * CHARACTER_ROW_HEIGHT),
+            "x": float(CHARACTER_ORIGIN_X),
+            "y": float(index * (CHARACTER_GROUP_HEIGHT + CHARACTER_GROUP_GAP)),
         }
-        position = dict(overrides.get(node_id) or default)
+        group_pos = dict(overrides.get(group_id) or default)
+        group_pos = {"x": float(group_pos["x"]), "y": float(group_pos["y"])}
         nodes.append(
             {
-                "id": node_id,
+                "id": group_id,
                 "type": KIND_CHARACTER,
                 "derived": True,
-                "position": {"x": float(position["x"]), "y": float(position["y"])},
-                "data": {"name": name, "path": sheet, "version": _version(project_path, sheet)},
+                "position": group_pos,
+                "width": CHARACTER_GROUP_WIDTH,
+                "height": CHARACTER_GROUP_HEIGHT,
+                "data": {"name": name},
             }
         )
-    return nodes
+
+        text_id = _char_child(
+            nodes,
+            group_id,
+            group_pos,
+            name,
+            KIND_CHAR_TEXT,
+            "text",
+            _CHAR_TEXT_POS,
+            {"text": str(entry.get("description") or "")},
+        )
+        ref_id = _char_child(
+            nodes,
+            group_id,
+            group_pos,
+            name,
+            KIND_CHAR_REF,
+            "image",
+            _CHAR_REF_POS,
+            {"path": reference, "version": _version(project_path, reference), "role": "reference"},
+        )
+        gen_id = _char_child(
+            nodes, group_id, group_pos, name, KIND_CHAR_GEN, "image_generate", _CHAR_GEN_POS, {"aspect_ratio": None}
+        )
+        sheet_id = _char_child(
+            nodes,
+            group_id,
+            group_pos,
+            name,
+            KIND_CHAR_SHEET,
+            "image",
+            _CHAR_SHEET_POS,
+            {"path": sheet, "version": _version(project_path, sheet), "label": name, "role": "sheet"},
+        )
+        edges.extend(
+            [
+                _virtual_edge(text_id, "text", gen_id, "prompt"),
+                _virtual_edge(ref_id, "image", gen_id, "image1"),
+                _virtual_edge(gen_id, "image", sheet_id, "in"),
+            ]
+        )
+    return nodes, edges
 
 
 def _virtual_edge(source: str, source_handle: str, target: str, target_handle: str) -> dict[str, Any]:

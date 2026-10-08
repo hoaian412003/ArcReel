@@ -22,6 +22,10 @@ export interface CharacterAssets {
   generate: (name: string) => void;
   /** 失败时 toast 后继续抛出，供新增对话框据此保持打开。 */
   add: (name: string, description: string, voiceStyle: string, referenceFile?: File | null) => Promise<void>;
+  /** 只改描述（画布上描述文本节点的编辑）；失败 toast，不抛出。 */
+  saveDescription: (name: string, description: string) => Promise<void>;
+  /** 上传 / 替换参考图（画布上参考图节点）；失败 toast，不抛出。 */
+  uploadReference: (name: string, file: File) => Promise<void>;
   /** 版本恢复 / 外部变更后重新拉取项目。 */
   refresh: () => Promise<void>;
 }
@@ -100,7 +104,43 @@ export function useCharacterAssets(projectName: string | null): CharacterAssets 
     [projectName, refreshProject],
   );
 
+  const saveDescription = useCallback(
+    async (name: string, description: string) => {
+      if (!projectName) return;
+      try {
+        await API.updateCharacter(projectName, name, { description });
+      } catch (err) {
+        useAppStore
+          .getState()
+          .pushToast(i18n.t("dashboard:update_character_failed", { message: errMsg(err) }), "error");
+      } finally {
+        await refreshProject();
+      }
+    },
+    [projectName, refreshProject],
+  );
+
+  const uploadReference = useCallback(
+    async (name: string, file: File) => {
+      if (!projectName) return;
+      try {
+        await API.uploadFile(projectName, "character_ref", file, name);
+        useAppStore.getState().pushToast(i18n.t("dashboard:character_updated_toast", { name }), "success");
+      } catch (err) {
+        useAppStore
+          .getState()
+          .pushToast(i18n.t("dashboard:update_character_failed", { message: errMsg(err) }), "error");
+      } finally {
+        await refreshProject([buildEntityRevisionKey("character", name)]);
+      }
+    },
+    [projectName, refreshProject],
+  );
+
   const refresh = useCallback(() => refreshProject(), [refreshProject]);
 
-  return useMemo(() => ({ generating, save, generate, add, refresh }), [generating, save, generate, add, refresh]);
+  return useMemo(
+    () => ({ generating, save, generate, add, saveDescription, uploadReference, refresh }),
+    [generating, save, generate, add, saveDescription, uploadReference, refresh],
+  );
 }

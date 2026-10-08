@@ -27,7 +27,14 @@ export const WORKSPACE_ROUTE_PROPS = "props";
 export const WORKSPACE_ROUTE_PRODUCTS = "products";
 export const WORKSPACE_ROUTE_FLOW = "flow";
 export const WORKSPACE_ROUTE_REVIEWS = "reviews";
+/** 创作画布是独立整页（`/app/projects/:projectName/canvas`），不在工作台的嵌套路由里。 */
 export const WORKSPACE_ROUTE_NODE_CANVAS = "canvas";
+
+/** 画布页地址；`focus=characters` 让画布一打开就移到角色分组上。 */
+export function projectCanvasPath(projectName: string, focus?: "characters"): string {
+  const base = `${ROUTE_APP_PROJECTS}/${encodeURIComponent(projectName)}/${WORKSPACE_ROUTE_NODE_CANVAS}`;
+  return focus ? `${base}?focus=${focus}` : base;
+}
 export const WORKSPACE_ROUTE_EPISODES = "episodes";
 /** `episodes/:n/edit` 下的剪辑时间线编辑器。 */
 export const WORKSPACE_ROUTE_EPISODE_EDIT = "edit";
@@ -45,7 +52,6 @@ const WORKSPACE_STATIC_LEAF_ROUTES = [
   WORKSPACE_ROUTE_PRODUCTS,
   WORKSPACE_ROUTE_FLOW,
   WORKSPACE_ROUTE_REVIEWS,
-  WORKSPACE_ROUTE_NODE_CANVAS,
 ] as const;
 
 /**

@@ -27,9 +27,9 @@ def test_connect_requires_matching_handle_types():
     gen = _add(graph, "image_generate")
 
     connect(graph, text["id"], "text", gen["id"], "prompt")
-    connect(graph, image["id"], "image", gen["id"], "refs")
+    connect(graph, image["id"], "image", gen["id"], "image1")
     with pytest.raises(CanvasGraphError):
-        connect(graph, text["id"], "text", gen["id"], "refs")
+        connect(graph, text["id"], "text", gen["id"], "image1")
     with pytest.raises(CanvasGraphError):
         connect(graph, image["id"], "image", gen["id"], "prompt")
 
@@ -57,7 +57,7 @@ def test_generate_inputs_follow_canvas_order_and_skip_unfinished_images():
     for node in (low, high, blank):
         connect(graph, node["id"], "text", gen["id"], "prompt")
     for node in (done, pending):
-        connect(graph, node["id"], "image", gen["id"], "refs")
+        connect(graph, node["id"], "image", gen["id"], "image1")
 
     prompt, refs = resolve_generate_inputs(graph, gen["id"])
 
@@ -69,13 +69,13 @@ def test_run_outputs_stack_on_repeat_runs_and_attach_to_generator():
     graph = empty_graph()
     gen = _add(graph, "image_generate", x=100, y=0)
 
-    text1, image1 = add_run_outputs(graph, gen["id"], "p")
-    text2, image2 = add_run_outputs(graph, gen["id"], "p")
+    image1 = add_run_outputs(graph, gen["id"], "p")
+    image2 = add_run_outputs(graph, gen["id"], "p")
 
     assert image1["data"]["status"] == "queued"
     assert image2["position"]["y"] > image1["position"]["y"]
     edges = {(e["sourceHandle"], e["target"]) for e in graph["edges"] if e["source"] == gen["id"]}
-    assert edges == {("text", text1["id"]), ("image", image1["id"]), ("text", text2["id"]), ("image", image2["id"])}
+    assert edges == {("image", image1["id"]), ("image", image2["id"])}
 
 
 def test_patch_ignores_server_owned_fields():
@@ -109,7 +109,7 @@ def test_derived_nodes_connect_by_kind_and_feed_run_inputs():
     sheet = derived_id("keyframe", 1, "S1")
     connect(graph, unit, "unit", writer["id"], "units")
     connect(graph, unit, "text", gen["id"], "prompt")
-    connect(graph, sheet, "image", gen["id"], "refs")
+    connect(graph, sheet, "image", gen["id"], "image1")
     with pytest.raises(CanvasGraphError):
         connect(graph, unit, "unit", gen["id"], "prompt")
 
@@ -134,7 +134,7 @@ def test_generated_image_goes_stale_when_prompt_inputs_change():
     text = _add(graph, "text", text="a fox")
     gen = _add(graph, "image_generate")
     connect(graph, text["id"], "text", gen["id"], "prompt")
-    _, image = add_run_outputs(graph, gen["id"], "a fox")
+    image = add_run_outputs(graph, gen["id"], "a fox")
     image["data"]["status"] = "done"
     assert stale_generated_images(graph, {}) == set()
     text["data"]["text"] = "a red fox"
@@ -148,8 +148,8 @@ def test_reference_labels_follow_the_reference_order_and_build_a_legend():
     gen = _add(graph, "image_generate")
     first = add_node(graph, make_node("image", {"x": 0, "y": 10}, {"label": "hero.png"}, server_data={"path": "a.png"}))
     sheet = derived_id("keyframe", 1, "S1")
-    connect(graph, first["id"], "image", gen["id"], "refs")
-    connect(graph, sheet, "image", gen["id"], "refs")
+    connect(graph, first["id"], "image", gen["id"], "image1")
+    connect(graph, sheet, "image", gen["id"], "image1")
     derived = {
         sheet: {
             "id": sheet,
@@ -167,7 +167,7 @@ def test_reference_labels_follow_the_reference_order_and_build_a_legend():
 
 
 def _finished_run(graph, generator_id, path, prompt="a fox"):
-    _, image = add_run_outputs(graph, generator_id, prompt)
+    image = add_run_outputs(graph, generator_id, prompt)
     image["data"].update(status="done", path=path)
     return image
 
@@ -176,7 +176,7 @@ def test_connecting_a_generator_feeds_downstream_with_its_latest_finished_image(
     graph = empty_graph()
     upstream = _add(graph, "image_generate")
     downstream = _add(graph, "image_generate")
-    connect(graph, upstream["id"], "image", downstream["id"], "refs")
+    connect(graph, upstream["id"], "image", downstream["id"], "image1")
     assert resolve_generate_inputs(graph, downstream["id"])[1] == []  # 上游还没跑过
     _finished_run(graph, upstream["id"], "canvas/images/old.png")
     _finished_run(graph, upstream["id"], "canvas/images/new.png")
@@ -191,7 +191,7 @@ def test_branch_plan_lists_only_upstream_nodes_that_need_a_run():
     first = _add(graph, "image_generate")
     second = _add(graph, "image_generate")
     connect(graph, text["id"], "text", first["id"], "prompt")
-    connect(graph, first["id"], "image", second["id"], "refs")
+    connect(graph, first["id"], "image", second["id"], "image1")
 
     plan = branch_plan(graph, second["id"])
     assert [(p["id"], p["reason"]) for p in plan] == [(first["id"], "missing"), (second["id"], "target")]
@@ -257,8 +257,8 @@ def test_video_and_audio_providers_wire_by_media_type_and_emit_matching_outputs(
     assert resolve_generate_inputs(graph, video["id"]) == ("a duel", ["canvas/images/a.png"])
     assert resolve_generate_inputs(graph, audio["id"]) == ("a duel", [])
 
-    _, clip = add_run_outputs(graph, video["id"], "a duel")
-    _, voice = add_run_outputs(graph, audio["id"], "a duel")
+    clip = add_run_outputs(graph, video["id"], "a duel")
+    voice = add_run_outputs(graph, audio["id"], "a duel")
     assert (clip["type"], voice["type"]) == ("video", "audio")
     handles = {(e["source"], e["sourceHandle"]) for e in graph["edges"] if e["target"] in {clip["id"], voice["id"]}}
     assert handles == {(video["id"], "video"), (audio["id"], "audio")}
@@ -275,26 +275,60 @@ def test_a_video_provider_can_take_a_generators_latest_image_as_its_start_frame(
     assert resolve_generate_inputs(graph, video["id"])[1] == ["canvas/images/frame.png"]
 
 
-def test_character_nodes_feed_references_and_label_them_by_name():
+def test_character_sheet_nodes_feed_references_and_label_them_by_name():
     from lib.canvas.graph import derived_id, reference_legend, resolve_reference_labels
 
     graph = empty_graph()
     gen = _add(graph, "image_generate")
-    hero = derived_id("character", "阿离")
-    connect(graph, hero, "image", gen["id"], "refs")
+    sheet = derived_id("char_sheet", "阿离")
+    connect(graph, sheet, "image", gen["id"], "image1")
     with pytest.raises(CanvasGraphError):
-        connect(graph, hero, "image", gen["id"], "prompt")
+        connect(graph, sheet, "image", gen["id"], "prompt")
     derived = {
-        hero: {
-            "id": hero,
-            "type": "character",
+        sheet: {
+            "id": sheet,
+            "type": "image",
             "position": {"x": 0, "y": 0},
-            "data": {"name": "阿离", "path": "characters/阿离.png"},
+            "data": {"name": "阿离", "label": "阿离", "path": "characters/阿离.png"},
         }
     }
 
     assert resolve_generate_inputs(graph, gen["id"], derived)[1] == ["characters/阿离.png"]
     assert reference_legend(resolve_reference_labels(graph, gen["id"], derived)).endswith("图1: 阿离")
     # 角色还没有资产图时不提供参考图。
-    derived[hero]["data"]["path"] = None
+    derived[sheet]["data"]["path"] = None
     assert resolve_generate_inputs(graph, gen["id"], derived)[1] == []
+
+
+def test_the_character_generator_output_resolves_to_its_sheet_node():
+    from lib.canvas.graph import derived_id
+
+    graph = empty_graph()
+    gen = _add(graph, "image_generate")
+    char_gen = derived_id("char_gen", "阿离")
+    sheet = derived_id("char_sheet", "阿离")
+    connect(graph, char_gen, "image", gen["id"], "image1")
+    derived = {
+        sheet: {"id": sheet, "type": "image", "position": {"x": 0, "y": 0}, "data": {"path": "characters/阿离.png"}}
+    }
+    assert resolve_generate_inputs(graph, gen["id"], derived)[1] == ["characters/阿离.png"]
+
+
+def test_legacy_graphs_migrate_refs_to_image1_and_drop_prompt_copy_nodes():
+    from lib.canvas.graph import normalize_legacy
+
+    graph = empty_graph()
+    gen = _add(graph, "image_generate")
+    ref = add_node(graph, make_node("image", {"x": 0, "y": 0}, server_data={"path": "a.png"}))
+    graph["edges"].append(
+        {"id": "e1", "source": ref["id"], "sourceHandle": "image", "target": gen["id"], "targetHandle": "refs"}
+    )
+    copy = add_node(graph, make_node("text", {"x": 0, "y": 0}, {"text": "p", "generated": True}))
+    graph["edges"].append(
+        {"id": "e2", "source": gen["id"], "sourceHandle": "text", "target": copy["id"], "targetHandle": "in"}
+    )
+
+    normalize_legacy(graph)
+
+    assert [e["targetHandle"] for e in graph["edges"]] == ["image1"]
+    assert all(n["id"] != copy["id"] for n in graph["nodes"])

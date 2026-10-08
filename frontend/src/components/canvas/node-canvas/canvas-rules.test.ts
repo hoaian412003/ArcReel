@@ -13,11 +13,11 @@ const nodes = [node("t", "text"), node("i", "image"), node("g", "image_generate"
 describe("isValidCanvasConnection", () => {
   it("accepts matching handle types", () => {
     expect(isValidCanvasConnection(nodes, { source: "t", sourceHandle: "text", target: "g", targetHandle: "prompt" })).toBe(true);
-    expect(isValidCanvasConnection(nodes, { source: "i", sourceHandle: "image", target: "g", targetHandle: "refs" })).toBe(true);
+    expect(isValidCanvasConnection(nodes, { source: "i", sourceHandle: "image", target: "g", targetHandle: "image1" })).toBe(true);
   });
 
   it("rejects mismatched types, unknown handles and self loops", () => {
-    expect(isValidCanvasConnection(nodes, { source: "t", sourceHandle: "text", target: "g", targetHandle: "refs" })).toBe(false);
+    expect(isValidCanvasConnection(nodes, { source: "t", sourceHandle: "text", target: "g", targetHandle: "image1" })).toBe(false);
     expect(isValidCanvasConnection(nodes, { source: "i", sourceHandle: "image", target: "g", targetHandle: "prompt" })).toBe(false);
     expect(isValidCanvasConnection(nodes, { source: "t", sourceHandle: "text", target: "i", targetHandle: "in" })).toBe(false);
     expect(isValidCanvasConnection(nodes, { source: "g", sourceHandle: "text", target: "g", targetHandle: "prompt" })).toBe(false);
@@ -66,7 +66,7 @@ describe("derived node connections", () => {
   it("wires units into the writer and units/keyframes into the image generator", () => {
     expect(isValidCanvasConnection(derived, { source: "u", sourceHandle: "unit", target: "w", targetHandle: "units" })).toBe(true);
     expect(isValidCanvasConnection(derived, { source: "u", sourceHandle: "text", target: "g", targetHandle: "prompt" })).toBe(true);
-    expect(isValidCanvasConnection(derived, { source: "k", sourceHandle: "image", target: "g", targetHandle: "refs" })).toBe(true);
+    expect(isValidCanvasConnection(derived, { source: "k", sourceHandle: "image", target: "g", targetHandle: "image1" })).toBe(true);
     expect(isValidCanvasConnection(derived, { source: "u", sourceHandle: "text", target: "w", targetHandle: "units" })).toBe(false);
   });
 });
@@ -92,17 +92,24 @@ describe("video and audio providers", () => {
   });
 });
 
-describe("character nodes", () => {
+describe("character groups", () => {
   const nodes: CanvasNode[] = [
-    { id: "p:character:Hero", type: "character", position: { x: 0, y: 0 }, data: {}, derived: true },
+    { id: "p:char_sheet:Hero", type: "image", position: { x: 0, y: 0 }, data: {}, derived: true },
     { id: "g", type: "image_generate", position: { x: 0, y: 0 }, data: {} },
     { id: "v", type: "video_generate", position: { x: 0, y: 0 }, data: {} },
   ];
 
-  it("offers the character sheet as a reference image or a video start frame, never as text", () => {
-    const hero = { source: "p:character:Hero", sourceHandle: "image" };
-    expect(isValidCanvasConnection(nodes, { ...hero, target: "g", targetHandle: "refs" })).toBe(true);
-    expect(isValidCanvasConnection(nodes, { ...hero, target: "v", targetHandle: "frame" })).toBe(true);
-    expect(isValidCanvasConnection(nodes, { ...hero, target: "g", targetHandle: "prompt" })).toBe(false);
+  it("offers the character sheet as image1 or a video start frame, never as text", () => {
+    const sheet = { source: "p:char_sheet:Hero", sourceHandle: "image" };
+    expect(isValidCanvasConnection(nodes, { ...sheet, target: "g", targetHandle: "image1" })).toBe(true);
+    expect(isValidCanvasConnection(nodes, { ...sheet, target: "v", targetHandle: "frame" })).toBe(true);
+    expect(isValidCanvasConnection(nodes, { ...sheet, target: "g", targetHandle: "prompt" })).toBe(false);
+  });
+
+  it("gives image generators a single image output and no text output", () => {
+    const out = { source: "g", target: "g2" };
+    const more: CanvasNode[] = [...nodes, { id: "g2", type: "image_generate", position: { x: 0, y: 0 }, data: {} }];
+    expect(isValidCanvasConnection(more, { ...out, sourceHandle: "image", targetHandle: "image1" })).toBe(true);
+    expect(isValidCanvasConnection(more, { ...out, sourceHandle: "text", targetHandle: "prompt" })).toBe(false);
   });
 });

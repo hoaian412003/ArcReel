@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from lib.canvas.graph import empty_graph
+from lib.canvas.graph import empty_graph, normalize_legacy
 from lib.infra.json_io import atomic_write_json, load_json_or_none
 from lib.project.project_manager import ProjectManager
 
@@ -34,6 +34,7 @@ def _load(path: Path) -> dict[str, Any]:
     graph["templates"] = [t for t in templates if isinstance(t, dict)] if isinstance(templates, list) else []
     overrides = raw.get("overrides")
     graph["overrides"] = dict(overrides) if isinstance(overrides, dict) else {}
+    normalize_legacy(graph)
     return graph
 
 

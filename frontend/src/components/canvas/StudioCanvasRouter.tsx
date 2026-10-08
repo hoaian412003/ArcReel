@@ -11,7 +11,7 @@ import {
   WORKSPACE_ROUTE_PRODUCTS,
   WORKSPACE_ROUTE_FLOW,
   WORKSPACE_ROUTE_REVIEWS,
-  WORKSPACE_ROUTE_NODE_CANVAS,
+  projectCanvasPath,
   WORKSPACE_ROUTE_EPISODES,
   WORKSPACE_ROUTE_EPISODE_EDIT,
 } from "@/app-routes";
@@ -26,7 +26,6 @@ import { useActiveResourceIds } from "@/stores/tasks-store";
 import { TimelineCanvas } from "./timeline/TimelineCanvas";
 import { OverviewCanvas } from "./OverviewCanvas";
 import { ReviewInbox } from "./reviews/ReviewInbox";
-import { NodeCanvasPage } from "./node-canvas/NodeCanvasPage";
 import { SourceFileViewer } from "./SourceFileViewer";
 import { SourceFilesPage } from "./SourceFilesPage";
 import { CharactersPage } from "./lorebook/CharactersPage";
@@ -501,10 +500,6 @@ export function StudioCanvasRouter() {
         <Redirect to={`/${WORKSPACE_ROUTE_REVIEWS}`} />
       </Route>
 
-      <Route path={`/${WORKSPACE_ROUTE_NODE_CANVAS}`}>
-        {demoMode ? <Redirect to="/" /> : <NodeCanvasPage key={currentProjectName} projectName={currentProjectName} />}
-      </Route>
-
       <Route path={`/${WORKSPACE_ROUTE_REVIEWS}`}>
         {demoMode ? <Redirect to="/" /> : <ReviewInbox key={currentProjectName} projectName={currentProjectName} />}
       </Route>
@@ -535,7 +530,7 @@ export function StudioCanvasRouter() {
             onAddCharacter={noopAsync}
           />
         ) : (
-          <Redirect to={`/${WORKSPACE_ROUTE_NODE_CANVAS}`} />
+          <Redirect to={`~${projectCanvasPath(currentProjectName, "characters")}`} />
         )}
       </Route>
 

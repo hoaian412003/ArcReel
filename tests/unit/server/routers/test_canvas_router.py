@@ -79,7 +79,7 @@ def test_invalid_connection_is_unprocessable(env):
     gen = _node(client, "image_generate")
     res = client.post(
         "/api/v1/projects/demo/canvas/edges",
-        json={"source": text["id"], "source_handle": "text", "target": gen["id"], "target_handle": "refs"},
+        json={"source": text["id"], "source_handle": "text", "target": gen["id"], "target_handle": "image1"},
     )
     assert res.status_code == 422
 
@@ -114,7 +114,7 @@ def test_run_freezes_inputs_creates_outputs_and_enqueues(env):
         "node"
     ]
     gen = _node(client, "image_generate", aspect_ratio="16:9")
-    for src, handle, target_handle in ((text, "text", "prompt"), (ref, "image", "refs")):
+    for src, handle, target_handle in ((text, "text", "prompt"), (ref, "image", "image1")):
         client.post(
             "/api/v1/projects/demo/canvas/edges",
             json={"source": src["id"], "source_handle": handle, "target": gen["id"], "target_handle": target_handle},
@@ -133,7 +133,6 @@ def test_run_freezes_inputs_creates_outputs_and_enqueues(env):
     graph = client.get("/api/v1/projects/demo/canvas").json()
     by_id = {n["id"]: n for n in graph["nodes"]}
     assert by_id[body["image_node_id"]]["data"]["status"] == "queued"
-    assert by_id[body["text_node_id"]]["data"]["text"] == "a red fox"
     assert by_id[gen["id"]]["data"]["status"] == "queued"
     # 运行中的节点不能重复运行，也不能删除。
     assert client.post(f"/api/v1/projects/demo/canvas/nodes/{gen['id']}/run").status_code == 409
@@ -255,7 +254,7 @@ def test_branch_endpoint_returns_the_plan(env):
     second = _node(client, "image_generate")
     for src, handle, target, th in (
         (text, "text", first, "prompt"),
-        (first, "image", second, "refs"),
+        (first, "image", second, "image1"),
         (text, "text", second, "prompt"),
     ):
         client.post(
@@ -285,4 +284,4 @@ def test_video_and_audio_runs_enqueue_their_own_task_types(env):
     assert (voice_call["task_type"], voice_call["media_type"]) == ("canvas_audio", "audio")
     assert voice_call["payload"]["voice"] == "Ethan"
     types = sorted(n["type"] for n in client.get("/api/v1/projects/demo/canvas").json()["nodes"])
-    assert types == ["audio", "audio_generate", "text", "text", "text", "video", "video_generate"]
+    assert types == ["audio", "audio_generate", "text", "video", "video_generate"]

@@ -295,10 +295,11 @@ async def canvas_use_template(
 
 _HANDLES_NOTE = (
     "句柄（只有同数据类型的句柄能连）：text 节点输出 text；image 节点输出 image；"
-    "image_generate 输入 prompt(text)、refs(image)，输出 text、image；h3_writer 输入 units(unit)，输出 h3；"
-    "image_generate 的输出句柄 image 也可直接连到另一个 image_generate 的 refs，或连到 video_generate 的 frame（起始帧）：运行时取它最近一次产出的图。"
-    "video_generate 输入 prompt(text)、frame(image)，输出 text、video；audio_generate 输入 text(text)，输出 text、audio。"
-    "角色节点 p:character:<角色名> 输出 image（角色资产图，无资产图时连了也不提供参考图）。"
+    "image_generate 输入 prompt(text)、image1(image)，输出 image（一张图）；h3_writer 输入 units(unit)，输出 h3；"
+    "image_generate 的输出句柄 image 也可直接连到另一个 image_generate 的 image1，或连到 video_generate 的 frame（起始帧）：运行时取它最近一次产出的图。"
+    "video_generate 输入 prompt(text)、frame(image)，输出 video；audio_generate 输入 text(text)，输出 audio。"
+    "每个角色是一个分组 p:character:<角色名>，组内是只读的 描述文本 p:char_text:<名> + 参考图 p:char_ref:<名> → 图片供应商 "
+    "p:char_gen:<名> → 资产图 p:char_sheet:<名>；资产图节点输出 image，可连到别处的 image1。"
     "视频单元节点 p:unit:<集>:<单元> 输出 unit、text；起始帧联合图节点 p:keyframe:<集>:<联合图> 输出 image。"
 )
 
@@ -377,8 +378,8 @@ CANVAS_SET_EPISODES = ToolDeclaration(
 CANVAS_RUN_NODE = ToolDeclaration(
     name="canvas_run_node",
     description=(
-        "运行一个节点并立即返回任务 id（不等结果）：image_generate / video_generate / audio_generate 读入连进来的文本（与参考图 / 起始帧），挂出「使用的文本」与图片 / 视频 / 语音两个输出节点；"
-        "h3_writer 为它所连的视频单元重写 H3 提示词（单元正文原样保留）；p:keyframe 节点生成这张起始帧联合图；p:character 节点生成角色资产图（要求角色已有描述）。"
+        "运行一个节点并立即返回任务 id（不等结果）：image_generate / video_generate / audio_generate 读入连进来的文本（与参考图 / 起始帧），挂出一个图片 / 视频 / 语音输出节点；"
+        "h3_writer 为它所连的视频单元重写 H3 提示词（单元正文原样保留）；p:keyframe 节点生成这张起始帧联合图；p:char_gen / p:character 生成该角色的资产图（要求角色已有描述；描述与参考图在项目里改，不在画布上改）。"
         "结果出现在画布上，用 get_canvas 查看进度。"
     ),
     request_model=CanvasNodeRequest,

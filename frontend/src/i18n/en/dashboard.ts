@@ -2881,4 +2881,11 @@ export default {
   'node_canvas_character_missing': 'This character no longer exists',
   'node_canvas_add_character': 'Add character',
   'node_canvas_import_characters': 'From library',
+  'node_canvas_handle_image1': 'image1',
+  'node_canvas_character_prompt': 'Prompt',
+  'node_canvas_character_reference': 'Reference image',
+  'node_canvas_character_sheet': 'Character sheet',
+  'node_canvas_character_reference_upload': 'Upload reference',
+  'node_canvas_character_reference_replace': 'Replace reference',
+  'node_canvas_character_generate_hint': 'Writes the character sheet from the prompt and the optional reference image.',
 };

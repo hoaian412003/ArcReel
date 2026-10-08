@@ -72,7 +72,7 @@ function toFlowNodes(
     }
     signatures.set(node.id, signature);
     const derived = node.derived === true;
-    const group = node.type === "episode";
+    const group = node.type === "episode" || node.type === "character";
     const flowNode: CanvasFlowNode = {
       id: node.id,
       type: node.type,
@@ -82,7 +82,7 @@ function toFlowNodes(
       ...(node.parentId ? { parentId: node.parentId } : {}),
       ...(group ? { style: { width: node.width, height: node.height }, zIndex: -1 } : {}),
       // 项目推导的节点只读：不能删，也不能单独拖离集分组（拖动整个分组）。
-      draggable: !derived || group || node.type === "character",
+      draggable: !derived || group,
       deletable: !derived,
     };
     return flowNode;
@@ -142,7 +142,6 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const agentPending = useClaudeStore((s) => s.pending[projectName] ?? false);
   const askAgent = useClaudeStore((s) => s.ask);
   const characters = useProjectsStore((s) => s.currentProjectData?.characters);
-  const voiceBinding = useProjectsStore((s) => s.currentProjectData?.character_voice_binding);
   const characterAssets = useCharacterAssets(projectName);
   const [addingCharacter, setAddingCharacter] = useState(false);
   const [pickingCharacter, setPickingCharacter] = useState(false);
@@ -236,13 +235,13 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const busyNodeIds = useMemo(() => new Set(activeTaskIds.map((taskId) => tracked[taskId])), [activeTaskIds, tracked]);
 
   const characterContext = useMemo<CharacterNodeContext>(
-    () => ({ characters: characters ?? {}, assets: characterAssets, voiceBinding }),
-    [characters, characterAssets, voiceBinding],
+    () => ({ characters: characters ?? {}, assets: characterAssets }),
+    [characters, characterAssets],
   );
 
   // 角色的增删与资产图变化（生成完成、版本恢复）发生在项目数据里，画布上对应的角色节点要跟着重读。
   const characterSignature = useMemo(
-    () => Object.entries(characters ?? {}).map(([name, c]) => `${name}:${c.character_sheet ?? ""}`).join("|"),
+    () => Object.entries(characters ?? {}).map(([name, c]) => `${name}:${c.character_sheet ?? ""}:${c.reference_image ?? ""}:${c.description ?? ""}`).join("|"),
     [characters],
   );
   const previousSignature = useRef(characterSignature);
@@ -503,7 +502,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} />
           <Controls showInteractive={false} />
-          <MiniMap pannable zoomable className="!bg-bg-grad-a/80" />
+          <MiniMap pannable zoomable position="top-right" className="!bg-bg-grad-a/80" />
         </ReactFlow>
 
         <div className="pointer-events-none absolute left-4 top-4 flex flex-wrap items-center gap-2">

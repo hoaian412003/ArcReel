@@ -11,6 +11,7 @@ from typing import Any
 
 from lib.canvas.graph import (
     BUSY_STATUSES,
+    KIND_CHAR_GEN,
     KIND_CHARACTER,
     KIND_KEYFRAME,
     NODE_AUDIO_GENERATE,
@@ -232,7 +233,7 @@ class CanvasService:
     async def run(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
         """运行一个节点，立即返回入队结果。图片供应商 / H3 写作 / 起始帧联合图三类节点可运行。"""
         kind = derived_kind(node_id)
-        if kind == KIND_CHARACTER:
+        if kind in (KIND_CHARACTER, KIND_CHAR_GEN):
             return await self._run_character(project_name, node_id, user_id=user_id, source=source)
         if kind == KIND_KEYFRAME:
             return await self._run_keyframe(project_name, node_id, user_id=user_id, source=source)
@@ -250,7 +251,7 @@ class CanvasService:
     async def _run_provider(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
         frozen: dict[str, Any] = {}
 
-        def _prepare(graph: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        def _prepare(graph: dict[str, Any]) -> dict[str, Any]:
             node = find_node(graph, node_id)
             if node["data"].get("status") in BUSY_STATUSES:
                 raise CanvasGraphError("canvas_node_busy", id=node_id)
@@ -268,11 +269,11 @@ class CanvasService:
                 options=_task_options(node, {"reference_labels": labels}),
                 task_type=_PROVIDER_TASKS[node["type"]],
             )
-            text_node, media_node = add_run_outputs(graph, node_id, prompt)
+            media_node = add_run_outputs(graph, node_id, prompt)
             node["data"].update(status=STATUS_QUEUED, error=None)
-            return text_node, media_node
+            return media_node
 
-        (text_node, media_node), _ = await self.mutate(project_name, _prepare)
+        media_node, _ = await self.mutate(project_name, _prepare)
         task_type, media_type = frozen["task_type"]
         spec = TaskSpec.from_request(
             task_type=task_type,
@@ -298,9 +299,9 @@ class CanvasService:
         except BaseException:
 
             def _rollback(graph: dict[str, Any]) -> None:
-                for created in (media_node["id"], text_node["id"]):
-                    graph["nodes"] = [n for n in graph["nodes"] if n["id"] != created]
-                    graph["edges"] = [e for e in graph["edges"] if created not in (e["source"], e["target"])]
+                created = media_node["id"]
+                graph["nodes"] = [n for n in graph["nodes"] if n["id"] != created]
+                graph["edges"] = [e for e in graph["edges"] if created not in (e["source"], e["target"])]
                 find_node(graph, node_id)["data"].update(status=STATUS_FAILED)
 
             await asyncio.shield(self.mutate(project_name, _rollback))
@@ -315,7 +316,6 @@ class CanvasService:
             "success": True,
             "task_id": result["task_id"],
             "task_ids": [result["task_id"]],
-            "text_node_id": text_node["id"],
             "image_node_id": media_node["id"],
             "media_node_id": media_node["id"],
         }

@@ -2879,4 +2879,11 @@ export default {
   'node_canvas_character_missing': 'Nhân vật này không còn tồn tại',
   'node_canvas_add_character': 'Thêm nhân vật',
   'node_canvas_import_characters': 'Từ thư viện',
+  'node_canvas_handle_image1': 'image1',
+  'node_canvas_character_prompt': 'Prompt',
+  'node_canvas_character_reference': 'Ảnh tham chiếu',
+  'node_canvas_character_sheet': 'Ảnh sheet nhân vật',
+  'node_canvas_character_reference_upload': 'Tải ảnh tham chiếu',
+  'node_canvas_character_reference_replace': 'Đổi ảnh tham chiếu',
+  'node_canvas_character_generate_hint': 'Tạo ảnh sheet nhân vật từ prompt và ảnh tham chiếu (nếu có).',
 } satisfies Record<keyof typeof enDashboard, string>;

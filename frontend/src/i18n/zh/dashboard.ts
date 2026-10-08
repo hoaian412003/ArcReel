@@ -2880,4 +2880,11 @@ export default {
   'node_canvas_character_missing': '这个角色已不存在',
   'node_canvas_add_character': '新增角色',
   'node_canvas_import_characters': '从资产库导入',
+  'node_canvas_handle_image1': 'image1',
+  'node_canvas_character_prompt': '提示词',
+  'node_canvas_character_reference': '参考图',
+  'node_canvas_character_sheet': '角色资产图',
+  'node_canvas_character_reference_upload': '上传参考图',
+  'node_canvas_character_reference_replace': '替换参考图',
+  'node_canvas_character_generate_hint': '按提示词和可选的参考图生成角色资产图。',
 } satisfies Record<keyof typeof enDashboard, string>;

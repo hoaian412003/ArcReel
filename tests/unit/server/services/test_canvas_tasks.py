@@ -44,7 +44,7 @@ def seeded(monkeypatch, tmp_path):
 
     def _seed(graph):
         gen = add_node(graph, make_node("image_generate", {"x": 0, "y": 0}))
-        _, image = add_run_outputs(graph, gen["id"], "a fox")
+        image = add_run_outputs(graph, gen["id"], "a fox")
         ids.update(gen=gen["id"], image=image["id"])
 
     mutate_canvas(pm, tmp_path, _seed)

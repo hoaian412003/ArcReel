@@ -35,8 +35,10 @@ export interface CanvasNodeData {
   /** 读时算出：这张图的输入已不同于生成它时的输入。 */
   stale?: boolean;
   /** 派生节点：episode / unit / keyframe / h3_prompt / character。 */
-  /** character 节点：角色名（角色卡的内容取自项目数据）。 */
+  /** 角色分组及其子节点：角色名（内容取自项目里的角色条目）。 */
   name?: string;
+  /** 角色分组里的图片节点：reference 参考图（可上传）/ sheet 资产图。 */
+  role?: "reference" | "sheet";
   episode?: number;
   title?: string;
   unit_count?: number;

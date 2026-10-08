@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import type { CharacterAssets } from "@/components/canvas/lorebook/useCharacterAssets";
-import type { Character, CharacterVoiceBinding } from "@/types";
+import type { Character } from "@/types";
 
 export interface ImageModelChoices {
   /** `供应商/模型` 候选。 */
@@ -44,11 +44,10 @@ export function useBusyNodeIds(): ReadonlySet<string> {
   return useContext(CanvasBusyContext);
 }
 
-/** 角色节点渲染角色卡所需的项目数据与写操作；由画布页提供，与演示项目的角色页共用 {@link CharacterAssets}。 */
+/** 角色分组里的节点（描述文本、参考图、图片供应商、资产图）所需的项目数据与写操作；由画布页提供，与演示项目的角色页共用 {@link CharacterAssets}。 */
 export interface CharacterNodeContext {
   characters: Record<string, Character>;
   assets: CharacterAssets;
-  voiceBinding?: CharacterVoiceBinding;
 }
 
 export const CharacterNodeContextValue = createContext<CharacterNodeContext | null>(null);

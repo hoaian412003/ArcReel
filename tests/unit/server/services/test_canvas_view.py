@@ -110,32 +110,48 @@ CHARACTER_PROJECT = {
 }
 
 
-def test_every_project_gets_character_nodes_with_their_sheet_as_the_image_output(patched):
+def test_every_project_gets_a_group_per_character_with_text_reference_generator_and_sheet(patched):
     (patched.root / "characters").mkdir()
     (patched.root / "characters" / "阿离.png").write_bytes(b"png")
 
     nodes, edges = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, [], {})
 
     by_id = {n["id"]: n for n in nodes}
-    hero = by_id[derived_id("character", "阿离")]
-    assert hero["type"] == "character"
-    assert hero["derived"] is True
-    assert (hero["data"]["name"], hero["data"]["path"]) == ("阿离", "characters/阿离.png")
-    assert hero["data"]["version"] is not None
-    # 还没有资产图的角色也有节点（用来生成），只是没有可连的路径。
-    assert by_id[derived_id("character", "阿宁")]["data"]["path"] is None
-    assert edges == []
+    group = by_id[derived_id("character", "阿离")]
+    assert (group["type"], group["derived"], group["data"]["name"]) == ("character", True, "阿离")
+    parts = {kind: by_id[derived_id(kind, "阿离")] for kind in ("char_text", "char_ref", "char_gen", "char_sheet")}
+    assert {k: v["type"] for k, v in parts.items()} == {
+        "char_text": "text",
+        "char_ref": "image",
+        "char_gen": "image_generate",
+        "char_sheet": "image",
+    }
+    assert all(p["parentId"] == group["id"] for p in parts.values())
+    assert parts["char_text"]["data"]["text"] == "少女"
+    assert parts["char_sheet"]["data"]["path"] == "characters/阿离.png"
+    assert parts["char_sheet"]["data"]["version"] is not None
+    assert parts["char_sheet"]["data"]["label"] == "阿离"
+    # 还没有资产图 / 参考图的角色也有完整分组（用来生成与上传）。
+    assert by_id[derived_id("char_sheet", "阿宁")]["data"]["path"] is None
+    assert by_id[derived_id("char_ref", "阿宁")]["data"]["path"] is None
+    inner = {(e["source"], e["sourceHandle"], e["target"], e["targetHandle"]) for e in edges}
+    assert (parts["char_text"]["id"], "text", parts["char_gen"]["id"], "prompt") in inner
+    assert (parts["char_ref"]["id"], "image", parts["char_gen"]["id"], "image1") in inner
+    assert (parts["char_gen"]["id"], "image", parts["char_sheet"]["id"], "in") in inner
+    assert all(e["virtual"] for e in edges)
 
 
-def test_character_positions_use_overrides_and_default_to_a_grid_left_of_the_episodes(patched):
+def test_character_groups_stack_on_the_left_and_use_overrides(patched):
     placed = {derived_id("character", "阿宁"): {"x": 12, "y": 34}}
     nodes, _ = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, [], placed)
-    by_name = {n["data"]["name"]: n for n in nodes}
-    assert by_name["阿宁"]["position"] == {"x": 12.0, "y": 34.0}
-    assert by_name["阿离"]["position"]["x"] < 0
+    groups = {n["data"]["name"]: n for n in nodes if n["type"] == "character"}
+    assert groups["阿宁"]["position"] == {"x": 12.0, "y": 34.0}
+    assert groups["阿离"]["position"]["x"] < 0
+    child = next(n for n in nodes if n["id"] == derived_id("char_sheet", "阿宁"))
+    assert child["abs"]["x"] == 12.0 + child["position"]["x"]
 
 
 def test_characters_sit_alongside_episode_groups_in_reference_projects(patched):
     project = {**PROJECT, "characters": {"阿离": {"character_sheet": ""}}}
     nodes, _ = canvas_view.build_project_view(patched, "demo", project, [1], {}, h3_status=_status)
-    assert {n["type"] for n in nodes} >= {"character", "episode", "unit"}
+    assert {n["type"] for n in nodes} >= {"character", "episode", "unit", "image_generate"}

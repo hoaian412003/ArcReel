@@ -15,10 +15,6 @@ vi.mock("./OverviewCanvas", () => ({
   OverviewCanvas: () => <div data-testid="overview-canvas">Overview</div>,
 }));
 
-vi.mock("./node-canvas/NodeCanvasPage", () => ({
-  NodeCanvasPage: ({ projectName }: { projectName: string }) => <div data-testid="node-canvas">{projectName}</div>,
-}));
-
 vi.mock("./SourceFileViewer", () => ({
   SourceFileViewer: ({ filename }: { filename: string }) => (
     <div data-testid="source-file-viewer">{filename}</div>
@@ -460,12 +456,6 @@ describe("StudioCanvasRouter", () => {
       },
     });
 
-    const viewCharacters = renderAt("/characters");
-    // 角色并入了创作画布：真实项目的 /characters 跳到画布。
-    expect(screen.getByTestId("node-canvas")).toHaveTextContent("demo");
-    expect(screen.queryByTestId("character-card")).not.toBeInTheDocument();
-    viewCharacters.unmount();
-
     const viewScenes = renderAt("/scenes");
     expect(screen.getByTestId("scene-card")).toHaveAttribute("data-name", "Temple");
     viewScenes.unmount();
@@ -577,6 +567,24 @@ describe("StudioCanvasRouter", () => {
     view.navigate("/real-project/episodes/1");
 
     expect(capabilitiesSpy).not.toHaveBeenCalledWith(DEMO_PROJECT_NAME, expect.anything());
+  });
+
+  it("sends the characters route of a real project to the standalone canvas page", () => {
+    useProjectsStore.setState({
+      currentProjectName: "demo",
+      currentProjectData: makeProjectData(),
+      currentScripts: {},
+    });
+    const { hook, history } = memoryLocation({ path: "/characters", record: true });
+
+    render(
+      <Router hook={hook}>
+        <StudioCanvasRouter />
+      </Router>,
+    );
+
+    expect(history?.at(-1)).toBe("/app/projects/demo/canvas?focus=characters");
+    expect(screen.queryByTestId("character-card")).not.toBeInTheDocument();
   });
 
   it("keeps the read-only characters page for the onboarding demo project", () => {

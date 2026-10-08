@@ -2,7 +2,7 @@ import type { CanvasAnyNodeType, CanvasHandleType, CanvasNode, CanvasNodeStatus 
 
 /** 句柄的数据类型表，与后端 `lib/canvas/graph.py` 的 INPUT_HANDLES / OUTPUT_HANDLES 一致。 */
 const INPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHandleType>>> = {
-  image_generate: { prompt: "text", refs: "image" },
+  image_generate: { prompt: "text", image1: "image" },
   h3_writer: { units: "unit" },
   video_generate: { prompt: "text", frame: "image" },
   audio_generate: { text: "text" },
@@ -10,15 +10,14 @@ const INPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHand
 const OUTPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHandleType>>> = {
   text: { text: "text" },
   image: { image: "image" },
-  image_generate: { text: "text", image: "image" },
+  image_generate: { image: "image" },
   h3_writer: { h3: "h3" },
   video: { video: "video" },
   audio: { audio: "audio" },
-  video_generate: { text: "text", video: "video" },
-  audio_generate: { text: "text", audio: "audio" },
+  video_generate: { video: "video" },
+  audio_generate: { audio: "audio" },
   unit: { unit: "unit", text: "text" },
   keyframe: { image: "image" },
-  character: { image: "image" },
 };
 
 /** 自动挂出 / 推导出的节点上，只承接来源连线的被动输入句柄。 */

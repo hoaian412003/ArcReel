@@ -1,12 +1,11 @@
 import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Clapperboard, Film, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Sparkles, Type, User, Video, X } from "lucide-react";
+import { AlertTriangle, Clapperboard, Film, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Sparkles, Type, Upload, User, Video, X } from "lucide-react";
 import { API } from "@/api";
 import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/types/canvas";
-import { ACCENT_BTN_SM_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
+import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
-import { CharacterCard } from "@/components/canvas/lorebook/CharacterCard";
 import { useBusyNodeIds, useCanvasActions, useCharacterNodeContext } from "./canvas-context";
 import { ASPECT_RATIOS, PASSIVE_INPUT_HANDLE, isBusy } from "./canvas-rules";
 
@@ -89,9 +88,16 @@ function HandleLabel({ side, children }: { side: "left" | "right"; children: Rea
   );
 }
 
+/** 角色分组里的节点（id 形如 `p:char_*:<角色名>`）：内容取自项目，写操作走角色接口，不能删。 */
+function isCharacterPart(id: string): boolean {
+  return id.startsWith("p:char_");
+}
+
 function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { setText, remove } = useCanvasActions();
+  const characters = useCharacterNodeContext();
+  const bound = isCharacterPart(id);
   const [draft, setDraft] = useState(data.text ?? "");
   const dirty = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -109,7 +115,8 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     dirty.current = false;
-    void setText(id, value);
+    if (bound) void characters?.assets.saveDescription(data.name ?? "", value);
+    else void setText(id, value);
   };
 
   return (
@@ -117,8 +124,14 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
       selected={selected}
       width={280}
       icon={<Type className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={data.generated ? t("node_canvas_text_generated") : (data.label ?? t("node_canvas_text_label"))}
-      onRemove={() => void remove(id)}
+      title={
+        bound
+          ? t("node_canvas_character_prompt")
+          : data.generated
+            ? t("node_canvas_text_generated")
+            : (data.label ?? t("node_canvas_text_label"))
+      }
+      onRemove={bound ? undefined : () => void remove(id)}
     >
       <textarea
         className={`nodrag nowheel ${INPUT_CLS} min-h-[96px] resize-y`}
@@ -146,15 +159,25 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
 function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { projectName, remove } = useCanvasActions();
-  const busy = isBusy(data.status);
+  const characters = useCharacterNodeContext();
+  const bound = isCharacterPart(id);
+  const uploadInput = useRef<HTMLInputElement>(null);
+  // 角色资产图在生成队列里时，资产图节点显示占位。
+  const busy = isBusy(data.status) || (data.role === "sheet" && Boolean(characters?.assets.generating.has(data.name ?? "")));
   const failed = data.status === "failed";
   return (
     <NodeShell
       selected={selected}
       width={240}
       icon={<ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={data.label ?? t("node_canvas_image_label")}
-      onRemove={busy ? undefined : () => void remove(id)}
+      title={
+        data.role === "reference"
+          ? t("node_canvas_character_reference")
+          : data.role === "sheet"
+            ? t("node_canvas_character_sheet")
+            : (data.label ?? t("node_canvas_image_label"))
+      }
+      onRemove={bound || busy ? undefined : () => void remove(id)}
     >
       {data.stale ? (
         <p className="mb-2 flex items-center gap-1.5 rounded-[6px] bg-amber-400/10 px-2 py-1 text-[10.5px] text-amber-300">
@@ -187,7 +210,30 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
           <span className="text-[12px] text-text-4">{t("node_canvas_image_empty")}</span>
         )}
       </div>
-      {data.generated ? (
+      {data.role === "reference" ? (
+        <>
+          <input
+            ref={uploadInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void characters?.assets.uploadReference(data.name ?? "", file);
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className={`nodrag mt-2 w-full justify-center ${GHOST_BTN_CLS}`}
+            onClick={() => uploadInput.current?.click()}
+          >
+            <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+            {data.path ? t("node_canvas_character_reference_replace") : t("node_canvas_character_reference_upload")}
+          </button>
+        </>
+      ) : null}
+      {data.generated || data.role === "sheet" ? (
         <Handle type="target" position={Position.Left} id={PASSIVE_INPUT_HANDLE} isConnectable={false} style={handleStyle("image", false)} />
       ) : null}
       <Handle type="source" position={Position.Right} id="image" style={handleStyle("image")} />
@@ -195,59 +241,76 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   );
 }
 
+/**
+ * 图片供应商节点（仿 RunningHub 工作流节点）：输入 image1（参考图）与 prompt，输出一张图。
+ * 角色分组里的那一个绑定项目里的角色：运行即生成该角色的资产图，不暴露模型 / 画幅。
+ */
 function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { setAspectRatio, setModel, imageModels, run, remove } = useCanvasActions();
-  const busy = isBusy(data.status);
+  const characters = useCharacterNodeContext();
+  const bound = isCharacterPart(id);
+  const busy = bound ? Boolean(characters?.assets.generating.has(data.name ?? "")) : isBusy(data.status);
   return (
     <NodeShell
       selected={selected}
       width={280}
       icon={<Sparkles className="h-3.5 w-3.5" aria-hidden="true" />}
       title={t("node_canvas_generate_label")}
-      onRemove={busy ? undefined : () => void remove(id)}
+      onRemove={bound || busy ? undefined : () => void remove(id)}
     >
       <div className="relative -mx-3 mb-2 h-6">
-        <Handle type="target" position={Position.Left} id="prompt" style={handleStyle("text")} />
-        <HandleLabel side="left">{t("node_canvas_handle_prompt")}</HandleLabel>
-        <Handle type="source" position={Position.Right} id="text" style={handleStyle("text")} />
-        <HandleLabel side="right">{t("node_canvas_handle_text")}</HandleLabel>
-      </div>
-      <div className="relative -mx-3 mb-3 h-6">
-        <Handle type="target" position={Position.Left} id="refs" style={handleStyle("image")} />
-        <HandleLabel side="left">{t("node_canvas_handle_refs")}</HandleLabel>
+        <Handle type="target" position={Position.Left} id="image1" style={handleStyle("image")} />
+        <HandleLabel side="left">{t("node_canvas_handle_image1")}</HandleLabel>
         <Handle type="source" position={Position.Right} id="image" style={handleStyle("image")} />
         <HandleLabel side="right">{t("node_canvas_handle_image")}</HandleLabel>
       </div>
-      <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t("node_canvas_refs_hint")}</p>
-      <div className="nodrag mb-2">
-        <ProviderModelSelect
-          value={data.model ?? ""}
-          options={imageModels.options}
-          providerNames={imageModels.providerNames}
-          modelNames={imageModels.modelNames}
-          onChange={(value) => void setModel(id, value)}
-          allowDefault
-          defaultLabel={t("node_canvas_model_default")}
-          aria-label={t("node_canvas_model_label")}
-        />
+      <div className="relative -mx-3 mb-3 h-6">
+        <Handle type="target" position={Position.Left} id="prompt" style={handleStyle("text")} />
+        <HandleLabel side="left">{t("node_canvas_handle_prompt")}</HandleLabel>
       </div>
-      <label className="mb-3 flex items-center justify-between gap-2 text-[11.5px] text-text-3">
-        {t("node_canvas_aspect_ratio")}
-        <select
-          className={`nodrag ${INPUT_CLS} !w-auto !py-1`}
-          value={data.aspect_ratio ?? "9:16"}
-          disabled={busy}
-          onChange={(e) => void setAspectRatio(id, e.target.value)}
-        >
-          {ASPECT_RATIOS.map((ratio) => (
-            <option key={ratio} value={ratio}>
-              {ratio}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button type="button" className={`nodrag w-full justify-center ${ACCENT_BTN_SM_CLS}`} disabled={busy} onClick={() => void run(id)}>
+      {bound ? (
+        <p className="mb-3 text-[10.5px] leading-snug text-text-4">{t("node_canvas_character_generate_hint")}</p>
+      ) : (
+        <>
+          <div className="nodrag mb-2">
+            <ProviderModelSelect
+              value={data.model ?? ""}
+              options={imageModels.options}
+              providerNames={imageModels.providerNames}
+              modelNames={imageModels.modelNames}
+              onChange={(value) => void setModel(id, value)}
+              allowDefault
+              defaultLabel={t("node_canvas_model_default")}
+              aria-label={t("node_canvas_model_label")}
+            />
+          </div>
+          <label className="mb-3 flex items-center justify-between gap-2 text-[11.5px] text-text-3">
+            {t("node_canvas_aspect_ratio")}
+            <select
+              className={`nodrag ${INPUT_CLS} !w-auto !py-1`}
+              value={data.aspect_ratio ?? "9:16"}
+              disabled={busy}
+              onChange={(e) => void setAspectRatio(id, e.target.value)}
+            >
+              {ASPECT_RATIOS.map((ratio) => (
+                <option key={ratio} value={ratio}>
+                  {ratio}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
+      <button
+        type="button"
+        className={`nodrag w-full justify-center ${ACCENT_BTN_SM_CLS}`}
+        disabled={busy}
+        onClick={() => {
+          if (bound) characters?.assets.generate(data.name ?? "");
+          else void run(id);
+        }}
+      >
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
         {busy ? t("node_canvas_running") : t("node_canvas_run")}
       </button>
@@ -409,39 +472,16 @@ function H3WriterNodeView({ id, selected }: NodeProps<CanvasFlowNode>) {
   );
 }
 
-function CharacterNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
-  const { t } = useTranslation("dashboard");
-  const { projectName } = useCanvasActions();
-  const context = useCharacterNodeContext();
-  const name = data.name ?? "";
-  const character = context?.characters[name];
+function CharacterGroupView({ data, selected }: NodeProps<CanvasFlowNode>) {
   return (
-    <NodeShell
-      selected={selected}
-      width={344}
-      icon={<User className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={name}
+    <div
+      className={`h-full w-full rounded-[16px] border border-dashed bg-white/[0.02] ${selected ? "border-accent/60" : "border-hairline-strong"}`}
     >
-      {context && character ? (
-        // 角色卡自己管输入、上传与按钮：整块不参与拖动 / 滚轮缩放，节点靠标题栏拖动。
-        <div className="nodrag nowheel">
-          <CharacterCard
-            name={name}
-            character={character}
-            projectName={projectName}
-            onSave={context.assets.save}
-            onGenerate={context.assets.generate}
-            onRestoreVersion={context.assets.refresh}
-            onReload={context.assets.refresh}
-            generating={context.assets.generating.has(name)}
-            voiceBinding={context.voiceBinding}
-          />
-        </div>
-      ) : (
-        <p className="text-[12px] text-text-4">{t("node_canvas_character_missing")}</p>
-      )}
-      <Handle type="source" position={Position.Right} id="image" style={handleStyle("image")} />
-    </NodeShell>
+      <div className="flex items-center gap-2 px-4 py-3 text-[13px] font-medium text-text-2">
+        <User className="h-3.5 w-3.5" aria-hidden="true" />
+        <span className="truncate">{data.name}</span>
+      </div>
+    </div>
   );
 }
 
@@ -552,8 +592,6 @@ function VideoGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
       <div className="relative -mx-3 mb-2 h-6">
         <Handle type="target" position={Position.Left} id="prompt" style={handleStyle("text")} />
         <HandleLabel side="left">{t("node_canvas_handle_prompt")}</HandleLabel>
-        <Handle type="source" position={Position.Right} id="text" style={handleStyle("text")} />
-        <HandleLabel side="right">{t("node_canvas_handle_text")}</HandleLabel>
       </div>
       <div className="relative -mx-3 mb-3 h-6">
         <Handle type="target" position={Position.Left} id="frame" style={handleStyle("image")} />
@@ -634,7 +672,7 @@ function AudioGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
 }
 
 export const canvasNodeTypes = {
-  character: memo(CharacterNodeView),
+  character: memo(CharacterGroupView),
   video: memo(VideoNodeView),
   audio: memo(AudioNodeView),
   video_generate: memo(VideoGenerateNodeView),
