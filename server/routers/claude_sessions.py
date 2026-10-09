@@ -268,6 +268,27 @@ async def list_claude_events(
     return {"events": events}
 
 
+@router.get("/projects/{project_name}/claude/sessions/{session_id}/events/earlier")
+async def list_earlier_claude_events(
+    project_name: str,
+    session_id: str,
+    request: Request,
+    user: CurrentUser,
+    before_seq: int = Query(ge=1),
+    turns: int = Query(default=10, ge=1, le=50),
+) -> dict:
+    try:
+        return await get_claude_service(request).earlier_events(
+            session_id,
+            before_seq=before_seq,
+            turns=turns,
+            project_name=project_name,
+            user_id=user.id,
+        )
+    except FileNotFoundError as exc:
+        raise NotFoundError("claude_session_not_found") from exc
+
+
 @router.get("/projects/{project_name}/claude/sessions/{session_id}/turns")
 async def list_claude_turns(
     project_name: str,
@@ -295,6 +316,7 @@ async def stream_claude_events(
     request: Request,
     user: CurrentUser,
     after_seq: int | None = Query(default=None, ge=0),
+    tail_turns: int | None = Query(default=None, ge=1, le=50),
 ) -> AsyncIterator[ServerSentEvent]:
     service = get_claude_service(request)
     header_cursor = request.headers.get("last-event-id", "")
@@ -303,6 +325,10 @@ async def stream_claude_events(
     except ValueError:
         resumed_after = after_seq or 0
     try:
+        if tail_turns is not None and resumed_after == 0:
+            resumed_after = await service.tail_cursor(
+                session_id, turns=tail_turns, project_name=project_name, user_id=user.id
+            )
         async with service.stream_events(
             session_id,
             project_name=project_name,
@@ -360,3 +386,19 @@ async def resolve_claude_permission(
     except (FileNotFoundError, PermissionRequestNotFoundError) as exc:
         raise NotFoundError("claude_permission_not_found") from exc
     return {"resolved": True, "allowed": body.allow}
+
+
+@router.get("/projects/{project_name}/claude/snapshots")
+async def list_claude_snapshots(project_name: str, request: Request, user: CurrentUser) -> dict:
+    try:
+        return {"snapshots": await get_claude_service(request).list_snapshots(project_name)}
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
+
+
+@router.post("/projects/{project_name}/claude/snapshots/{snapshot_id}/restore")
+async def restore_claude_snapshot(project_name: str, snapshot_id: str, request: Request, user: CurrentUser) -> dict:
+    try:
+        return {"restored": await get_claude_service(request).restore_snapshot(project_name, snapshot_id)}
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc

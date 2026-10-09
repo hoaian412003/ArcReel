@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -22,6 +22,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAppStore } from "@/stores/app-store";
 import { errMsg } from "@/utils/async";
 import { useClaudeStore } from "@/stores/claude-store";
+import { useCanvasContextStore } from "@/stores/canvas-context-store";
 import { ClaudeAgentSettings } from "./ClaudeAgentSettings";
 import {
   activitySummary,
@@ -160,6 +161,13 @@ function ActivityCard({
   );
 }
 
+const EMPTY_IDS: readonly string[] = [];
+/** 首屏只渲染最近 N 条时间线，向上滚动时每次多展开 N 条。 */
+const WINDOW_SIZE = 40;
+const STICK_THRESHOLD_PX = 48;
+const LOAD_MORE_THRESHOLD_PX = 160;
+const EARLIER_TURNS = 10;
+
 export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
   const { t } = useTranslation("dashboard");
   const pushToast = useAppStore((state) => state.pushToast);
@@ -171,14 +179,33 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
   const [events, setEvents] = useState<ClaudeEvent[]>([]);
   const [draft, setDraft] = useState("");
   const [input, setInput] = useState("");
+  const contextIds = useCanvasContextStore((state) => state.ids[projectName] ?? EMPTY_IDS);
+  const contextProvider = useCanvasContextStore((state) => state.providers[projectName]);
+  const mentionOptions = useMemo(() => {
+    const match = /@([^\s@]*)$/.exec(input);
+    if (!match || !contextProvider) return [];
+    const query = (match[1] ?? "").toLowerCase();
+    return contextProvider.nodeIds().filter((id) => id.toLowerCase().includes(query)).slice(0, 8);
+  }, [input, contextProvider]);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const activeMention = Math.min(mentionIndex, Math.max(mentionOptions.length - 1, 0));
   const [sending, setSending] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [queued, setQueued] = useState(false);
   const [usage, setUsage] = useState<ClaudeUsageTotals | null>(null);
+  const [revertedSnapshots, setRevertedSnapshots] = useState<Set<string>>(() => new Set());
   const [resolvedPermissions, setResolvedPermissions] = useState<Set<string>>(() => new Set());
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const pendingEventsRef = useRef<ClaudeEvent[]>([]);
+  const seenSeqRef = useRef(new Set<number>());
+  const flushFrameRef = useRef<number | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const loadingEarlierRef = useRef(false);
+  const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
+  const [visibleCount, setVisibleCount] = useState(WINDOW_SIZE);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -192,6 +219,11 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
 
   const chooseSession = useCallback((nextSessionId: string | null) => {
     setEvents([]);
+    seenSeqRef.current = new Set();
+    loadingEarlierRef.current = false;
+    pendingEventsRef.current = [];
+    setVisibleCount(WINDOW_SIZE);
+    stickToBottomRef.current = true;
     setDraft("");
     setUsage(null);
     setSending(false);
@@ -230,7 +262,16 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
       projectName,
       sessionId,
       onEvent(event) {
-        setEvents((current) => current.some((item) => item.seq === event.seq) ? current : [...current, event]);
+        if (!seenSeqRef.current.has(event.seq)) {
+          seenSeqRef.current.add(event.seq);
+          pendingEventsRef.current.push(event);
+          flushFrameRef.current ??= requestAnimationFrame(() => {
+            flushFrameRef.current = null;
+            const batch = pendingEventsRef.current;
+            pendingEventsRef.current = [];
+            if (batch.length) setEvents((current) => [...current, ...batch]);
+          });
+        }
         const token = deltaText(event);
         if (token) setDraft((current) => current + token);
         if (assistantText(event)) setDraft("");
@@ -240,6 +281,9 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
         const message = messageRecord(event);
         if (event.type === "turn_queued") { setSending(true); setQueued(true); }
         if (event.type === "turn_running") { setSending(true); setQueued(false); }
+        if (event.type === "turn_error" && event.payload.code !== "interrupted") {
+          pushToast(t("claude_turn_failed", { code: typeof event.payload.code === "string" ? event.payload.code : "" }), "error");
+        }
         if (
           event.type === "turn_error"
           || event.type === "turn_finished"
@@ -264,17 +308,67 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
         setQueued(data.turns.some((turn) => turn.status === "accepted"));
       }
     }).catch((error) => pushToast(errMsg(error), "error"));
-    return () => stream.close();
-  }, [projectName, pushToast, sessionId]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [draft, events]);
+    return () => {
+      stream.close();
+      if (flushFrameRef.current !== null) cancelAnimationFrame(flushFrameRef.current);
+      flushFrameRef.current = null;
+      pendingEventsRef.current = [];
+    };
+  }, [projectName, pushToast, sessionId, t]);
 
   const timeline = useMemo(
     () => projectClaudeTimeline(events, resolvedPermissions),
     [events, resolvedPermissions],
   );
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+  const hiddenCount = Math.max(timeline.length - visibleCount, 0);
+  const visibleTimeline = hiddenCount > 0 ? timeline.slice(hiddenCount) : timeline;
+
+  // 在浏览器绘制前完成滚动，避免先渲染在顶部再跳到底部。
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const restore = restoreScrollRef.current;
+    if (restore) {
+      restoreScrollRef.current = null;
+      el.scrollTop = el.scrollHeight - restore.height + restore.top;
+    } else if (stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [draft, events, visibleCount, showSettings]);
+
+  const oldestSeq = events[0]?.seq ?? 1;
+
+  const loadEarlier = (el: HTMLDivElement) => {
+    if (!sessionId || loadingEarlierRef.current) return;
+    loadingEarlierRef.current = true;
+    const requestedSession = sessionId;
+    void ClaudeAPI.getEarlierEvents(projectName, requestedSession, oldestSeq, EARLIER_TURNS)
+      .then(({ events: older }) => {
+        if (requestedSession !== sessionIdRef.current) return;
+        const fresh = older.filter((event) => !seenSeqRef.current.has(event.seq));
+        for (const event of fresh) seenSeqRef.current.add(event.seq);
+        if (!fresh.length) return;
+        restoreScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
+        setEvents((current) => [...fresh, ...current]);
+        setVisibleCount((count) => count + WINDOW_SIZE);
+      })
+      .catch((error) => pushToast(errMsg(error), "error"))
+      .finally(() => { loadingEarlierRef.current = false; });
+  };
+
+  const handleScroll = (el: HTMLDivElement) => {
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD_PX;
+    if (el.scrollTop >= LOAD_MORE_THRESHOLD_PX || restoreScrollRef.current) return;
+    if (hiddenCount > 0) {
+      restoreScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
+      setVisibleCount((count) => count + WINDOW_SIZE);
+    } else if (oldestSeq > 1) {
+      loadEarlier(el);
+    }
+  };
   const hasPendingPermission = useMemo(
     () => events.some((event) => (
       event.type === "permission_request"
@@ -284,10 +378,19 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
     [events, resolvedPermissions],
   );
 
+  const pickMention = (id: string) => {
+    setInput((current) => current.replace(/@[^\s@]*$/, `@${id} `));
+    useCanvasContextStore.getState().add(projectName, id);
+    inputRef.current?.focus();
+  };
+
   const send = async () => {
-    const content = input.trim();
-    if (!content || sending) return;
+    const text = input.trim();
+    if (!text || sending) return;
+    const content = contextProvider ? contextProvider.compose(text, contextIds) : text;
+    const sentContextIds = [...contextIds];
     setInput("");
+    useCanvasContextStore.getState().clear(projectName);
     setSending(true);
     try {
       const result = await ClaudeAPI.sendMessage(projectName, content, sessionId, crypto.randomUUID());
@@ -303,6 +406,8 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
       }
     } catch (error) {
       setSending(false);
+      setInput((current) => current || text);
+      for (const id of sentContextIds) useCanvasContextStore.getState().add(projectName, id);
       pushToast(errMsg(error), "error");
     }
   };
@@ -313,6 +418,16 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
     try {
       await ClaudeAPI.resolvePermission(projectName, sessionId, requestId, allow);
       setResolvedPermissions((current) => new Set(current).add(requestId));
+    } catch (error) {
+      pushToast(errMsg(error), "error");
+    }
+  };
+
+  const revertChanges = async (snapshotId: string) => {
+    try {
+      await ClaudeAPI.restoreSnapshot(projectName, snapshotId);
+      setRevertedSnapshots((current) => new Set(current).add(snapshotId));
+      pushToast(t("claude_changes_revert_done"), "success");
     } catch (error) {
       pushToast(errMsg(error), "error");
     }
@@ -365,11 +480,15 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
         <button type="button" onClick={onClose} aria-label={t("claude_close")} className="grid h-8 w-8 place-items-center rounded-md hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d7ff45]/60"><X className="h-4 w-4" /></button>
       </div>
 
-      {showSettings ? <ClaudeAgentSettings projectName={projectName} /> : <div className="flex-1 space-y-3 overflow-y-auto p-3">
+      {showSettings ? <ClaudeAgentSettings projectName={projectName} /> : <div
+        ref={scrollRef}
+        onScroll={(event) => handleScroll(event.currentTarget)}
+        className="flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 [overflow-anchor:none]"
+      >
         {timeline.length === 0 && !draft && !sending ? (
           <div className="mt-16 text-center text-sm text-white/45">{t("claude_empty")}</div>
         ) : null}
-        {timeline.map((item) => {
+        {visibleTimeline.map((item) => {
           if (item.kind === "user") return <div key={item.key} className="ml-10 rounded-xl bg-[#d7ff45] px-3 py-2 text-sm text-black">{item.text}</div>;
           if (item.kind === "assistant") return <div key={item.key} className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2"><StreamMarkdown content={item.text} /></div>;
           if (item.kind === "activity") return (
@@ -389,6 +508,35 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
               }}
             />
           );
+          if (item.kind === "changes") {
+            const { changes } = item;
+            const reverted = revertedSnapshots.has(changes.snapshotId);
+            return (
+              <div key={item.key} className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs">
+                <div className="mb-1 font-medium text-white/80">
+                  {t("claude_changes_title", { count: changes.total })}
+                </div>
+                <ul className="mb-2 max-h-28 overflow-auto text-[11px] text-white/55">
+                  {[
+                    ...changes.modified.map((file) => `~ ${file}`),
+                    ...changes.added.map((file) => `+ ${file}`),
+                    ...changes.removed.map((file) => `- ${file}`),
+                  ].map((line) => <li key={line} className="truncate">{line}</li>)}
+                </ul>
+                {!changes.valid ? (
+                  <div className="mb-2 text-[11px] text-amber-300">{t("claude_changes_invalid", { count: changes.errors })}</div>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={reverted || sending}
+                  onClick={() => void revertChanges(changes.snapshotId)}
+                  className="rounded border border-white/15 px-2 py-1 disabled:opacity-40"
+                >
+                  {reverted ? t("claude_changes_reverted") : t("claude_changes_revert")}
+                </button>
+              </div>
+            );
+          }
           const event = item.event;
           return (
             <div key={item.key} className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs">
@@ -411,7 +559,6 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
           </div>
         ) : null}
         {sending && !draft && !hasPendingPermission ? <ResponseSignal label={t(queued ? "claude_queued" : "claude_responding")} /> : null}
-        <div ref={bottomRef} />
       </div>}
 
       {usage ? (
@@ -420,11 +567,52 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
         </div>
       ) : null}
       <div className="border-t border-white/10 p-3">
+        {contextIds.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {contextIds.map((id) => (
+              <span key={id} className="inline-flex max-w-full items-center gap-1 rounded-full border border-[#d7ff45]/40 bg-[#d7ff45]/10 px-2 py-0.5 text-[11px] text-white/80">
+                <span className="truncate">@{id}</span>
+                <button type="button" aria-label={t("claude_context_remove")} onClick={() => useCanvasContextStore.getState().remove(projectName, id)} className="text-white/50 hover:text-white">×</button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {mentionOptions.length > 0 ? (
+          <ul className="mb-2 max-h-40 overflow-auto rounded-lg border border-white/10 bg-black/40 text-xs" role="listbox">
+            {mentionOptions.map((id, index) => (
+              <li key={id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeMention}
+                  className={`block w-full truncate px-2 py-1 text-left text-white/75 hover:bg-white/10 ${index === activeMention ? "bg-white/10" : ""}`}
+                  onClick={() => pickMention(id)}
+                >
+                  @{id}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <textarea
           ref={inputRef}
           value={input}
-          onChange={(event) => setInput(event.target.value)}
+          onChange={(event) => { setInput(event.target.value); setMentionIndex(0); }}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (mentionOptions.length > 0) {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                setMentionIndex((activeMention + step + mentionOptions.length) % mentionOptions.length);
+                return;
+              }
+              if (event.key === "Enter" || event.key === "Tab") {
+                event.preventDefault();
+                pickMention(mentionOptions[activeMention]);
+                return;
+              }
+            }
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void send();

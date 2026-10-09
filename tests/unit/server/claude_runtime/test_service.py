@@ -303,3 +303,105 @@ async def test_accepted_queue_recovers_after_service_restart(tmp_path, db_factor
     events = await restored.events(queued["session"]["id"], user_id="default")
     assert [event["payload"]["content"] for event in events if event["type"] == "user_message"] == ["Recover me"]
     await restored.shutdown()
+
+
+class EditingClaudeClient(FakeClaudeClient):
+    """模拟 Agent 在本轮里改了 project.json 并新增一个文件。"""
+
+    project_dir: Any = None
+
+    async def receive_response(self):
+        (self.project_dir / "project.json").write_text('{"name":"demo","characters":{}}', encoding="utf-8")
+        (self.project_dir / "notes.md").write_text("n", encoding="utf-8")
+        async for message in super().receive_response():
+            yield message
+
+
+async def test_turn_that_edits_project_files_records_changes_and_can_be_reverted(tmp_path, db_factory) -> None:
+    project = tmp_path / "projects" / "demo"
+    project.mkdir(parents=True)
+    original = '{"name":"demo","characters":{"A":{}}}'
+    (project / "project.json").write_text(original, encoding="utf-8")
+    EditingClaudeClient.project_dir = project
+
+    service = ClaudeSessionService(
+        data_root=tmp_path,
+        session_factory=db_factory,
+        client_factory=lambda options: EditingClaudeClient(options, call_number=1),
+    )
+    accepted = await service.send_action(
+        "demo", ClaudeAction(action="create_screenplay", episode=1, client_key="k1"), user_id="default"
+    )
+    await service.wait_for_idle(accepted["session"]["id"])
+
+    events = await service.events(accepted["session"]["id"], user_id="default")
+    change = next(event["payload"] for event in events if event["type"] == "project_changes")
+    assert change["modified"] == ["project.json"]
+    assert change["added"] == ["notes.md"]
+    assert change["total"] == 2
+
+    await service.restore_snapshot("demo", change["snapshot_id"])
+
+    assert (project / "project.json").read_text(encoding="utf-8") == original
+    assert not (project / "notes.md").exists()
+    await service.shutdown()
+
+
+async def test_turn_without_file_changes_leaves_no_snapshot(tmp_path, db_factory) -> None:
+    project = tmp_path / "projects" / "demo"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text('{"name":"demo"}', encoding="utf-8")
+    service = ClaudeSessionService(
+        data_root=tmp_path,
+        session_factory=db_factory,
+        client_factory=lambda options: FakeClaudeClient(options, call_number=1),
+    )
+    accepted = await service.send_action(
+        "demo", ClaudeAction(action="create_screenplay", episode=1, client_key="k1"), user_id="default"
+    )
+    await service.wait_for_idle(accepted["session"]["id"])
+
+    events = await service.events(accepted["session"]["id"], user_id="default")
+    assert not any(event["type"] == "project_changes" for event in events)
+    assert await service.list_snapshots("demo") == []
+    await service.shutdown()
+
+
+async def test_tail_cursor_and_earlier_events_page_whole_turns(tmp_path, db_factory, db_session) -> None:
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "project.json").write_text('{"name":"demo"}', encoding="utf-8")
+    calls: list[Any] = []
+
+    def client_factory(options: Any) -> FakeClaudeClient:
+        calls.append(options)
+        return FakeClaudeClient(options, call_number=len(calls))
+
+    service = ClaudeSessionService(data_root=tmp_path, session_factory=db_factory, client_factory=client_factory)
+    first = await service.send_message(project_name="demo", content="t1", session_id=None, client_key="k1")
+    session_id = first["session"]["id"]
+    await service.wait_for_idle(session_id)
+    for index in range(2, 6):
+        await service.send_message(
+            project_name="demo", content=f"t{index}", session_id=session_id, client_key=f"k{index}"
+        )
+        await service.wait_for_idle(session_id)
+
+    everything = await service.events(session_id, project_name="demo")
+    starts = [event["seq"] for event in everything if event["type"] == "user_message"]
+    assert len(starts) == 5
+
+    cursor = await service.tail_cursor(session_id, turns=2, project_name="demo")
+    tail = await service.events(session_id, project_name="demo", after_seq=cursor)
+    assert tail[0]["seq"] == starts[-2]
+    assert tail[0]["type"] == "user_message"
+    assert await service.tail_cursor(session_id, turns=10, project_name="demo") == 0
+
+    page = await service.earlier_events(session_id, before_seq=tail[0]["seq"], turns=2, project_name="demo")
+    assert page["events"][0]["seq"] == starts[1]
+    assert page["events"][-1]["seq"] == tail[0]["seq"] - 1
+    assert page["has_more"] is True
+
+    last = await service.earlier_events(session_id, before_seq=starts[1], turns=2, project_name="demo")
+    assert last["events"][0]["seq"] == 1
+    assert last["has_more"] is False

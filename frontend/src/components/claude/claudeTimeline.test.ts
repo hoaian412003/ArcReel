@@ -104,3 +104,27 @@ describe("projectClaudeTimeline", () => {
     expect(timeline[0]).toEqual(expect.objectContaining({ status: "error" }));
   });
 });
+
+describe("project changes", () => {
+  it("projects a project_changes event into a revertable summary", () => {
+    const timeline = projectClaudeTimeline(
+      [
+        {
+          session_id: "session-1",
+          seq: 4,
+          type: "project_changes",
+          payload: { snapshot_id: "snap-1", modified: ["project.json"], added: [], removed: [], total: 1, valid: false, errors: 2 },
+          created_at: "2026-10-04T00:00:00Z",
+        },
+      ],
+      new Set(),
+    );
+
+    expect(timeline).toEqual([
+      expect.objectContaining({
+        kind: "changes",
+        changes: expect.objectContaining({ snapshotId: "snap-1", modified: ["project.json"], valid: false, errors: 2 }),
+      }),
+    ]);
+  });
+});

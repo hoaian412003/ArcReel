@@ -76,6 +76,50 @@ class AgentEventRepository(BaseRepository):
         )
         return [_event_dict(row) for row in result.scalars()]
 
+    async def turn_start_seq(
+        self,
+        session_id: str,
+        *,
+        turns: int,
+        before_seq: int | None = None,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> int | None:
+        """Seq of the user message that opens the `turns`-th most recent turn (below `before_seq`).
+
+        None means fewer than `turns` turns exist, so the history starts at the beginning.
+        """
+        query = select(AgentSessionEventLogEntry.seq).where(
+            AgentSessionEventLogEntry.session_id == session_id,
+            AgentSessionEventLogEntry.user_id == user_id,
+            AgentSessionEventLogEntry.entry_type == "user_message",
+        )
+        if before_seq is not None:
+            query = query.where(AgentSessionEventLogEntry.seq < before_seq)
+        result = await self.session.scalar(
+            query.order_by(AgentSessionEventLogEntry.seq.desc()).offset(max(turns, 1) - 1).limit(1)
+        )
+        return int(result) if result is not None else None
+
+    async def list_before(
+        self,
+        session_id: str,
+        *,
+        after_seq: int,
+        before_seq: int,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> list[dict[str, Any]]:
+        result = await self.session.execute(
+            select(AgentSessionEventLogEntry)
+            .where(
+                AgentSessionEventLogEntry.session_id == session_id,
+                AgentSessionEventLogEntry.user_id == user_id,
+                AgentSessionEventLogEntry.seq > after_seq,
+                AgentSessionEventLogEntry.seq < before_seq,
+            )
+            .order_by(AgentSessionEventLogEntry.seq)
+        )
+        return [_event_dict(row) for row in result.scalars()]
+
     async def find_by_client_key(
         self, session_id: str, client_key: str, *, user_id: str = DEFAULT_USER_ID
     ) -> dict[str, Any] | None:

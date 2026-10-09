@@ -31,6 +31,15 @@ from lib.db.repositories.agent_turn_repo import AgentTurnRepository
 from lib.db.repositories.session_repo import SessionRepository
 from lib.infra.api_errors import ConflictError, NotFoundError
 from lib.infra.data_root_layout import DataRootLayout
+from lib.project.agent_snapshot import (
+    SnapshotNotFoundError,
+    diff_snapshot,
+    discard_snapshot,
+    list_snapshots,
+    restore_snapshot,
+    take_snapshot,
+)
+from lib.project.data_validator import DataValidator
 from lib.project.project_manager import ProjectManager
 from server.claude_runtime.actions import ClaudeAction, render_action
 from server.claude_runtime.auth import ClaudeAuthManager
@@ -43,6 +52,9 @@ from server.sse_channel import IDLE, DropSubscriber, SseChannel
 logger = logging.getLogger(__name__)
 
 ClientFactory = Callable[[ClaudeAgentOptions], Any]
+
+
+_CHANGE_LIST_LIMIT = 30
 
 
 class ClaudeUnavailableError(RuntimeError):
@@ -379,6 +391,38 @@ class ClaudeSessionService:
                     return events
                 cursor = page[-1]["seq"]
 
+    async def tail_cursor(
+        self,
+        session_id: str,
+        *,
+        turns: int,
+        project_name: str,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> int:
+        """`after_seq` that makes a replay start at the opening of the last `turns` turns."""
+        await self.require_session(session_id, project_name=project_name, user_id=user_id)
+        async with self._session_factory() as db:
+            start = await AgentEventRepository(db).turn_start_seq(session_id, turns=turns, user_id=user_id)
+        return max(start - 1, 0) if start is not None else 0
+
+    async def earlier_events(
+        self,
+        session_id: str,
+        *,
+        before_seq: int,
+        turns: int,
+        project_name: str,
+        user_id: str = DEFAULT_USER_ID,
+    ) -> dict[str, Any]:
+        """Whole turns that precede `before_seq`, oldest first, plus whether more remain."""
+        await self.require_session(session_id, project_name=project_name, user_id=user_id)
+        async with self._session_factory() as db:
+            repo = AgentEventRepository(db)
+            start = await repo.turn_start_seq(session_id, turns=turns, before_seq=before_seq, user_id=user_id)
+            first = start if start is not None else 1
+            events = await repo.list_before(session_id, after_seq=first - 1, before_seq=before_seq, user_id=user_id)
+        return {"events": events, "has_more": first > 1}
+
     async def turns(
         self,
         session_id: str,
@@ -456,7 +500,9 @@ class ClaudeSessionService:
         turn_id = turn["id"]
         result_failed = False
         result_received = False
+        snapshot_id: str | None = None
         try:
+            snapshot_id = await self._take_turn_snapshot(project_path, turn_id)
             async with self._session_factory() as db:
                 turn_repo = AgentTurnRepository(db)
                 previous = await turn_repo.latest_completed_before(session_id, turn_id, user_id=user_id)
@@ -514,6 +560,65 @@ class ClaudeSessionService:
             await self._fail_turn(session_id, turn_id, type(exc).__name__, user_id=user_id)
         finally:
             self._active_clients.pop(session_id, None)
+            if snapshot_id is not None:
+                await asyncio.shield(
+                    self._record_project_changes(session_id, turn_id, project_path, snapshot_id, user_id)
+                )
+
+    @staticmethod
+    async def _take_turn_snapshot(project_path: Path, turn_id: str) -> str | None:
+        try:
+            return await asyncio.to_thread(take_snapshot, project_path, label=turn_id)
+        except Exception:
+            logger.exception("Agent turn snapshot failed turn=%s", turn_id)
+            return None
+
+    async def _record_project_changes(
+        self, session_id: str, turn_id: str, project_path: Path, snapshot_id: str, user_id: str
+    ) -> None:
+        """本轮改动了项目文本文件时，发 project_changes 事件（含改动清单、数据校验结果与可回退的快照 id）；没改动就丢掉快照。"""
+        try:
+            changes = await asyncio.to_thread(diff_snapshot, project_path, snapshot_id)
+            if not any(changes.values()):
+                await asyncio.to_thread(discard_snapshot, project_path, snapshot_id)
+                return
+            validation = await asyncio.to_thread(DataValidator().validate_project_dir, project_path)
+            await self._append_event(
+                session_id,
+                "project_changes",
+                {
+                    "turn_id": turn_id,
+                    "snapshot_id": snapshot_id,
+                    **{key: files[:_CHANGE_LIST_LIMIT] for key, files in changes.items()},
+                    "total": sum(len(files) for files in changes.values()),
+                    "valid": validation.valid,
+                    "errors": len(validation.error_messages),
+                    "warnings": len(validation.warning_messages),
+                },
+                user_id=user_id,
+            )
+        except Exception:
+            logger.exception("Recording project changes failed turn=%s", turn_id)
+
+    async def list_snapshots(self, project_name: str) -> list[dict[str, Any]]:
+        project_path = await asyncio.to_thread(self._project_manager.get_project_path, project_name)
+        return await asyncio.to_thread(list_snapshots, project_path)
+
+    async def restore_snapshot(self, project_name: str, snapshot_id: str) -> dict[str, list[str]]:
+        """把项目文本文件回退到某一轮开始前；该项目还有轮次在排队或运行时拒绝，避免与 Agent 的写入交错。"""
+        project_path = await asyncio.to_thread(self._project_manager.get_project_path, project_name)
+        worker = self._project_tasks.get(project_name)
+        if worker is not None and not worker.done():
+            raise ConflictError("claude_project_busy")
+
+        def _restore() -> dict[str, list[str]]:
+            with self._project_manager.file_lock(project_path / "project.json"):
+                return restore_snapshot(project_path, snapshot_id)
+
+        try:
+            return await asyncio.to_thread(_restore)
+        except SnapshotNotFoundError as exc:
+            raise NotFoundError("claude_snapshot_not_found") from exc
 
     @staticmethod
     def _has_tool_result(message: UserMessage) -> bool:
@@ -569,7 +674,9 @@ class ClaudeSessionService:
                 "preset": "claude_code",
                 "append": f"You are the persistent agent for ArcReel project {session['project_name']}. "
                 "Use project skills and the project-bound ArcReel MCP tools to manage its artifacts. "
-                f"Keep cross-session notes in {workspace.memory_dir}. Explain consequential edits.",
+                f"Keep cross-session notes in {workspace.memory_dir}. Explain consequential edits. "
+                "You own this project's data: assets, scripts and the node canvas are yours to manage through the tools; "
+                "every turn is snapshotted so the user can revert. Ask before any paid provider run (image/video/audio).",
             },
         )
 

@@ -134,6 +134,18 @@ flowchart TD
 
 子智能体 `.md` 中的速查或浓缩清单不得省略规则的例外分支；无法完整保留时只引用规则的真相源，不复述规则。
 
+### 5.2.1 原生 Agent 权限模型 {#native-agent-permissions}
+
+站内 Claude Code 是原生 Agent（Claude Agent SDK 的 `claude_code` 预设），而不是受限的工具调用器：
+
+- 使用完整的内置工具集（含 Bash、文件读写），并以 `bypassPermissions` 模式运行，执行时不逐项向用户确认；
+- 工作目录固定为当前项目目录，但这只是起点而非沙箱，Agent 对运行服务的系统账户可访问的范围拥有同等权限；
+- 同时加载 `user` / `project` / `local` 三级设置，因此宿主机用户级 `~/.claude` 配置也会生效；
+- 仅在容器内运行时设置 `IS_SANDBOX=1`，以容器边界作为隔离；容器外部署没有额外隔离层；
+- 同时可调用项目绑定的 `arcreel` MCP 工具，其作用域由 `ProjectScope` 限定在当前项目。
+
+部署含义：只对可信用户开放站内 Agent；多用户或公网场景请放在容器或专用系统账户中运行，并避免把含敏感凭据的目录挂入。
+
 ### 5.3 确定性工具 {#deterministic-tools}
 
 确定性操作更适合由工具或 Skill 执行，例如：

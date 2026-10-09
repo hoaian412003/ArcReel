@@ -2,10 +2,31 @@ import type { ClaudeEvent } from "@/api/claude";
 
 type ActivityStatus = "running" | "completed" | "error" | "stopped";
 
+/** 一轮 Agent 对话改动项目文本文件后的摘要；`snapshotId` 对应开始前的快照，可整体回退。 */
+export interface ProjectChangeSummary {
+  snapshotId: string;
+  added: string[];
+  modified: string[];
+  removed: string[];
+  total: number;
+  valid: boolean;
+  errors: number;
+  warnings: number;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" ? value : 0;
+}
+
 export type ClaudeTimelineItem =
   | { kind: "user"; key: string; seq: number; text: string }
   | { kind: "assistant"; key: string; seq: number; text: string }
   | { kind: "permission"; key: string; seq: number; event: ClaudeEvent }
+  | { kind: "changes"; key: string; seq: number; changes: ProjectChangeSummary }
   | {
     kind: "activity";
     key: string;
@@ -100,6 +121,27 @@ export function projectClaudeTimeline(
       const requestId = stringValue(event.payload.request_id);
       if (!requestId || !resolvedPermissions.has(requestId)) {
         items.push({ kind: "permission", key: `permission-${event.seq}`, seq: event.seq, event });
+      }
+      continue;
+    }
+    if (event.type === "project_changes") {
+      const snapshotId = stringValue(event.payload.snapshot_id);
+      if (snapshotId) {
+        items.push({
+          kind: "changes",
+          key: `changes-${event.seq}`,
+          seq: event.seq,
+          changes: {
+            snapshotId,
+            added: stringList(event.payload.added),
+            modified: stringList(event.payload.modified),
+            removed: stringList(event.payload.removed),
+            total: numberValue(event.payload.total),
+            valid: event.payload.valid !== false,
+            errors: numberValue(event.payload.errors),
+            warnings: numberValue(event.payload.warnings),
+          },
+        });
       }
       continue;
     }

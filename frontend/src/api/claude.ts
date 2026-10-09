@@ -1,6 +1,9 @@
 import { API_BASE, parseSseJson, requestJson, sseErrorHandler, sseHeaders, withAuth, throwIfNotOk } from "@/api/transport";
 import { openSseStream, type SseStreamError, type SseStreamHandle } from "@/utils/sse-stream";
 
+/** 首次连接只回放最近 N 轮，更早的历史按需通过 getEarlierEvents 分页获取。 */
+export const INITIAL_TAIL_TURNS = 10;
+
 export interface ClaudeSession {
   id: string;
   project_name: string;
@@ -145,11 +148,24 @@ export const ClaudeAPI = {
     );
   },
 
+  getEarlierEvents(projectName: string, sessionId: string, beforeSeq: number, turns: number) {
+    return requestJson<{ events: ClaudeEvent[]; has_more: boolean }>(
+      `${base(projectName)}/sessions/${encodeURIComponent(sessionId)}/events/earlier?before_seq=${beforeSeq}&turns=${turns}`,
+    );
+  },
+
   resolvePermission(projectName: string, sessionId: string, requestId: string, allow: boolean) {
     return requestJson(`${base(projectName)}/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}`, {
       method: "POST",
       body: JSON.stringify({ allow }),
     });
+  },
+
+  restoreSnapshot(projectName: string, snapshotId: string) {
+    return requestJson<{ restored: { added: string[]; modified: string[]; removed: string[] } }>(
+      `${base(projectName)}/snapshots/${encodeURIComponent(snapshotId)}/restore`,
+      { method: "POST" },
+    );
   },
 
   interrupt(projectName: string, sessionId: string) {
@@ -162,7 +178,7 @@ export const ClaudeAPI = {
     onEvent: (event: ClaudeEvent) => void;
     onError?: (error: SseStreamError) => void;
   }): SseStreamHandle {
-    const url = `${API_BASE}${base(options.projectName)}/sessions/${encodeURIComponent(options.sessionId)}/events/stream`;
+    const url = `${API_BASE}${base(options.projectName)}/sessions/${encodeURIComponent(options.sessionId)}/events/stream?tail_turns=${INITIAL_TAIL_TURNS}`;
     return openSseStream({
       url,
       headers: sseHeaders,
