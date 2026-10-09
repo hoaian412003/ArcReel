@@ -1,59 +1,42 @@
-"""画布的项目视图：把参考生视频项目里选中的集推导成画布上的只读节点（集 / 视频单元 / 起始帧联合图 / H3 提示词）。
+"""画布的项目视图：把项目里的角色、场景、道具、商品推导成画布上的只读分组与节点。
 
 派生节点不落盘，每次读画布时按项目数据现算，所以它们永远与项目一致；用户只在画布上摆放它们的位置
-（集分组的位置存进画布的 ``overrides``）并与自己的节点连线。运行类操作沿用既有端点，不在这里。
+（分组的位置存进画布的 ``overrides``）并与自己的节点连线。运行类操作沿用既有端点，不在这里。
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from lib.canvas.graph import (
     ASSET_GROUP_TYPES,
     KIND_CHAR_GEN,
+    KIND_CHAR_PORT,
     KIND_CHAR_REF,
     KIND_CHAR_SHEET,
     KIND_CHAR_TEXT,
     KIND_CHARACTER,
     KIND_DERIV_GEN,
+    KIND_DERIV_PORT,
     KIND_DERIV_SHEET,
     KIND_DERIV_TEXT,
-    KIND_EPISODE,
-    KIND_H3_PROMPT,
-    KIND_KEYFRAME,
-    KIND_UNIT,
+    NODE_ASSET,
+    NODE_GROUP,
+    apply_notes,
     derived_id,
+    derived_kind,
 )
 from lib.project.asset_types import ASSET_SPECS
-from lib.project.project_manager import ProjectManager, find_episode
-from lib.prompts.video_prompt_profile import is_h3_ref2va
-from lib.script.reference_video.h3_prompt import (
-    UNAVAILABLE_STALE,
-    H3PromptUnavailable,
-    load_h3_prompt,
-)
-from server.services.project.direction_review import read_formal_script
-from server.services.project.keyframe_board import KeyframeBoardService
-from server.services.project.keyframe_plan import KeyframePlanError
-
-#: 集分组内的列与行排布（画布坐标，子节点位置相对分组）。
-GROUP_PADDING_TOP = 64
-COLUMN_KEYFRAME_X = 24
-COLUMN_UNIT_X = 360
-COLUMN_H3_X = 700
-UNIT_ROW_HEIGHT = 200
-KEYFRAME_ROW_HEIGHT = 260
-GROUP_WIDTH = 1060
-GROUP_GAP = 80
+from lib.project.project_manager import ProjectManager
 
 #: 角色分组在画布左侧竖排：每个角色一组，组内从左到右是 描述 / 参考图 → 图片供应商 → 资产图。
-CHARACTER_GROUP_WIDTH = 1140
-CHARACTER_GROUP_HEIGHT = 700
+CHARACTER_GROUP_WIDTH = 1400
+CHARACTER_GROUP_HEIGHT = 820
 #: 每个衍生在分组里占一行（描述 → 图片供应商 → 衍生资产图），分组随衍生数增高。
-DERIVATIVE_ROW_HEIGHT = 400
+DERIVATIVE_ROW_HEIGHT = 480
 CHARACTER_GROUP_GAP = 60
 CHARACTER_ORIGIN_X = -CHARACTER_GROUP_WIDTH - 160
 #: 组内各子节点的位置（相对分组）。
@@ -61,32 +44,6 @@ _CHAR_TEXT_POS: dict[str, float] = {"x": 24, "y": 64}
 _CHAR_REF_POS: dict[str, float] = {"x": 24, "y": 330}
 _CHAR_GEN_POS: dict[str, float] = {"x": 400, "y": 64}
 _CHAR_SHEET_POS: dict[str, float] = {"x": 790, "y": 64}
-
-#: 未登记摆放位置的节点之间保留的最小分组高度。
-GROUP_MIN_HEIGHT = 320
-
-
-def applicable(project: Mapping[str, Any]) -> bool:
-    return project.get("generation_mode") == "reference_video"
-
-
-def list_episodes(project: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """画布可展示的集：参考生视频项目的全部集。"""
-    if not applicable(project):
-        return []
-    return [
-        {"episode": ep["episode"], "title": str(ep.get("title") or "")}
-        for ep in project.get("episodes") or []
-        if isinstance(ep, dict) and isinstance(ep.get("episode"), int)
-    ]
-
-
-def _h3_status(unit: dict[str, Any]) -> str:
-    try:
-        load_h3_prompt(unit)
-    except H3PromptUnavailable as exc:
-        return "stale" if exc.code == UNAVAILABLE_STALE else "missing"
-    return "current"
 
 
 def _version(project_path: Path, rel: str | None) -> int | None:
@@ -106,141 +63,83 @@ def build_project_view(
     pm: ProjectManager,
     project_name: str,
     project: dict[str, Any],
-    episodes: list[int],
     overrides: Mapping[str, Mapping[str, float]],
     *,
-    h3_status: Callable[[dict[str, Any]], str] = _h3_status,
+    notes: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """返回 ``(派生节点, 虚拟连线)``。角色节点对所有项目都有；集相关节点只在参考生视频项目里有，不存在的集被跳过。
+    """项目推导的节点与虚拟连线；资产图节点带上参考说明 ``note``（用户改写的优先，否则默认说明）。"""
+    nodes, edges = _build_project_view(pm, project_name, project, overrides)
+    apply_notes(nodes, notes or {})
+    ports, port_edges = _asset_ports(nodes)
+    merged = [*nodes, *ports]
+    _apply_manual_positions(merged, overrides)
+    return merged, [*edges, *port_edges]
 
-    ``h3_status`` 判定单元的 H3 提示词是 current / stale / missing，默认按脚本里的载荷机械校验。
+
+def _apply_manual_positions(nodes: list[dict[str, Any]], overrides: Mapping[str, Mapping[str, float]]) -> None:
+    """用户在分组里拖过的节点：位置取手动值（相对分组），并标记 ``pinned``，自动排版不再动它。"""
+    group_pos = {n["id"]: n["position"] for n in nodes if "parentId" not in n}
+    for node in nodes:
+        manual = overrides.get(node["id"]) if node.get("parentId") else None
+        if manual is None:
+            continue
+        node["position"] = {"x": float(manual["x"]), "y": float(manual["y"])}
+        parent = group_pos.get(node["parentId"])
+        if parent is not None:
+            node["abs"] = _abs(parent, node["position"])
+        node["data"] = {**node["data"], "pinned": True}
+
+
+#: 资产输出节点在资产图节点右边的间距（资产图节点宽 240）。
+_PORT_OFFSET_X = 280
+_PORT_KIND = {KIND_CHAR_SHEET: KIND_CHAR_PORT, KIND_DERIV_SHEET: KIND_DERIV_PORT} | {
+    f"{asset}_sheet": f"{asset}_port" for asset in ASSET_GROUP_TYPES
+}
+
+
+def _asset_ports(nodes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """每个资产图节点旁挂一个「资产」输出节点：同一张图 + 参考说明，一个 ``asset`` 输出口，接到任何参考图输入口即用。
+
+    说明的编辑落在资产图节点上（``note_target``），输出节点只是它的出口。
     """
+    ports: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    for node in nodes:
+        kind = derived_kind(node["id"])
+        port_kind = _PORT_KIND.get(kind or "")
+        if port_kind is None:
+            continue
+        key = node["id"].split(":", 2)[2]
+        port_id = derived_id(port_kind, key)
+        position = {"x": node["position"]["x"] + _PORT_OFFSET_X, "y": node["position"]["y"]}
+        ports.append(
+            {
+                "id": port_id,
+                "type": NODE_ASSET,
+                "derived": True,
+                "parentId": node["parentId"],
+                "position": position,
+                "abs": {"x": node["abs"]["x"] + _PORT_OFFSET_X, "y": node["abs"]["y"]},
+                "data": {**node["data"], "role": "port", "note_target": node["id"]},
+            }
+        )
+        edges.append(_virtual_edge(node["id"], "image", port_id, "in"))
+    return ports, edges
+
+
+def _build_project_view(
+    pm: ProjectManager,
+    project_name: str,
+    project: dict[str, Any],
+    overrides: Mapping[str, Mapping[str, float]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """返回 ``(派生节点, 虚拟连线)``：角色、场景、道具、商品的分组及其子节点。"""
     characters, character_edges, next_y = _character_nodes(pm, project_name, project, overrides)
     for asset_type in ASSET_GROUP_TYPES:
         more_nodes, more_edges, next_y = _asset_group_nodes(pm, project_name, project, asset_type, next_y, overrides)
         characters.extend(more_nodes)
         character_edges.extend(more_edges)
-    if not applicable(project):
-        return characters, character_edges
-    project_path = pm.get_project_path(project_name)
-    h3 = is_h3_ref2va(project)
-    nodes: list[dict[str, Any]] = [*characters]
-    edges: list[dict[str, Any]] = [*character_edges]
-    cursor_x = 0.0
-    keyframes = KeyframeBoardService(pm)
-
-    for number in episodes:
-        meta = find_episode(project, number)
-        if meta is None:
-            continue
-        script = read_formal_script(pm, project_name, project, number) or {}
-        units = [u for u in script.get("video_units") or [] if isinstance(u, dict) and u.get("unit_id")]
-        state: dict[str, Any] = {}
-        if h3:
-            try:
-                state = keyframes.state(project_name, number)
-            except KeyframePlanError:
-                state = {}
-        sheets = state.get("sheets") or []
-        cell_of = {row["unit_id"]: row["cell_id"] for row in state.get("units") or []}
-
-        rows = max(len(units), len(sheets) * KEYFRAME_ROW_HEIGHT // UNIT_ROW_HEIGHT + 1, 1)
-        height = max(GROUP_MIN_HEIGHT, GROUP_PADDING_TOP + rows * UNIT_ROW_HEIGHT)
-        group_id = derived_id(KIND_EPISODE, number)
-        group_pos = dict(overrides.get(group_id) or {"x": cursor_x, "y": 0.0})
-        cursor_x += GROUP_WIDTH + GROUP_GAP
-        nodes.append(
-            {
-                "id": group_id,
-                "type": KIND_EPISODE,
-                "derived": True,
-                "position": {"x": float(group_pos["x"]), "y": float(group_pos["y"])},
-                "width": GROUP_WIDTH,
-                "height": height,
-                "data": {
-                    "episode": number,
-                    "title": str(meta.get("title") or ""),
-                    "unit_count": len(units),
-                    "h3": h3,
-                },
-            }
-        )
-
-        sheet_ids: dict[str, str] = {}
-        for index, sheet in enumerate(sheets):
-            node_id = derived_id(KIND_KEYFRAME, number, sheet["id"])
-            for cell in sheet.get("cells") or []:
-                sheet_ids[cell["id"]] = node_id
-            rel = {"x": COLUMN_KEYFRAME_X, "y": GROUP_PADDING_TOP + index * KEYFRAME_ROW_HEIGHT}
-            nodes.append(
-                {
-                    "id": node_id,
-                    "type": KIND_KEYFRAME,
-                    "derived": True,
-                    "parentId": group_id,
-                    "position": rel,
-                    "abs": _abs(group_pos, rel),
-                    "data": {
-                        "episode": number,
-                        "sheet_id": sheet["id"],
-                        "scene": sheet.get("scene"),
-                        "path": sheet.get("image"),
-                        "version": _version(project_path, sheet.get("image")),
-                        "problem": sheet.get("problem"),
-                        "stale": any(c.get("stale") for c in sheet.get("cells") or []),
-                        "cell_count": len(sheet.get("cells") or []),
-                        "approved": all(c.get("status") == "approved" for c in sheet.get("cells") or []),
-                    },
-                }
-            )
-
-        for index, unit in enumerate(units):
-            unit_id = str(unit["unit_id"])
-            row_y = GROUP_PADDING_TOP + index * UNIT_ROW_HEIGHT
-            unit_node_id = derived_id(KIND_UNIT, number, unit_id)
-            rel = {"x": COLUMN_UNIT_X, "y": row_y}
-            nodes.append(
-                {
-                    "id": unit_node_id,
-                    "type": KIND_UNIT,
-                    "derived": True,
-                    "parentId": group_id,
-                    "position": rel,
-                    "abs": _abs(group_pos, rel),
-                    "data": {
-                        "episode": number,
-                        "unit_id": unit_id,
-                        "text": str(unit.get("text") or ""),
-                        "duration_seconds": unit.get("duration_seconds"),
-                        "h3_status": h3_status(unit) if h3 else None,
-                    },
-                }
-            )
-            sheet_node = sheet_ids.get(cell_of.get(unit_id) or "")
-            if sheet_node is not None:
-                edges.append(_virtual_edge(sheet_node, "image", unit_node_id, "frame"))
-            if h3:
-                h3_node_id = derived_id(KIND_H3_PROMPT, number, unit_id)
-                h3_rel = {"x": COLUMN_H3_X, "y": row_y}
-                payload = unit.get("h3_prompt") if isinstance(unit.get("h3_prompt"), dict) else None
-                nodes.append(
-                    {
-                        "id": h3_node_id,
-                        "type": KIND_H3_PROMPT,
-                        "derived": True,
-                        "parentId": group_id,
-                        "position": h3_rel,
-                        "abs": _abs(group_pos, h3_rel),
-                        "data": {
-                            "episode": number,
-                            "unit_id": unit_id,
-                            "status": h3_status(unit),
-                            "sections": {k: v for k, v in (payload or {}).items() if k != "source_text_hash"} or None,
-                        },
-                    }
-                )
-                edges.append(_virtual_edge(unit_node_id, "unit", h3_node_id, "in"))
-    return nodes, edges
+    return characters, character_edges
 
 
 def _derivatives_of(entry: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
@@ -310,7 +209,7 @@ def _character_nodes(
         nodes.append(
             {
                 "id": group_id,
-                "type": KIND_CHARACTER,
+                "type": NODE_GROUP,
                 "derived": True,
                 "position": group_pos,
                 "width": CHARACTER_GROUP_WIDTH,
@@ -413,7 +312,7 @@ def _character_nodes(
 
 
 #: 场景 / 道具 / 商品分组的高度（没有参考图节点，比角色组矮）与组宽（同角色组）。
-ASSET_GROUP_HEIGHT = 440
+ASSET_GROUP_HEIGHT = 560
 
 
 def _asset_group_nodes(
@@ -448,7 +347,7 @@ def _asset_group_nodes(
         nodes.append(
             {
                 "id": group_id,
-                "type": "character",
+                "type": NODE_GROUP,
                 "derived": True,
                 "position": group_pos,
                 "width": CHARACTER_GROUP_WIDTH,
@@ -493,15 +392,3 @@ def _virtual_edge(source: str, source_handle: str, target: str, target_handle: s
         "targetHandle": target_handle,
         "virtual": True,
     }
-
-
-def writer_output_edges(stored_edges: list[dict[str, Any]], shown: set[str]) -> list[dict[str, Any]]:
-    """H3 写作节点 → 它所连单元对应的 H3 提示词节点（输出自动挂出，不落盘）。"""
-    out: list[dict[str, Any]] = []
-    for edge in stored_edges:
-        if edge["targetHandle"] != "units" or not edge["source"].startswith("p:unit:"):
-            continue
-        h3_id = edge["source"].replace("p:unit:", "p:h3_prompt:", 1)
-        if h3_id in shown:
-            out.append(_virtual_edge(edge["target"], "h3", h3_id, "in"))
-    return out

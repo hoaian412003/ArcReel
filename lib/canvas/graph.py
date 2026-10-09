@@ -6,28 +6,37 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 NODE_TEXT = "text"
 NODE_IMAGE = "image"
 NODE_IMAGE_GENERATE = "image_generate"
-NODE_H3_WRITER = "h3_writer"
 NODE_VIDEO = "video"
 NODE_AUDIO = "audio"
 NODE_VIDEO_GENERATE = "video_generate"
 NODE_AUDIO_GENERATE = "audio_generate"
+#: 用户自建的分组框：把选中的节点收在一起（子节点带 ``parentId``，位置相对分组）。
+NODE_GROUP = "group"
+#: 资产输出节点：一个 ``asset`` 输出口，携带一张图和它的参考说明。
+NODE_ASSET = "asset"
+#: 文档节点：显示项目里一份文本 / markdown 文件（来源、分集计划…）的内容，只读。
+NODE_MARKDOWN = "markdown"
 #: 可持久化在画布里的节点类型（含运行产出的 video / audio 媒体节点）；哪些允许客户端新建由路由与工具的请求模型限定。
 NODE_TYPES = (
     NODE_TEXT,
     NODE_IMAGE,
     NODE_IMAGE_GENERATE,
-    NODE_H3_WRITER,
     NODE_VIDEO_GENERATE,
     NODE_AUDIO_GENERATE,
     NODE_VIDEO,
     NODE_AUDIO,
+    NODE_GROUP,
+    NODE_ASSET,
+    NODE_MARKDOWN,
 )
 
 #: 供应商节点 → (它产出的媒体句柄 / 句柄数据类型, 产出的媒体节点类型)。
@@ -37,12 +46,8 @@ PROVIDER_MEDIA: dict[str, tuple[str, str]] = {
     NODE_AUDIO_GENERATE: ("audio", NODE_AUDIO),
 }
 
-#: 由项目数据推导、不落盘的节点（集 / 视频单元 / 起始帧联合图 / H3 提示词 / 角色），id 形如 ``p:<kind>:...``。
+#: 由项目数据推导、不落盘的节点（角色 / 场景 / 道具 / 商品），id 形如 ``p:<kind>:...``。
 DERIVED_PREFIX = "p:"
-KIND_EPISODE = "episode"
-KIND_UNIT = "unit"
-KIND_KEYFRAME = "keyframe"
-KIND_H3_PROMPT = "h3_prompt"
 KIND_CHARACTER = "character"
 #: 角色分组里的四个子节点：描述文本 → 图片供应商（参考图 image1）→ 角色资产图。
 KIND_CHAR_TEXT = "char_text"
@@ -56,14 +61,15 @@ KIND_DERIV_SHEET = "deriv_sheet"
 #: 与角色同构的「描述 → 图片供应商 → 资产图」分组：场景 / 道具 / 商品。组及其子节点的种类名为 ``<类型>``、
 #: ``<类型>_text``、``<类型>_gen``、``<类型>_sheet``。
 ASSET_GROUP_TYPES = ("scene", "prop", "product")
+#: 每个资产图旁的「资产」输出节点（一个 ``asset`` 输出口：图 + 参考说明）；种类名 ``char_port`` / ``deriv_port`` / ``<类型>_port``。
+KIND_CHAR_PORT = "char_port"
+KIND_DERIV_PORT = "deriv_port"
 _ASSET_KINDS = tuple(
-    kind for asset in ASSET_GROUP_TYPES for kind in (asset, f"{asset}_text", f"{asset}_gen", f"{asset}_sheet")
+    kind
+    for asset in ASSET_GROUP_TYPES
+    for kind in (asset, f"{asset}_text", f"{asset}_gen", f"{asset}_sheet", f"{asset}_port")
 )
 DERIVED_KINDS = (
-    KIND_EPISODE,
-    KIND_UNIT,
-    KIND_KEYFRAME,
-    KIND_H3_PROMPT,
     KIND_CHARACTER,
     KIND_CHAR_TEXT,
     KIND_CHAR_REF,
@@ -72,10 +78,15 @@ DERIVED_KINDS = (
     KIND_DERIV_TEXT,
     KIND_DERIV_GEN,
     KIND_DERIV_SHEET,
+    KIND_CHAR_PORT,
+    KIND_DERIV_PORT,
     *_ASSET_KINDS,
 )
 #: 派生节点里复用通用节点外观与连线规则的那几类：派生种类 → 它扮演的节点类型。
 DERIVED_NODE_TYPE: dict[str, str] = {
+    # 画布上只有一种分组：角色、场景、道具、商品的分组框都是 ``group``，种类靠节点 id 与 data 区分。
+    KIND_CHARACTER: NODE_GROUP,
+    **dict.fromkeys(ASSET_GROUP_TYPES, NODE_GROUP),
     KIND_CHAR_TEXT: "text",
     KIND_CHAR_REF: "image",
     KIND_CHAR_GEN: "image_generate",
@@ -83,6 +94,8 @@ DERIVED_NODE_TYPE: dict[str, str] = {
     KIND_DERIV_TEXT: "text",
     KIND_DERIV_GEN: "image_generate",
     KIND_DERIV_SHEET: "image",
+    KIND_CHAR_PORT: NODE_ASSET,
+    KIND_DERIV_PORT: NODE_ASSET,
     **{
         kind: node_type
         for asset in ASSET_GROUP_TYPES
@@ -90,6 +103,7 @@ DERIVED_NODE_TYPE: dict[str, str] = {
             (f"{asset}_text", "text"),
             (f"{asset}_gen", "image_generate"),
             (f"{asset}_sheet", "image"),
+            (f"{asset}_port", NODE_ASSET),
         )
     },
 }
@@ -97,29 +111,28 @@ DERIVED_NODE_TYPE: dict[str, str] = {
 #: 句柄的数据类型。连线只允许同类型句柄相连。
 HANDLE_TEXT = "text"
 HANDLE_IMAGE = "image"
-HANDLE_UNIT = "unit"
-HANDLE_H3 = "h3"
 HANDLE_VIDEO = "video"
 HANDLE_AUDIO = "audio"
+#: 资产输出口：携带一张图和它的参考说明，可接到任何接受参考图的输入口。
+HANDLE_ASSET = "asset"
 
 #: ``(节点类型, 句柄 id) → 数据类型``，输入句柄在左、输出句柄在右。
 INPUT_HANDLES: dict[str, dict[str, str]] = {
     NODE_IMAGE_GENERATE: {"prompt": HANDLE_TEXT, "image1": HANDLE_IMAGE},
-    NODE_H3_WRITER: {"units": HANDLE_UNIT},
     NODE_VIDEO_GENERATE: {"prompt": HANDLE_TEXT, "frame": HANDLE_IMAGE},
     NODE_AUDIO_GENERATE: {"text": HANDLE_TEXT},
+    # 资产节点接一张图：这张图就是它的内容；放在资产分组里时，它也是这个项目资产的资产图（见 canvas_publish）。
+    NODE_ASSET: {"image": HANDLE_IMAGE},
 }
 OUTPUT_HANDLES: dict[str, dict[str, str]] = {
     NODE_TEXT: {"text": HANDLE_TEXT},
     NODE_IMAGE: {"image": HANDLE_IMAGE},
     NODE_IMAGE_GENERATE: {"image": HANDLE_IMAGE},
-    NODE_H3_WRITER: {"h3": HANDLE_H3},
     NODE_VIDEO: {"video": HANDLE_VIDEO},
     NODE_AUDIO: {"audio": HANDLE_AUDIO},
     NODE_VIDEO_GENERATE: {"video": HANDLE_VIDEO},
     NODE_AUDIO_GENERATE: {"audio": HANDLE_AUDIO},
-    KIND_UNIT: {"unit": HANDLE_UNIT, "text": HANDLE_TEXT},
-    KIND_KEYFRAME: {"image": HANDLE_IMAGE},
+    NODE_ASSET: {"asset": HANDLE_ASSET},
 }
 
 #: 只由服务端写入的 data 字段。
@@ -132,16 +145,37 @@ STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 BUSY_STATUSES = frozenset({STATUS_QUEUED, STATUS_RUNNING})
 
+
+def utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def status_timestamps(data: dict[str, Any]) -> dict[str, Any]:
+    """状态变化时一并写入的时间戳：``status_at`` 是最近一次状态变化，进入运行 / 结束时再记 ``started_at`` / ``finished_at``。"""
+    status = data.get("status")
+    if status is None:
+        return {}
+    now = utc_now_iso()
+    stamps: dict[str, Any] = {"status_at": now}
+    if status == STATUS_RUNNING:
+        stamps["started_at"] = now
+    elif status not in BUSY_STATUSES:
+        stamps["finished_at"] = now
+    return stamps
+
+
 #: 新建节点的默认 data。
 _DEFAULT_DATA: dict[str, dict[str, Any]] = {
     NODE_TEXT: {"text": ""},
     NODE_IMAGE: {"path": None},
     NODE_IMAGE_GENERATE: {"aspect_ratio": "9:16", "status": STATUS_IDLE},
-    NODE_H3_WRITER: {},
     NODE_VIDEO: {"path": None},
     NODE_AUDIO: {"path": None},
     NODE_VIDEO_GENERATE: {"aspect_ratio": "9:16", "duration_seconds": 5, "status": STATUS_IDLE},
     NODE_AUDIO_GENERATE: {"status": STATUS_IDLE},
+    NODE_GROUP: {"label": "Group"},
+    NODE_ASSET: {},
+    NODE_MARKDOWN: {"file": "", "title": ""},
 }
 
 #: 输出节点相对供应商节点的摆放间距。
@@ -159,7 +193,15 @@ class CanvasGraphError(Exception):
 
 
 def empty_graph() -> dict[str, Any]:
-    return {"revision": 0, "nodes": [], "edges": [], "view": {"episodes": []}, "overrides": {}, "templates": []}
+    return {
+        "revision": 0,
+        "nodes": [],
+        "edges": [],
+        "overrides": {},
+        "notes": {},
+        "meta": {},
+        "templates": [],
+    }
 
 
 def new_id(prefix: str) -> str:
@@ -240,8 +282,99 @@ def patch_node(
     return node
 
 
+def group_nodes(
+    graph: dict[str, Any],
+    node_ids: list[str],
+    label: str,
+    position: dict[str, float],
+    size: dict[str, float],
+) -> dict[str, Any]:
+    """把选中的落盘节点收进一个新分组：分组框放在 ``position``、尺寸 ``size``，子节点位置改成相对分组。
+
+    只收落盘的、还没在别的分组里的节点；项目推导的节点与分组本身不能被收。
+    """
+    chosen = []
+    for node_id in node_ids:
+        node = find_node(graph, node_id)
+        if node["type"] == NODE_GROUP or node.get("parentId"):
+            raise CanvasGraphError("canvas_group_invalid", id=node_id)
+        chosen.append(node)
+    if len(chosen) < 2:
+        raise CanvasGraphError("canvas_group_too_small")
+    group = make_node(
+        NODE_GROUP,
+        position,
+        {"label": label or "Group", "width": float(size["width"]), "height": float(size["height"])},
+    )
+    for node in chosen:
+        node["parentId"] = group["id"]
+        node["position"] = {
+            "x": node["position"]["x"] - group["position"]["x"],
+            "y": node["position"]["y"] - group["position"]["y"],
+        }
+    # React Flow 要求父节点排在子节点前面。
+    graph["nodes"].insert(0, group)
+    return group
+
+
+_GROUP_KINDS = (KIND_CHARACTER, *ASSET_GROUP_TYPES)
+
+
+def set_members(
+    graph: dict[str, Any],
+    node_ids: list[str],
+    group_id: str | None,
+    positions: dict[str, dict[str, float]],
+) -> None:
+    """把落盘节点放进某个分组（用户自建的或项目推导的），或从分组里放出来（``group_id`` 为空）。
+
+    ``positions`` 是网页按新归属算好的位置：放进分组时相对分组，放出来时是画布上的绝对位置。
+    """
+    if group_id is not None:
+        kind = derived_kind(group_id)
+        if kind is None:
+            if find_node(graph, group_id)["type"] != NODE_GROUP:
+                raise CanvasGraphError("canvas_group_invalid", id=group_id)
+        elif kind not in _GROUP_KINDS:
+            raise CanvasGraphError("canvas_group_invalid", id=group_id)
+    for node_id in node_ids:
+        if derived_kind(node_id) is not None:
+            raise CanvasGraphError("canvas_group_invalid", id=node_id)
+        node = find_node(graph, node_id)
+        if node["type"] == NODE_GROUP or node_id == group_id:
+            raise CanvasGraphError("canvas_group_invalid", id=node_id)
+        if group_id is None:
+            node.pop("parentId", None)
+        else:
+            node["parentId"] = group_id
+        if node_id in positions:
+            node["position"] = _position(positions[node_id])
+    if group_id is not None and derived_kind(group_id) is None:
+        # React Flow 要求父节点排在子节点前面。
+        group = find_node(graph, group_id)
+        graph["nodes"].remove(group)
+        graph["nodes"].insert(0, group)
+
+
+def ungroup(graph: dict[str, Any], group_id: str) -> None:
+    """拆开分组：子节点回到画布上的绝对位置，分组框删掉。"""
+    group = find_node(graph, group_id)
+    for node in graph["nodes"]:
+        if node.get("parentId") == group_id:
+            node.pop("parentId")
+            node["position"] = {
+                "x": node["position"]["x"] + group["position"]["x"],
+                "y": node["position"]["y"] + group["position"]["y"],
+            }
+    graph["nodes"] = [n for n in graph["nodes"] if n["id"] != group_id]
+
+
 def remove_node(graph: dict[str, Any], node_id: str) -> None:
     node = find_node(graph, node_id)
+    if node["type"] == NODE_GROUP:
+        # 删分组框 = 拆组，里面的节点保留。
+        ungroup(graph, node_id)
+        return
     if node["data"].get("status") in BUSY_STATUSES:
         raise CanvasGraphError("canvas_node_busy", id=node_id)
     graph["nodes"] = [n for n in graph["nodes"] if n["id"] != node_id]
@@ -252,12 +385,17 @@ def _handle_type(table: dict[str, dict[str, str]], node: dict[str, Any], handle:
     return table.get(node["type"], {}).get(handle or "")
 
 
+def _compatible(out_type: str, in_type: str) -> bool:
+    """同类型句柄可连；``asset`` 输出口还能接到接受图片的输入口（图当参考图，说明随图走）。"""
+    return out_type == in_type or (out_type == HANDLE_ASSET and in_type == HANDLE_IMAGE)
+
+
 def connect(graph: dict[str, Any], source: str, source_handle: str, target: str, target_handle: str) -> dict[str, Any]:
     src = _lookup(graph, source, None)
     dst = _lookup(graph, target, None)
     out_type = _handle_type(OUTPUT_HANDLES, src, source_handle)
     in_type = _handle_type(INPUT_HANDLES, dst, target_handle)
-    if out_type is None or in_type is None or out_type != in_type or source == target:
+    if out_type is None or in_type is None or not _compatible(out_type, in_type) or source == target:
         raise CanvasGraphError("canvas_invalid_connection")
     for edge in graph["edges"]:
         if (edge["source"], edge["sourceHandle"], edge["target"], edge["targetHandle"]) == (
@@ -302,6 +440,23 @@ def _sheet_of_generator(node_id: str) -> str:
     return node_id.replace(f"p:{kind}:", f"p:{kind[: -len('_gen')]}_sheet:", 1)
 
 
+def resolve_asset_node(graph: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    """资产节点的有效内容：图取自接在它 ``image`` 口上的节点（供应商节点取最近一次产物），名称与类型取自所在的资产分组。"""
+    data = dict(node["data"])
+    group = next((n for n in graph["nodes"] if n["id"] == node.get("parentId") and n["type"] == NODE_GROUP), None)
+    if group is not None and group["data"].get("asset"):
+        data["asset"] = group["data"]["asset"]
+        data["name"] = str(group["data"].get("label") or data.get("name") or "").strip()
+    edge = next((e for e in graph["edges"] if e["target"] == node["id"] and e["targetHandle"] == "image"), None)
+    source = next((n for n in graph["nodes"] if edge and n["id"] == edge["source"]), None)
+    if source is not None and source["type"] in PROVIDER_MEDIA:
+        source = latest_output(graph, source["id"], edge["sourceHandle"] if edge else "image")
+    if source is not None and isinstance(source["data"].get("path"), str) and source["data"]["path"]:
+        data["path"] = source["data"]["path"]
+        data["version"] = source["data"].get("version")
+    return {**node, "data": data}
+
+
 def _incoming(
     graph: dict[str, Any], node_id: str, handle: str, derived: Mapping[str, dict[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
@@ -325,6 +480,8 @@ def _incoming(
                 latest = latest_output(graph, source["id"], e["sourceHandle"])
                 if latest is not None:
                     sources.append(latest)
+            elif source["type"] == NODE_ASSET:
+                sources.append(resolve_asset_node(graph, source))
             else:
                 sources.append(source)
     return sorted(sources, key=lambda n: (_abs_position(n)["y"], _abs_position(n)["x"]))
@@ -338,23 +495,97 @@ _INPUT_HANDLE_NAMES: dict[str, tuple[str, str | None]] = {
 }
 
 
-def resolve_generate_inputs(
-    graph: dict[str, Any], node_id: str, derived: Mapping[str, dict[str, Any]] | None = None
-) -> tuple[str, list[str]]:
-    """供应商节点的输入：``(拼接后的文本, 参考图项目相对路径列表)``。
+def _reference_label(node: dict[str, Any]) -> str:
+    data = node["data"]
+    if node["type"] == NODE_ASSET:
+        return str(data.get("note") or default_note(data))
+    return str(data.get("note") or data.get("label") or data.get("name") or "")
 
-    文本来自文本节点与视频单元正文；参考图来自图片节点与起始帧联合图（图片节点的 ``refs``、视频节点的
-    ``frame``）。只收已有产物的参考图，占位中的上游图片（还没有 path）被跳过；语音节点没有参考图。
+
+def _mention_index(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """提示词里 ``@名称`` 能指到的资产：名称（衍生为 ``名称/衍生名``）→ 它的资产节点（已解析出图与名称）。重名时先出现的优先。"""
+    index: dict[str, dict[str, Any]] = {}
+    for node in graph["nodes"]:
+        if node["type"] != NODE_ASSET:
+            continue
+        resolved = resolve_asset_node(graph, node)
+        data = resolved["data"]
+        name = str(data.get("name") or "").strip()
+        if not name:
+            continue
+        key = f"{name}/{data['derivative']}" if data.get("derivative") else name
+        index.setdefault(key, resolved)
+    return index
+
+
+def expand_mentions(
+    prompt: str,
+    refs: list[tuple[str, str]],
+    index: Mapping[str, dict[str, Any]],
+    *,
+    strict: bool,
+) -> tuple[str, list[tuple[str, str]]]:
+    """把提示词里的 ``@资产名`` 换成 ``图N``，并把该资产的图（连同说明）补进参考图列表。
+
+    已经连着的参考图沿用原编号，没连的追加在后面；同一资产多次出现编号一致。名称按长度从长到短匹配，
+    ``@Xe Land Rover 2`` 不会被 ``@Xe Land Rover`` 抢走；``@[名称]`` 与 ``@名称`` 两种写法都认。没有对应资产的 ``@xxx`` 原样保留。资产还没有图时：
+    ``strict`` 抛 ``canvas_mention_no_image``，否则原样保留（读画布时不能因此失败）。
     """
+    if "@" not in prompt or not index:
+        return prompt, refs
+    alternatives = "|".join(re.escape(key) for key in sorted(index, key=len, reverse=True))
+    # 两种写法：项目剧本里的 ``@[名称]``（括号界定，名称里可含任何字符）和随手写的 ``@名称``。
+    pattern = re.compile(rf"@\[({alternatives})\]|@({alternatives})(?!\w)")
+    merged = list(refs)
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        data = index[name]["data"]
+        path = data.get("path")
+        if not isinstance(path, str) or not path:
+            if strict:
+                raise CanvasGraphError("canvas_mention_no_image", name=name)
+            return match.group(0)
+        for position, (existing, _label) in enumerate(merged, start=1):
+            if existing == path:
+                return f"图{position}"
+        merged.append((path, str(data.get("note") or name)))
+        return f"图{len(merged)}"
+
+    return pattern.sub(_replace, prompt), merged
+
+
+def _resolved_inputs(
+    graph: dict[str, Any], node_id: str, derived: Mapping[str, dict[str, Any]] | None, *, strict: bool
+) -> tuple[str, list[tuple[str, str]]]:
     node = find_node(graph, node_id)
     handles = _INPUT_HANDLE_NAMES.get(node["type"])
     if handles is None:
         raise CanvasGraphError("canvas_node_not_runnable", id=node_id)
-    text_handle, ref_handle = handles
+    text_handle = handles[0]
     texts = [str(n["data"].get("text") or "").strip() for n in _incoming(graph, node_id, text_handle, derived)]
     prompt = "\n\n".join(t for t in texts if t)
-    refs = [n["data"]["path"] for n in _reference_nodes(graph, node_id, derived)] if ref_handle else []
+    refs = [(n["data"]["path"], _reference_label(n)) for n in _reference_nodes(graph, node_id, derived)]
+    if node["type"] == NODE_IMAGE_GENERATE:
+        prompt, refs = expand_mentions(prompt, refs, _mention_index(graph), strict=strict)
     return prompt, refs
+
+
+def resolve_generate_inputs(
+    graph: dict[str, Any],
+    node_id: str,
+    derived: Mapping[str, dict[str, Any]] | None = None,
+    *,
+    strict: bool = False,
+) -> tuple[str, list[str]]:
+    """供应商节点的输入：``(拼接后的文本, 参考图项目相对路径列表)``。
+
+    文本来自文本节点与视频单元正文；参考图来自图片节点与起始帧联合图（图片节点的 ``image1``、视频节点的
+    ``frame``）。只收已有产物的参考图，占位中的上游图片（还没有 path）被跳过；语音节点没有参考图。
+    图片供应商的提示词里的 ``@资产名`` 会换成 ``图N`` 并补进参考图（见 :func:`expand_mentions`）。
+    """
+    prompt, refs = _resolved_inputs(graph, node_id, derived, strict=strict)
+    return prompt, [path for path, _label in refs]
 
 
 def _reference_nodes(
@@ -370,18 +601,53 @@ def _reference_nodes(
     ]
 
 
-def resolve_reference_labels(
-    graph: dict[str, Any], node_id: str, derived: Mapping[str, dict[str, Any]] | None = None
-) -> list[str]:
-    """与 :func:`resolve_generate_inputs` 返回的参考图等长同序的人读名称，用于「图N」编号说明。"""
-    labels = []
-    for n in _reference_nodes(graph, node_id, derived):
-        data = n["data"]
-        if n["type"] == KIND_KEYFRAME:
-            labels.append(f"keyframe {data.get('sheet_id') or ''}".strip())
+_NOTE_ROLES = ("sheet", "derivative", "reference")
+
+
+def default_note(data: Mapping[str, Any]) -> str:
+    """资产图的默认参考说明：随图一起交给供应商，让它知道这张图是谁。可被用户改写。"""
+    name = str(data.get("name") or "")
+    if data.get("role") == "reference":
+        return f"Reference photo of {name}."
+    if data.get("role") == "derivative" or data.get("derivative"):
+        return f"{name}, {data.get('derivative') or ''} version.".replace(" ,", ",")
+    asset = str(data.get("asset") or "character")
+    prefix = {"character": "Character sheet of", "scene": "Scene:", "prop": "Prop:", "product": "Product:"}.get(
+        asset, "Reference:"
+    )
+    return f"{prefix} {name}."
+
+
+def apply_notes(derived_nodes: list[dict[str, Any]], notes: Mapping[str, str]) -> None:
+    """给派生的资产图节点写上参考说明：用户改写过的优先，否则用默认说明。"""
+    for node in derived_nodes:
+        data = node["data"]
+        if node["type"] == "image" and data.get("role") in _NOTE_ROLES:
+            data["note"] = str(notes.get(node["id"]) or default_note(data))
+
+
+def set_note(graph: dict[str, Any], node_id: str, note: str) -> None:
+    """设置节点的参考说明；派生节点（资产图）存在画布的 ``notes``，落盘节点存在 data 里。空串恢复默认 / 清除。"""
+    text = note.strip()
+    if derived_kind(node_id) is not None:
+        if text:
+            graph["notes"][node_id] = text
         else:
-            labels.append(str(data.get("label") or data.get("name") or ""))
-    return labels
+            graph["notes"].pop(node_id, None)
+        return
+    data = find_node(graph, node_id)["data"]
+    if text:
+        data["note"] = text
+    else:
+        data.pop("note", None)
+
+
+def resolve_reference_labels(
+    graph: dict[str, Any], node_id: str, derived: Mapping[str, dict[str, Any]] | None = None, *, strict: bool = False
+) -> list[str]:
+    """与 :func:`resolve_generate_inputs` 返回的参考图等长同序的人读名称（优先参考说明），用于「图N」编号说明。"""
+    _prompt, refs = _resolved_inputs(graph, node_id, derived, strict=strict)
+    return [label for _path, label in refs]
 
 
 def reference_legend(labels: list[str]) -> str:
@@ -422,7 +688,10 @@ def add_run_outputs(graph: dict[str, Any], node_id: str, prompt: str) -> dict[st
     x = source["position"]["x"] + OUTPUT_OFFSET_X
     y = source["position"]["y"] + siblings * OUTPUT_STACK_GAP
     media_node = make_node(media_type, {"x": x, "y": y})
-    media_node["data"].update({"status": STATUS_QUEUED, "prompt": prompt, "generated": True})
+    now = utc_now_iso()
+    media_node["data"].update(
+        {"status": STATUS_QUEUED, "prompt": prompt, "generated": True, "submitted_at": now, "status_at": now}
+    )
     add_node(graph, media_node)
     graph["edges"].append(
         {
@@ -436,12 +705,56 @@ def add_run_outputs(graph: dict[str, Any], node_id: str, prompt: str) -> dict[st
     return media_node
 
 
+#: 已移除的集相关推导节点种类；旧画布里残留的这类引用在读盘时清掉。
+_REMOVED_EPISODE_KINDS = ("episode", "unit", "keyframe", "h3_prompt")
+
+
+def wire_result_to_asset(graph: dict[str, Any], generator_id: str, media_id: str) -> None:
+    """一次运行出了图：生成器在某个资产分组里、且这个组只有一个（非衍生）资产节点时，最新的图接到资产节点上取代旧的。"""
+    generator = find_node(graph, generator_id)
+    group = next((n for n in graph["nodes"] if n["id"] == generator.get("parentId") and n["type"] == NODE_GROUP), None)
+    if group is None or not group["data"].get("asset"):
+        return
+    assets = [
+        n
+        for n in graph["nodes"]
+        if n.get("parentId") == group["id"] and n["type"] == NODE_ASSET and not n["data"].get("derivative")
+    ]
+    if len(assets) != 1:
+        return
+    target = assets[0]["id"]
+    graph["edges"] = [e for e in graph["edges"] if not (e["target"] == target and e["targetHandle"] == "image")]
+    graph["edges"].append(
+        {
+            "id": new_id("edge"),
+            "source": media_id,
+            "sourceHandle": "image",
+            "target": target,
+            "targetHandle": "image",
+        }
+    )
+
+
 def normalize_legacy(graph: dict[str, Any]) -> None:
     """把旧版落盘的画布迁移到当前形状（读盘时调用，下次写盘即固化）。
 
     - 图片供应商的参考图输入句柄 ``refs`` 改名 ``image1``；
-    - 供应商不再输出「使用的提示词」文本节点：删掉这些自动生成的文本节点及其连线。
+    - 供应商不再输出「使用的提示词」文本节点：删掉这些自动生成的文本节点及其连线；
+    - 集视图已移除：丢弃 ``view``、H3 写作节点，以及连到已不存在的集 / 单元 / 起始帧联合图推导节点的连线。
     """
+    graph.pop("view", None)
+    removed = {n["id"] for n in graph["nodes"] if n["type"] == "h3_writer"}
+    graph["nodes"] = [n for n in graph["nodes"] if n["id"] not in removed]
+    gone = tuple(f"{DERIVED_PREFIX}{kind}:" for kind in _REMOVED_EPISODE_KINDS)
+    graph["edges"] = [
+        e
+        for e in graph["edges"]
+        if e["source"] not in removed
+        and e["target"] not in removed
+        and not e["source"].startswith(gone)
+        and not e["target"].startswith(gone)
+    ]
+    graph["overrides"] = {k: v for k, v in graph.get("overrides", {}).items() if not k.startswith(gone)}
     providers = {n["id"] for n in graph["nodes"] if n["type"] in PROVIDER_MEDIA}
     for edge in graph["edges"]:
         if edge.get("targetHandle") == "refs":
@@ -463,7 +776,7 @@ def branch_plan(
 ) -> list[dict[str, str]]:
     """运行 ``target_id`` 之前须先跑的上游节点，先上游后下游，最后一项是 ``target_id`` 自己。
 
-    只收「还没有可用产物」或「产物已过期」的供应商节点与起始帧联合图节点，已是最新的上游不重跑。
+    只收「还没有可用产物」或「产物已过期」的供应商节点，已是最新的上游不重跑。
     """
     node = find_node(graph, target_id)
     if node["type"] != NODE_IMAGE_GENERATE:
@@ -473,9 +786,6 @@ def branch_plan(
     seen: set[str] = set()
 
     def needs_run(upstream: dict[str, Any]) -> str | None:
-        if upstream["type"] == KIND_KEYFRAME:
-            data = upstream["data"]
-            return "missing" if not data.get("path") else ("stale" if data.get("stale") else None)
         if upstream["type"] != NODE_IMAGE_GENERATE:
             return None
         if latest_output(graph, upstream["id"], "image") is None:
@@ -509,7 +819,7 @@ def _node_or_none(graph: dict[str, Any], node_id: str) -> dict[str, Any] | None:
 
 
 #: 模板里保留的节点类型：只带可复用的结构（文本、供应商），不带随项目走的产物图片与项目推导节点。
-TEMPLATE_NODE_TYPES = (NODE_TEXT, NODE_IMAGE_GENERATE, NODE_H3_WRITER, NODE_VIDEO_GENERATE, NODE_AUDIO_GENERATE)
+TEMPLATE_NODE_TYPES = (NODE_TEXT, NODE_IMAGE_GENERATE, NODE_VIDEO_GENERATE, NODE_AUDIO_GENERATE)
 
 
 def make_template(graph: dict[str, Any], name: str, node_ids: list[str]) -> dict[str, Any]:

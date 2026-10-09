@@ -12,7 +12,7 @@ export function tidyLayout(
   nodes: readonly CanvasNode[],
   edges: readonly CanvasEdge[],
 ): Record<string, { x: number; y: number }> {
-  const movable = nodes.filter((n) => !n.derived);
+  const movable = nodes.filter((n) => !n.parentId);
   if (movable.length === 0) return {};
   const ids = new Set(movable.map((n) => n.id));
   const incoming = new Map<string, string[]>(movable.map((n) => [n.id, []]));

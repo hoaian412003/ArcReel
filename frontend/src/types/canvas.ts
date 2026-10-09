@@ -1,13 +1,12 @@
 /** 节点画布的后端契约类型。 */
 
-export type CanvasNodeType = "text" | "image" | "image_generate" | "h3_writer" | "video_generate" | "audio_generate";
-/** 由项目数据推导的只读节点：集分组、视频单元、起始帧联合图、H3 提示词。 */
-export type CanvasDerivedType = "episode" | "unit" | "keyframe" | "h3_prompt" | "character";
+export type CanvasNodeType = "text" | "image" | "image_generate" | "video_generate" | "audio_generate" | "group" | "markdown";
+/** 由项目数据推导的只读节点：资产输出（分组框一律是 group）。 */
+export type CanvasDerivedType = "asset";
 /** 运行产出的媒体节点。 */
 export type CanvasMediaNodeType = "video" | "audio";
 export type CanvasAnyNodeType = CanvasNodeType | CanvasDerivedType | CanvasMediaNodeType;
-export type CanvasHandleType = "text" | "image" | "unit" | "h3" | "video" | "audio";
-export type H3Status = "current" | "stale" | "missing";
+export type CanvasHandleType = "text" | "image" | "video" | "audio" | "asset";
 export type CanvasNodeStatus = "idle" | "queued" | "running" | "done" | "failed";
 
 export interface CanvasNodeData {
@@ -28,33 +27,45 @@ export interface CanvasNodeData {
   status?: CanvasNodeStatus;
   task_id?: string;
   error?: string | null;
+  /** 运行提交 / 最近一次状态变化 / 开始运行 / 结束的时间（ISO，UTC）。 */
+  submitted_at?: string;
+  status_at?: string;
+  started_at?: string;
+  finished_at?: string;
   version?: number;
   /** 由某次运行自动挂出的输出节点。 */
   generated?: boolean;
   prompt?: string;
+  /** 参考说明：这张图被别的节点当参考图时，随图一起交给供应商（如「This is his face…」）。资产图有默认值。 */
+  note?: string;
+  /** 流水线节点：所在集 / 单元 / 步骤（总览据此跳转，运行据此走已有生成链路）；compact 表示显示成紧凑卡片。 */
+  ep?: number;
+  unit?: string;
+  step?: string;
+  sheet?: string;
+  cell?: string;
+  compact?: boolean;
+  /** 单元文本 / 导演说明节点：剧本里当前的值，与节点上的文本不同就可以「存回剧本」。 */
+  script_value?: string;
+  /** H3 提示词节点：current / stale / missing。 */
+  h3_status?: string;
+  /** markdown 文档节点：项目里的文件与标题。 */
+  file?: string;
+  title?: string;
+  /** 分组节点：它是第几集的流程。 */
+  episode?: number;
+  /** 刚放进画布的资产分组：网页按节点实际尺寸排一次版后清除。 */
+  autolayout?: boolean;
+  /** group 节点：分组框的大小（标题用 label）。 */
+  width?: number;
+  height?: number;
   /** 读时算出：这张图的输入已不同于生成它时的输入。 */
   stale?: boolean;
-  /** 派生节点：episode / unit / keyframe / h3_prompt / character。 */
-  /** 资产分组及其子节点：资产名（内容取自项目里的条目）。 */
+  /** asset 节点（服务端按所在资产分组算出）：资产名与类型；分组节点上 `asset` 是它对应的项目条目类型，标题在 `label`。 */
   name?: string;
-  /** 分组所属的资产类型；缺省按角色。 */
   asset?: "character" | "scene" | "prop" | "product";
-  /** 角色分组里的图片节点：reference 参考图（可上传）/ sheet 资产图。 */
-  role?: "reference" | "sheet" | "derivative";
-  /** 角色衍生节点：衍生名（`name` 仍是角色名）。 */
+  /** asset 节点：衍生名（如「幼年」）；有衍生名的资产节点不发布成项目的资产图。 */
   derivative?: string;
-  episode?: number;
-  title?: string;
-  unit_count?: number;
-  h3?: boolean;
-  unit_id?: string;
-  h3_status?: H3Status | null;
-  sheet_id?: string;
-  scene?: string | null;
-  problem?: { code: string; name: string } | null;
-  cell_count?: number;
-  approved?: boolean;
-  sections?: Record<string, string> | null;
   [key: string]: unknown;
 }
 
@@ -63,8 +74,7 @@ export interface CanvasNode {
   type: CanvasAnyNodeType;
   position: { x: number; y: number };
   data: CanvasNodeData;
-  /** 服务端推导的节点：只读，位置相对 parentId（集分组）。 */
-  derived?: boolean;
+  /** 所在分组；位置相对分组。 */
   parentId?: string;
   width?: number;
   height?: number;
@@ -76,13 +86,6 @@ export interface CanvasEdge {
   sourceHandle: string;
   target: string;
   targetHandle: string;
-  /** 项目数据推导出的连线，不可删除。 */
-  virtual?: boolean;
-}
-
-export interface CanvasEpisodeOption {
-  episode: number;
-  title: string;
 }
 
 export interface CanvasTemplateSummary {
@@ -101,10 +104,6 @@ export interface CanvasGraph {
   revision: number;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
-  /** 画布上展示项目节点的集。 */
-  view: { episodes: number[] };
-  /** 可展示的集（仅参考生视频项目有）。 */
-  episodes: CanvasEpisodeOption[];
   templates: CanvasTemplateSummary[];
 }
 
@@ -114,4 +113,20 @@ export interface CanvasRunResult {
   task_ids: string[];
   text_node_id: string;
   image_node_id: string;
+}
+
+export type FlowStepState = "done" | "stale" | "empty";
+
+export interface CanvasFlowUnit {
+  unit_id: string;
+  steps: Record<string, { state: FlowStepState; node_id: string | null }>;
+}
+
+export interface CanvasFlowEpisode {
+  episode: number;
+  title: string;
+  source: boolean;
+  plan: boolean;
+  group_id: string | null;
+  units: CanvasFlowUnit[];
 }

@@ -8,37 +8,40 @@ import {
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  SelectionMode,
   useEdgesState,
+  useKeyPress,
   useNodesState,
   useReactFlow,
   type Connection,
   type Edge,
+  type OnBeforeDelete,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Bot, Check, Library, UserPlus, ImagePlus, LayoutGrid, Layers, Loader2, Mic, PenLine, Save, Sparkles, Trash2, Type, Video, Workflow } from "lucide-react";
+import { BoxSelect, Group, Library, UserPlus, ImagePlus, LayoutGrid, Loader2, Mic, Save, Sparkles, Trash2, Type, Video, Workflow, Download, ListChecks } from "lucide-react";
 import { API } from "@/api";
 import { AssetFormModal } from "@/components/assets/AssetFormModal";
 import { AssetPickerModal } from "@/components/assets/AssetPickerModal";
-import { useCharacterAssets } from "@/components/canvas/lorebook/useCharacterAssets";
-import { useProjectsStore } from "@/stores/projects-store";
-import { enqueueKeyframeSheet } from "@/actions/generation";
+import { enqueueAutoDub, enqueueKeyframeSheet, enqueueReferenceVideoUnit } from "@/actions/generation";
 import { isActiveStatus, useTaskRowsByIds } from "@/stores/tasks-store";
+import { FlowModal } from "./FlowModal";
+import { MarkdownModal } from "./MarkdownModal";
 import { useAppStore } from "@/stores/app-store";
 import { useClaudeStore } from "@/stores/claude-store";
+import { useCanvasContextStore } from "@/stores/canvas-context-store";
 import { errMsg } from "@/utils/async";
 import type { CanvasBranchStep, CanvasGraph, CanvasNodeData, CanvasNodeType } from "@/types/canvas";
 import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS } from "@/components/ui/darkroom-tokens";
 import {
   CanvasActionsContext,
-  CanvasBusyContext,
-  CharacterNodeContextValue,
   type CanvasActions,
-  type CharacterNodeContext,
   type ImageModelChoices,
+  CanvasBusyContext,
 } from "./canvas-context";
 import { tidyLayout } from "./canvas-layout";
+import { layoutGroup } from "./canvas-elk";
 import { BranchStepFailed, runBranch } from "./branch-runner";
-import { isValidCanvasConnection, lineageOf } from "./canvas-rules";
+import { buildAgentNote, isValidCanvasConnection, lineageOf, referencedNodeIds } from "./canvas-rules";
 import { canvasNodeTypes, type CanvasFlowNode } from "./CanvasNodes";
 import { useCanvasGraph } from "./use-canvas-graph";
 
@@ -49,9 +52,27 @@ const DIMMED_OPACITY = 0.28;
 /** 取景留白（px）：顶部让出工具栏（两行按钮），底部让出 Agent 输入框。 */
 const FRAME_PAD = { top: 150, right: 48, bottom: 100, left: 48 } as const;
 /** 取景缩放下限：内容再大也不缩到看不清字，超出的部分靠平移。 */
-const FRAME_MIN_ZOOM = 0.5;
+const FRAME_MIN_ZOOM = 0.7;
 /** 小地图抬高一截，让出右下角的 Agent 按钮。 */
+const DELETE_KEYS = ["Backspace", "Delete"];
+/** 按住这些键拖动 = 框选一片区域（Mac 的 Cmd、其他系统的 Ctrl，Shift 同样可用）。 */
+/** React Flow 给 group 类型的节点自带灰底和边框；分组框的外观由组件自己画，这里清掉。 */
+const GROUP_FRAME_RESET = { background: "transparent", border: "none", padding: 0, boxShadow: "none" } as const;
+const GROUP_NODE_TYPES: ReadonlySet<string> = new Set(["group"]);
+const SELECTION_KEYS = ["Meta", "Control", "Shift"];
+/** 选择模式下仍可用鼠标中键 / 右键拖动画布。 */
+const PAN_BUTTONS = [1, 2];
+const GROUP_PADDING = 40;
+/** 组内节点尺寸连续这么久没变，才认为图片等内容加载完、可以排版。 */
+const AUTOLAYOUT_SETTLE_MS = 800;
+const GROUP_HEADER = 52;
+const DEFAULT_EDGE_OPTIONS = { style: { strokeWidth: 1.8, stroke: "rgba(255,255,255,0.62)" } } as const;
 const MINIMAP_STYLE = { marginBottom: 76 } as const;
+/** 工具栏按功能分成四组（创建 / 供应商 / 项目资产 / 视图），组内按钮扁平、组与组之间靠外框分开。 */
+const CLUSTER_CLS =
+  "pointer-events-auto flex items-center gap-0.5 rounded-[11px] border border-hairline bg-bg-grad-a/85 p-1 shadow-lg backdrop-blur";
+const TOOL_BTN_CLS =
+  "inline-flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium text-text-2 transition-colors hover:bg-white/10 hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
 
 /** 节点内容签名：服务端数据没变（位置、data、分组）就沿用上一个节点对象，React Flow 不会重绘它。 */
 function nodeSignature(node: CanvasGraph["nodes"][number]): string {
@@ -73,8 +94,7 @@ function toFlowNodes(
       return existing;
     }
     signatures.set(node.id, signature);
-    const derived = node.derived === true;
-    const group = node.type === "episode" || node.type === "character";
+    const group = node.type === "group";
     const flowNode: CanvasFlowNode = {
       id: node.id,
       type: node.type,
@@ -82,10 +102,9 @@ function toFlowNodes(
       data: node.data,
       selected: existing?.selected ?? false,
       ...(node.parentId ? { parentId: node.parentId } : {}),
-      ...(group ? { style: { width: node.width, height: node.height }, zIndex: -1 } : {}),
-      // 项目推导的节点只读：不能删，也不能单独拖离集分组（拖动整个分组）。
-      draggable: !derived || group,
-      deletable: !derived,
+      ...(group
+        ? { style: { ...GROUP_FRAME_RESET, width: node.data.width, height: node.data.height }, zIndex: -1 }
+        : {}),
     };
     return flowNode;
   });
@@ -116,9 +135,7 @@ function toFlowEdges(graph: CanvasGraph, previous: readonly Edge[]): Edge[] {
       sourceHandle: e.sourceHandle,
       target: e.target,
       targetHandle: e.targetHandle,
-      deletable: !e.virtual,
       animated,
-      ...(e.virtual ? { style: VIRTUAL_EDGE_STYLE } : {}),
     };
     return edge;
   });
@@ -126,36 +143,40 @@ function toFlowEdges(graph: CanvasGraph, previous: readonly Edge[]): Edge[] {
   return unchanged ? (previous as Edge[]) : next;
 }
 
-const VIRTUAL_EDGE_STYLE = { strokeDasharray: "4 4", opacity: 0.6 };
-
-/** 派生单元节点 id `p:unit:<集>:<单元>` → 集号与单元 id。 */
-function parseUnitNodeId(id: string): { episode: number; unitId: string } | null {
-  const [prefix, kind, episode, ...rest] = id.split(":");
-  const number = Number(episode);
-  return prefix === "p" && kind === "unit" && Number.isInteger(number) && rest.length > 0
-    ? { episode: number, unitId: rest.join(":") }
-    : null;
-}
 
 function CanvasSurface({ projectName }: { projectName: string }) {
   const { t } = useTranslation(["dashboard", "assets"]);
   const pushToast = useAppStore((s) => s.pushToast);
   const agentOpen = useClaudeStore((s) => s.openProject === projectName);
-  const agentPending = useClaudeStore((s) => s.pending[projectName] ?? false);
-  const askAgent = useClaudeStore((s) => s.ask);
-  const characters = useProjectsStore((s) => s.currentProjectData?.characters);
-  const scenes = useProjectsStore((s) => s.currentProjectData?.scenes);
-  const props = useProjectsStore((s) => s.currentProjectData?.props);
-  const products = useProjectsStore((s) => s.currentProjectData?.products);
-  const characterAssets = useCharacterAssets(projectName);
-  const [addingCharacter, setAddingCharacter] = useState(false);
+  // 新建分组：先选这个分组对应哪种项目条目，再填名称和描述。
+  const [newGroupMenu, setNewGroupMenu] = useState(false);
+  const [addingGroup, setAddingGroup] = useState<"character" | "scene" | "prop" | "product" | null>(null);
   const [pickingCharacter, setPickingCharacter] = useState(false);
+  const [flowOpen, setFlowOpen] = useState(false);
+  const [markdown, setMarkdown] = useState<{ file: string; title: string } | null>(null);
+  // 起始帧联合图 / 单元视频 / 配音走流水线任务：记下 任务 id → 节点 id，任务在跑时节点显示「运行中」，跑完重读画布。
+  const [tracked, setTracked] = useState<Record<string, string>>({});
+  const trackedRows = useTaskRowsByIds(Object.keys(tracked));
   const scrollTarget = useAppStore((s) => s.scrollTarget);
   const clearScrollTarget = useAppStore((s) => s.clearScrollTarget);
   const { graph, error, reload } = useCanvasGraph(projectName, agentOpen);
+  const activeTaskIds = useMemo(
+    () =>
+      Object.keys(tracked).filter((taskId) => {
+        const row = trackedRows.get(taskId);
+        return !row || isActiveStatus(row.status);
+      }),
+    [tracked, trackedRows],
+  );
+  const busyNodeIds = useMemo(() => new Set(activeTaskIds.map((taskId) => tracked[taskId] ?? "")), [activeTaskIds, tracked]);
+  const previousActive = useRef(0);
+  useEffect(() => {
+    if (activeTaskIds.length < previousActive.current) void reload();
+    previousActive.current = activeTaskIds.length;
+  }, [activeTaskIds, reload]);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const { screenToFlowPosition, getNodes, getNodesBounds, setViewport } = useReactFlow<CanvasFlowNode, Edge>();
+  const { screenToFlowPosition, getNodes, getInternalNode, getNodesBounds, setViewport } = useReactFlow<CanvasFlowNode, Edge>();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -190,12 +211,6 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const [templateName, setTemplateName] = useState("");
   const [branch, setBranch] = useState<{ steps: CanvasBranchStep[]; current: number | null } | null>(null);
   const [imageModels, setImageModels] = useState<ImageModelChoices>({ options: [], providerNames: {}, modelNames: {} });
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [instruction, setInstruction] = useState("");
-  // 已入队、正在跟踪的任务 → 它所属的节点键（H3 写作节点 id / `集:联合图`）。
-  const [tracked, setTracked] = useState<Record<string, string>>({});
-  const trackedRows = useTaskRowsByIds(Object.keys(tracked));
-
   useEffect(() => {
     graphRef.current = graph;
   }, [graph]);
@@ -219,56 +234,13 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     setEdges((prev) => toFlowEdges(graph, prev));
     if (!fitted.current && graph.nodes.length > 0) {
       fitted.current = true;
-      requestAnimationFrame(() => requestAnimationFrame(() => frame(null, 1)));
+      // 首次打开从第一个分组看起（放得下就按它取景），而不是把所有内容缩成看不清的一整张。
+      const first = graph.nodes.find((n) => n.type === "group");
+      const ids = first ? [first.id, ...graph.nodes.filter((n) => n.parentId === first.id).map((n) => n.id)] : null;
+      requestAnimationFrame(() => requestAnimationFrame(() => frame(ids, 1)));
     }
   }, [graph, setNodes, setEdges, frame]);
 
-  // 任务行还没进 store 时按进行中算；终态后节点恢复可点，并重新读一次画布拿到新产物。
-  const activeTaskIds = useMemo(
-    () => Object.keys(tracked).filter((taskId) => {
-      const row = trackedRows.get(taskId);
-      return row === undefined || isActiveStatus(row.status);
-    }),
-    [tracked, trackedRows],
-  );
-  const previousActive = useRef(0);
-  useEffect(() => {
-    if (activeTaskIds.length < previousActive.current) void reload();
-    previousActive.current = activeTaskIds.length;
-  }, [activeTaskIds, reload]);
-
-  const busyNodeIds = useMemo(() => new Set(activeTaskIds.map((taskId) => tracked[taskId])), [activeTaskIds, tracked]);
-
-  const characterContext = useMemo<CharacterNodeContext>(
-    () => ({ characters: characters ?? {}, assets: characterAssets }),
-    [characters, characterAssets],
-  );
-
-  // 角色的增删与资产图变化（生成完成、版本恢复）发生在项目数据里，画布上对应的角色节点要跟着重读。
-  const characterSignature = useMemo(() => {
-    const sheetOf = (item: object): string =>
-      JSON.stringify([
-        (item as { description?: string }).description ?? "",
-        (item as { character_sheet?: string }).character_sheet ?? "",
-        (item as { scene_sheet?: string }).scene_sheet ?? "",
-        (item as { prop_sheet?: string }).prop_sheet ?? "",
-        (item as { product_sheet?: string }).product_sheet ?? "",
-        (item as { reference_image?: string }).reference_image ?? "",
-        Object.entries((item as { derivatives?: Record<string, { character_sheet?: string; description: string }> }).derivatives ?? {}).map(
-          ([k, d]) => [k, d.character_sheet ?? "", d.description],
-        ),
-      ]);
-    const buckets: (Record<string, object> | undefined)[] = [characters, scenes, props, products];
-    return buckets
-      .map((bucket) => Object.entries(bucket ?? {}).map(([name, item]) => `${name}=${sheetOf(item)}`).join("|"))
-      .join("||");
-  }, [characters, scenes, props, products]);
-  const previousSignature = useRef(characterSignature);
-  useEffect(() => {
-    if (previousSignature.current === characterSignature) return;
-    previousSignature.current = characterSignature;
-    void reload();
-  }, [characterSignature, reload]);
 
   const guarded = useCallback(
     async (action: () => Promise<unknown>, failureKey: "node_canvas_action_failed" | "node_canvas_run_failed" = "node_canvas_action_failed") => {
@@ -283,16 +255,60 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     [pushToast, reload, t],
   );
 
+  useEffect(() => {
+    useCanvasContextStore.getState().register(projectName, {
+      nodeIds: () => graphRef.current?.nodes.map((n) => n.id) ?? [],
+      compose: (text, contextIds) => {
+        const nodes = graphRef.current?.nodes ?? [];
+        return buildAgentNote(text, referencedNodeIds(text, contextIds, nodes), nodes);
+      },
+    });
+    return () => useCanvasContextStore.getState().register(projectName, null);
+  }, [projectName]);
+
   const actions = useMemo<CanvasActions>(
     () => ({
       projectName,
       setText: (nodeId, text) => guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { text } })),
+      setNote: (nodeId, note) => guarded(() => API.setCanvasNodeNote(projectName, nodeId, note)),
       setAspectRatio: (nodeId, aspectRatio) =>
         guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { aspect_ratio: aspectRatio } })),
       setData: (nodeId, data) => guarded(() => API.updateCanvasNode(projectName, nodeId, { data })),
       setModel: (nodeId, model) => guarded(() => API.updateCanvasNode(projectName, nodeId, { data: { model: model || null } })),
       imageModels,
+      uploadImage: (nodeId, file) => guarded(() => API.fillCanvasImage(projectName, nodeId, file)),
+      resizeGroup: (nodeId, position, width, height) =>
+        guarded(() => API.updateCanvasNode(projectName, nodeId, { position, data: { width, height } })),
+      addToContext: (nodeId) => {
+        useCanvasContextStore.getState().add(projectName, nodeId);
+        useClaudeStore.getState().open(projectName);
+      },
+      saveUnitField: (episode, unitId, field, value) =>
+        guarded(async () => {
+          await API.saveCanvasUnitField(projectName, episode, unitId, field, value);
+          pushToast(t("node_canvas_saved_to_script"), "success");
+        }),
+      openMarkdown: (file, title) => setMarkdown({ file, title }),
       run: async (nodeId) => {
+        // 流水线节点（起始帧联合图 / 单元视频 / 配音）：走已有的生成链路，任务跟踪到节点上。
+        const data = graphRef.current?.nodes.find((n) => n.id === nodeId)?.data;
+        if (data && typeof data.ep === "number" && data.step) {
+          const track = (taskIds: string[]) =>
+            setTracked((prev) => ({ ...prev, ...Object.fromEntries(taskIds.map((taskId) => [taskId, nodeId])) }));
+          const episode = data.ep;
+          if (data.step === "kf_gen" && data.sheet) {
+            await guarded(async () => track((await enqueueKeyframeSheet(projectName, episode, data.sheet ?? "")).taskIds), "node_canvas_run_failed");
+            return;
+          }
+          if (data.step === "video_gen" && data.unit) {
+            await guarded(async () => track((await enqueueReferenceVideoUnit(projectName, episode, data.unit ?? "")).taskIds), "node_canvas_run_failed");
+            return;
+          }
+          if (data.step === "voice_gen" && data.unit) {
+            await guarded(async () => track((await enqueueAutoDub(projectName, episode, { unit_ids: [data.unit ?? ""] })).taskIds), "node_canvas_run_failed");
+            return;
+          }
+        }
         // 上游还有没产出或已过期的节点时，先让用户确认整条链再按顺序跑。
         try {
           // 整链运行目前只针对图片供应商节点（视频 / 语音节点的上游按需手动先跑）。
@@ -311,26 +327,6 @@ function CanvasSurface({ projectName }: { projectName: string }) {
         }, "node_canvas_run_failed");
       },
       remove: (nodeId) => guarded(() => API.deleteCanvasNode(projectName, nodeId)),
-      runWriter: (nodeId) =>
-        guarded(async () => {
-          const byEpisode = new Map<number, string[]>();
-          for (const edge of graphRef.current?.edges ?? []) {
-            if (edge.target !== nodeId || edge.targetHandle !== "units") continue;
-            const unit = parseUnitNodeId(edge.source);
-            if (unit) byEpisode.set(unit.episode, [...(byEpisode.get(unit.episode) ?? []), unit.unitId]);
-          }
-          if (byEpisode.size === 0) throw new Error(t("node_canvas_h3_writer_no_units"));
-          for (const [episode, unitIds] of byEpisode) {
-            const res = await API.regenerateH3Prompts(projectName, episode, unitIds);
-            setTracked((prev) => ({ ...prev, [res.task_id]: nodeId }));
-          }
-          pushToast(t("node_canvas_run_started"), "success");
-        }, "node_canvas_run_failed"),
-      runKeyframe: (episode, sheetId) =>
-        guarded(async () => {
-          const res = await enqueueKeyframeSheet(projectName, episode, sheetId);
-          setTracked((prev) => ({ ...prev, ...Object.fromEntries(res.taskIds.map((id) => [id, `${episode}:${sheetId}`])) }));
-        }, "node_canvas_run_failed"),
     }),
     [guarded, imageModels, projectName, pushToast, t],
   );
@@ -342,10 +338,6 @@ function CanvasSurface({ projectName }: { projectName: string }) {
         onStep: (_step, index) => setBranch((prev) => (prev ? { ...prev, current: index } : prev)),
         getTask: (taskId) => API.getTask(taskId),
         runStep: async (step) => {
-          if (step.type === "keyframe") {
-            const [, , episode, sheetId] = step.id.split(":");
-            return (await enqueueKeyframeSheet(projectName, Number(episode), sheetId)).taskIds;
-          }
           return (await API.runCanvasNode(projectName, step.id)).task_ids;
         },
       });
@@ -359,9 +351,143 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     }
   }, [branch, projectName, pushToast, reload, t]);
 
+  const [selectMode, setSelectMode] = useState(false);
+  const groupableIds = useMemo(() => {
+    const byId = new Map((graph?.nodes ?? []).map((n) => [n.id, n]));
+    return selectedIds.filter((id) => {
+      const node = byId.get(id);
+      return node && node.type !== "group" && !node.parentId;
+    });
+  }, [graph, selectedIds]);
+
+  const groupSelected = useCallback(() => {
+    const picked = getNodes().filter((n) => groupableIds.includes(n.id));
+    if (picked.length < 2) return;
+    // 分组框按节点的实际尺寸（没渲染出来就用默认值）外扩一圈，顶上留出标题的位置。
+    const box = picked.map((n) => ({
+      x: n.position.x,
+      y: n.position.y,
+      w: n.measured?.width ?? n.width ?? 280,
+      h: n.measured?.height ?? n.height ?? 200,
+    }));
+    const left = Math.min(...box.map((b) => b.x)) - GROUP_PADDING;
+    const top = Math.min(...box.map((b) => b.y)) - GROUP_PADDING - GROUP_HEADER;
+    const right = Math.max(...box.map((b) => b.x + b.w)) + GROUP_PADDING;
+    const bottom = Math.max(...box.map((b) => b.y + b.h)) + GROUP_PADDING;
+    void guarded(() =>
+      API.groupCanvasNodes(projectName, {
+        node_ids: picked.map((n) => n.id),
+        label: t("node_canvas_group_default"),
+        position: { x: left, y: top },
+        width: right - left,
+        height: bottom - top,
+      }),
+    );
+  }, [getNodes, groupableIds, guarded, projectName, t]);
+
+  // Cmd/Ctrl+G：把选中的节点收进一个分组。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "g" && groupableIds.length >= 2) {
+        event.preventDefault();
+        groupSelected();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [groupSelected, groupableIds.length]);
+
+  // 刚放进画布的资产分组：等组内节点渲染出实际尺寸（图片加载完后节点才定高，所以要尺寸稳定一小会儿），
+  // 用 ELK 排一次版并存下位置，之后位置归用户。
+  const laidOut = useRef(new Set<string>());
+  useEffect(() => {
+    if (!graph) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (const group of graph.nodes) {
+      if (group.type !== "group" || !group.data.autolayout || laidOut.current.has(group.id)) continue;
+      const kids = nodes.filter((n) => n.parentId === group.id);
+      if (kids.length === 0 || kids.some((k) => !k.measured?.width || !k.measured.height)) continue;
+      const children = kids.map((k) => ({ id: k.id, type: k.type ?? "text", width: k.measured?.width ?? 0, height: k.measured?.height ?? 0 }));
+      const ids = new Set(kids.map((k) => k.id));
+      const edgesInside = graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+      timers.push(
+        setTimeout(() => {
+          laidOut.current.add(group.id);
+          layoutGroup(children, edgesInside)
+            .then(async (result) => {
+              await API.updateCanvasLayout(projectName, result.positions);
+              await API.updateCanvasNode(projectName, group.id, {
+                data: { autolayout: false, width: result.width, height: result.height },
+              });
+              await reload();
+            })
+            .catch(() => laidOut.current.delete(group.id));
+        }, AUTOLAYOUT_SETTLE_MS),
+      );
+    }
+    return () => timers.forEach(clearTimeout);
+  }, [graph, nodes, projectName, reload]);
+
+  /** 拖完一个落盘节点：中心落在某个分组框里就归入它，拖出所属分组框就放出来；其余只存位置。 */
+  const onDragStop = useCallback(
+    (dragged: CanvasFlowNode[]) => {
+      const byId = new Map((graphRef.current?.nodes ?? []).map((n) => [n.id, n]));
+      const groups = getNodes()
+        .filter((n) => n.type === "group")
+        .flatMap((g) => {
+          const abs = getInternalNode(g.id)?.internals.positionAbsolute;
+          const width = Number(g.style?.width ?? g.measured?.width ?? 0);
+          const height = Number(g.style?.height ?? g.measured?.height ?? 0);
+          return abs && width > 0 && height > 0 ? [{ id: g.id, abs, width, height }] : [];
+        })
+        .sort((a, b) => a.width * a.height - b.width * b.height);
+
+      const positions: Record<string, { x: number; y: number }> = {};
+      const moves = new Map<string | null, { ids: string[]; positions: Record<string, { x: number; y: number }> }>();
+      for (const node of dragged) {
+        const stored = byId.get(node.id);
+        const abs = getInternalNode(node.id)?.internals.positionAbsolute;
+        if (!stored || node.type === "group" || !abs) {
+          positions[node.id] = { x: node.position.x, y: node.position.y };
+          continue;
+        }
+        const cx = abs.x + (node.measured?.width ?? 240) / 2;
+        const cy = abs.y + (node.measured?.height ?? 160) / 2;
+        const target = groups.find((g) => g.id !== node.id && cx >= g.abs.x && cx <= g.abs.x + g.width && cy >= g.abs.y && cy <= g.abs.y + g.height);
+        const targetId = target?.id ?? null;
+        if (targetId === (node.parentId ?? null)) {
+          positions[node.id] = { x: node.position.x, y: node.position.y };
+          continue;
+        }
+        const move = moves.get(targetId) ?? { ids: [], positions: {} };
+        move.ids.push(node.id);
+        move.positions[node.id] = target ? { x: abs.x - target.abs.x, y: abs.y - target.abs.y } : { x: abs.x, y: abs.y };
+        moves.set(targetId, move);
+      }
+      void guarded(async () => {
+        for (const [groupId, move] of moves) {
+          await API.setCanvasMembers(projectName, { node_ids: move.ids, group_id: groupId, positions: move.positions });
+        }
+        if (Object.keys(positions).length > 0) await API.updateCanvasLayout(projectName, positions);
+      });
+    },
+    [getInternalNode, getNodes, guarded, projectName],
+  );
+
+  // 删分组框只是拆组：React Flow 默认会把子节点一并删掉，这里把没被单独选中的子节点留下。
+  const onBeforeDelete = useCallback<OnBeforeDelete<CanvasFlowNode, Edge>>(({ nodes: doomed, edges: doomedEdges }) => {
+    const groups = new Set(doomed.filter((n) => n.type === "group").map((n) => n.id));
+    if (groups.size === 0) return Promise.resolve(true);
+    const kept = doomed.filter((n) => !(n.parentId && groups.has(n.parentId) && !n.selected));
+    const spared = new Set(doomed.filter((n) => !kept.includes(n)).map((n) => n.id));
+    return Promise.resolve({ nodes: kept, edges: doomedEdges.filter((e) => !spared.has(e.source) && !spared.has(e.target)) });
+  }, []);
+
   const tidy = useCallback(() => {
     if (!graph) return;
-    const positions = tidyLayout(graph.nodes, graph.edges.filter((e) => !e.virtual));
+    const positions = tidyLayout(graph.nodes, graph.edges);
     if (Object.keys(positions).length === 0) return;
     void guarded(() => API.updateCanvasLayout(projectName, positions));
   }, [graph, guarded, projectName]);
@@ -369,8 +495,8 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   // 通知 / 任务失败提示点进来的「定位到某个角色」：把画布平移缩放到该角色节点并选中它。
   useEffect(() => {
     if (!scrollTarget || scrollTarget.type !== "character") return;
-    const nodeId = `p:character:${scrollTarget.id}`;
-    if (!nodes.some((n) => n.id === nodeId)) {
+    const nodeId = nodes.find((n) => n.type === "group" && n.data.asset === "character" && n.data.label === scrollTarget.id)?.id;
+    if (!nodeId) {
       if (Date.now() >= scrollTarget.expires_at) clearScrollTarget(scrollTarget.request_id);
       return;
     }
@@ -384,7 +510,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const handledFocus = useRef("");
   useEffect(() => {
     if (new URLSearchParams(search).get("focus") !== "characters" || handledFocus.current === search) return;
-    const characterNodes = nodes.filter((n) => n.type === "character");
+    const characterNodes = nodes.filter((n) => n.type === "group" && n.data.asset === "character");
     if (characterNodes.length === 0) return;
     handledFocus.current = search;
     requestAnimationFrame(() => frame(characterNodes.map((n) => n.id), 0.9, 400));
@@ -395,14 +521,15 @@ function CanvasSurface({ projectName }: { projectName: string }) {
       try {
         await API.applyAssetsToProject({ asset_ids: ids, target_project: projectName, conflict_policy: "skip" });
         pushToast(t("assets:import_count", { count: ids.length }), "success");
-        await characterAssets.refresh();
+        await API.importCanvasAssets(projectName);
+        await reload();
       } catch (err) {
         pushToast(errMsg(err), "error");
       } finally {
         setPickingCharacter(false);
       }
     },
-    [characterAssets, projectName, pushToast, t],
+    [projectName, pushToast, reload, t],
   );
 
   const viewportCenter = useCallback(() => {
@@ -428,14 +555,18 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     [guarded, projectName, viewportCenter],
   );
 
-  const lineage = useMemo(() => (focusId && graph ? lineageOf(focusId, graph.edges) : null), [focusId, graph]);
-  const shownNodes = useMemo(
-    () =>
-      lineage
-        ? nodes.map((n) => (lineage.nodeIds.has(n.id) ? n : { ...n, style: { ...n.style, opacity: DIMMED_OPACITY } }))
-        : nodes,
-    [lineage, nodes],
-  );
+  const lineage = useMemo(() => (focusId && graph ? lineageOf(focusId, graph.edges, graph.nodes) : null), [focusId, graph]);
+  // 框选时分组框要「透明」：它几乎盖满画布，不放行的话从组内起拖会把整个分组拖走而不是画选框。
+  const selectionKeyHeld = useKeyPress(SELECTION_KEYS);
+  const selecting = selectMode || selectionKeyHeld;
+  const shownNodes = useMemo(() => {
+    const base = lineage
+      ? nodes.map((n) => (lineage.nodeIds.has(n.id) ? n : { ...n, style: { ...n.style, opacity: DIMMED_OPACITY } }))
+      : nodes;
+    return selecting
+      ? base.map((n) => (GROUP_NODE_TYPES.has(n.type ?? "") ? { ...n, selectable: false, style: { ...n.style, pointerEvents: "none" as const } } : n))
+      : base;
+  }, [lineage, nodes, selecting]);
   const shownEdges = useMemo(
     () =>
       lineage
@@ -471,7 +602,6 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   return (
     <CanvasActionsContext.Provider value={actions}>
       <CanvasBusyContext.Provider value={busyNodeIds}>
-      <CharacterNodeContextValue.Provider value={characterContext}>
       <div ref={surfaceRef} className="relative h-full w-full" data-testid="node-canvas">
         <ReactFlow<CanvasFlowNode, Edge>
           nodes={shownNodes}
@@ -494,14 +624,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
             setFocusId(picked.length === 1 ? picked[0].id : null);
             setSelectedIds(picked.map((n) => n.id));
           }}
-          onNodeDragStop={(_, __, dragged) =>
-            void guarded(() =>
-              API.updateCanvasLayout(
-                projectName,
-                Object.fromEntries(dragged.map((n) => [n.id, { x: n.position.x, y: n.position.y }])),
-              ),
-            )
-          }
+          onNodeDragStop={(_, __, dragged) => onDragStop(dragged)}
           onDelete={({ nodes: removedNodes, edges: removedEdges }) => {
             // 删节点时服务端会连带清掉它的连线，只单独删与已删节点无关的连线。
             const removedIds = new Set(removedNodes.map((n) => n.id));
@@ -513,7 +636,15 @@ function CanvasSurface({ projectName }: { projectName: string }) {
               ]),
             );
           }}
+          // 默认只认 Backspace（Mac 的 Delete 键）；Windows / Linux 键盘的 Delete 也要能删。
+          deleteKeyCode={DELETE_KEYS}
+          onBeforeDelete={onBeforeDelete}
+          selectionKeyCode={SELECTION_KEYS}
+          selectionMode={SelectionMode.Partial}
+          selectionOnDrag={selectMode}
+          panOnDrag={selectMode ? PAN_BUTTONS : true}
           onlyRenderVisibleElements
+          defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
           minZoom={0.2}
           maxZoom={1.5}
           proOptions={{ hideAttribution: true }}
@@ -521,83 +652,98 @@ function CanvasSurface({ projectName }: { projectName: string }) {
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} />
           <Controls showInteractive={false} onFitView={() => frame(null, 1, 300)} />
-          <MiniMap pannable zoomable position="bottom-right" style={MINIMAP_STYLE} className="!bg-bg-grad-a/80" />
+          <MiniMap pannable zoomable position="bottom-right" style={MINIMAP_STYLE} className="!hidden !bg-bg-grad-a/80 lg:!block" />
         </ReactFlow>
 
         <div className="pointer-events-none absolute left-4 top-4 flex flex-wrap items-center gap-2">
-          <h1 className="pointer-events-auto mr-2 text-[13px] font-semibold text-text-2">{t("node_canvas_title")}</h1>
-          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => void addNode("text")}>
+          <h1 className="pointer-events-auto mr-2 text-[14px] font-semibold text-text">{t("node_canvas_title")}</h1>
+          <div className={CLUSTER_CLS}>
+          <button type="button" className={TOOL_BTN_CLS} onClick={() => void addNode("text")}>
             <Type className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_add_text")}
           </button>
-          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => fileInput.current?.click()}>
+          <button type="button" className={TOOL_BTN_CLS} onClick={() => fileInput.current?.click()}>
             <ImagePlus className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_add_image")}
           </button>
-          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => void addNode("image_generate")}>
+          </div>
+          <div className={CLUSTER_CLS}>
+          <button type="button" className={TOOL_BTN_CLS} onClick={() => void addNode("image_generate")}>
             <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_add_generate")}
           </button>
-          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => void addNode("video_generate")}>
+          <button type="button" className={TOOL_BTN_CLS} onClick={() => void addNode("video_generate")}>
             <Video className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_add_video_generate")}
           </button>
-          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => void addNode("audio_generate")}>
+          <button type="button" className={TOOL_BTN_CLS} onClick={() => void addNode("audio_generate")}>
             <Mic className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_add_audio_generate")}
           </button>
-          {graph.episodes.length > 0 && (
-            <>
-              <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => void addNode("h3_writer")}>
-                <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
-                {t("node_canvas_add_h3_writer")}
-              </button>
-              <div className="pointer-events-auto relative">
-                <button type="button" className={GHOST_BTN_CLS} aria-expanded={pickerOpen} onClick={() => setPickerOpen((open) => !open)}>
-                  <Layers className="h-3.5 w-3.5" aria-hidden="true" />
-                  {t("node_canvas_episodes_button", { count: graph.view.episodes.length })}
-                </button>
-                {pickerOpen && (
-                  <ul className="absolute left-0 top-full z-10 mt-1 max-h-72 w-64 overflow-y-auto rounded-[10px] border border-hairline bg-bg-grad-a/95 p-1 shadow-xl backdrop-blur">
-                    {graph.episodes.map((ep) => {
-                      const on = graph.view.episodes.includes(ep.episode);
-                      return (
-                        <li key={ep.episode}>
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-2 rounded-[6px] px-2 py-1.5 text-left text-[12px] text-text-2 hover:bg-white/5"
-                            onClick={() => {
-                              const next = on
-                                ? graph.view.episodes.filter((n) => n !== ep.episode)
-                                : [...graph.view.episodes, ep.episode];
-                              void guarded(() => API.setCanvasView(projectName, next));
-                            }}
-                          >
-                            <span className="flex h-4 w-4 items-center justify-center">{on ? <Check className="h-3.5 w-3.5 text-accent" aria-hidden="true" /> : null}</span>
-                            <span className="truncate">{t("node_canvas_episode_title", { episode: ep.episode })} {ep.title}</span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-            </>
-          )}
-          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => setAddingCharacter(true)}>
-            <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
-            {t("node_canvas_add_character")}
+          </div>
+          <div className={CLUSTER_CLS}>
+          <div className="relative">
+            <button type="button" className={TOOL_BTN_CLS} aria-expanded={newGroupMenu} onClick={() => setNewGroupMenu((open) => !open)}>
+              <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
+              {t("node_canvas_new_group")}
+            </button>
+            {newGroupMenu && (
+              <ul className="absolute left-0 top-full z-10 mt-1 w-48 rounded-[10px] border border-hairline bg-bg-grad-a/95 p-1 shadow-xl backdrop-blur">
+                {(["character", "scene", "prop", "product"] as const).map((kind) => (
+                  <li key={kind}>
+                    <button
+                      type="button"
+                      className="w-full rounded-[6px] px-2 py-1.5 text-left text-[12px] text-text-2 hover:bg-white/5"
+                      onClick={() => {
+                        setNewGroupMenu(false);
+                        setAddingGroup(kind);
+                      }}
+                    >
+                      {t(`node_canvas_group_kind_${kind}`)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button
+            type="button"
+            className={TOOL_BTN_CLS}
+            title={t("node_canvas_import_assets_hint")}
+            onClick={() => void guarded(async () => {
+              const res = await API.importCanvasAssets(projectName);
+              pushToast(t("node_canvas_import_assets_done", { count: res.imported }), "success");
+            })}
+          >
+            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_import_assets")}
           </button>
-          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={() => setPickingCharacter(true)}>
+          <button type="button" className={TOOL_BTN_CLS} onClick={() => setPickingCharacter(true)}>
             <Library className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_import_characters")}
           </button>
-          <button type="button" className={`pointer-events-auto ${GHOST_BTN_CLS}`} onClick={tidy}>
+          </div>
+          <div className={CLUSTER_CLS}>
+          <button type="button" className={TOOL_BTN_CLS} onClick={() => setFlowOpen(true)}>
+            <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_flow_button")}
+          </button>
+          <button
+            type="button"
+            className={`${TOOL_BTN_CLS} ${selectMode ? "!bg-accent/20 !text-text" : ""}`}
+            aria-pressed={selectMode}
+            title={t("node_canvas_select_mode_hint")}
+            onClick={() => setSelectMode((on) => !on)}
+          >
+            <BoxSelect className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_select_mode")}
+          </button>
+          <button type="button" className={TOOL_BTN_CLS} onClick={tidy}>
             <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_tidy")}
           </button>
           <div className="pointer-events-auto relative">
-            <button type="button" className={GHOST_BTN_CLS} aria-expanded={templatesOpen} onClick={() => setTemplatesOpen((open) => !open)}>
+            <button type="button" className={TOOL_BTN_CLS} aria-expanded={templatesOpen} onClick={() => setTemplatesOpen((open) => !open)}>
               <Workflow className="h-3.5 w-3.5" aria-hidden="true" />
               {t("node_canvas_templates_button", { count: graph.templates.length })}
             </button>
@@ -652,6 +798,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
               </div>
             )}
           </div>
+          </div>
           <input
             ref={fileInput}
             type="file"
@@ -664,14 +811,45 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           />
         </div>
 
-        {addingCharacter && (
+        {groupableIds.length >= 2 && (
+          <div
+            role="toolbar"
+            aria-label={t("node_canvas_selection_bar")}
+            className="absolute inset-x-0 bottom-4 z-10 mx-auto flex w-fit items-center gap-1 rounded-[12px] border border-hairline bg-bg-grad-a/95 p-1.5 pl-3 shadow-xl backdrop-blur"
+          >
+            <span className="mr-2 text-[12px] text-text-2">{t("node_canvas_selection_count", { count: groupableIds.length })}</span>
+            <button type="button" className={ACCENT_BTN_SM_CLS} onClick={groupSelected}>
+              <Group className="h-3.5 w-3.5" aria-hidden="true" />
+              {t("node_canvas_group_selected")}
+            </button>
+          </div>
+        )}
+
+        {flowOpen && (
+          <FlowModal
+            projectName={projectName}
+            onClose={() => setFlowOpen(false)}
+            onJump={(nodeId) => {
+              setFlowOpen(false);
+              setNodes((prev) => prev.map((n) => (n.selected === (n.id === nodeId) ? n : { ...n, selected: n.id === nodeId })));
+              requestAnimationFrame(() => frame([nodeId], 1, 400));
+            }}
+            onImported={reload}
+          />
+        )}
+
+        {markdown && <MarkdownModal projectName={projectName} file={markdown.file} title={markdown.title} onClose={() => setMarkdown(null)} />}
+
+        {addingGroup && (
           <AssetFormModal
-            type="character"
+            type={addingGroup === "product" ? "prop" : addingGroup}
+            typeLabel={addingGroup === "product" ? t("node_canvas_group_kind_product") : undefined}
             mode="create"
-            onClose={() => setAddingCharacter(false)}
-            onSubmit={async ({ name, description, voice_style, image }) => {
-              await characterAssets.add(name, description, voice_style, image ?? null);
-              setAddingCharacter(false);
+            onClose={() => setAddingGroup(null)}
+            onSubmit={async ({ name, description }) => {
+              await API.createCanvasAssetGroup(projectName, { kind: addingGroup, name, description, position: viewportCenter() });
+              await reload();
+              setAddingGroup(null);
             }}
           />
         )}
@@ -679,7 +857,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
         {pickingCharacter && (
           <AssetPickerModal
             type="character"
-            existingNames={new Set(Object.keys(characters ?? {}))}
+            existingNames={new Set(graph.nodes.filter((n) => n.type === "group" && n.data.asset === "character").map((n) => n.data.label ?? ""))}
             onClose={() => setPickingCharacter(false)}
             onImport={(ids) => {
               void importCharacters(ids);
@@ -715,40 +893,12 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           </div>
         )}
 
-        <form
-          className="absolute inset-x-0 bottom-4 mx-auto flex w-[min(34rem,calc(100%-2rem))] items-center gap-2 rounded-[12px] border border-hairline bg-bg-grad-a/90 p-2 shadow-xl backdrop-blur"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void askAgent(projectName, {
-              action: "canvas_assist",
-              ...(focusId ? { resource_id: focusId } : {}),
-              note: instruction.trim(),
-            })
-              .then(() => setInstruction(""))
-              .catch((err: unknown) => pushToast(errMsg(err), "error"));
-          }}
-        >
-          <Bot className="ml-1 h-4 w-4 shrink-0 text-text-3" aria-hidden="true" />
-          <input
-            className="min-w-0 flex-1 bg-transparent px-1 text-[13px] text-text placeholder:text-text-4 focus-visible:outline-none"
-            value={instruction}
-            placeholder={focusId ? t("node_canvas_agent_placeholder_selected") : t("node_canvas_agent_placeholder")}
-            aria-label={t("node_canvas_agent_label")}
-            onChange={(e) => setInstruction(e.target.value)}
-          />
-          <button type="submit" className={GHOST_BTN_CLS} disabled={agentPending}>
-            {agentPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
-            {t("node_canvas_agent_send")}
-          </button>
-        </form>
-
         {graph.nodes.length === 0 && (
           <p className="pointer-events-none absolute inset-x-0 top-1/2 mx-auto max-w-md -translate-y-1/2 text-center text-[13px] text-text-4">
             {t("node_canvas_empty")}
           </p>
         )}
       </div>
-      </CharacterNodeContextValue.Provider>
       </CanvasBusyContext.Provider>
     </CanvasActionsContext.Provider>
   );

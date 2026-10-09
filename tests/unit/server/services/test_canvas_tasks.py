@@ -202,3 +202,36 @@ async def test_audio_task_defaults_to_the_project_voice_and_lands_in_the_tts_fol
         "demo", ids["image"], {"prompt": "hi", "voice": "Ethan", "generator_id": ids["gen"]}
     )
     assert media.audio_calls[1][2] == "Ethan"
+
+
+class _ReportingGenerator(_Generator):
+    """模拟供应商轮询：先报排队，再报运行，最后成功；中间读一次节点状态。"""
+
+    def __init__(self, root, node_id):
+        super().__init__()
+        self.root = root
+        self.node_id = node_id
+        self.seen: list[str] = []
+
+    async def generate_image_async(self, prompt, resource_type, resource_id, **kwargs):
+        from lib.infra.poll_sync_hook import fire_provider_sync
+
+        for status in ("QUEUED", "QUEUED", "RUNNING", "SUCCESS"):
+            await fire_provider_sync(label="RunningHub", status=status)
+            self.seen.append(_data(self.root, self.node_id)["status"])
+        return Path("x"), 3
+
+
+async def test_provider_reported_queueing_shows_on_the_node_until_it_starts_running(seeded):
+    _, root, ids, install = seeded
+    generator = _ReportingGenerator(root, ids["image"])
+    install(generator)
+
+    await canvas_tasks.execute_canvas_image_task(
+        "demo", ids["image"], {"prompt": "a fox", "generator_id": ids["gen"]}, task_id="t1"
+    )
+
+    assert generator.seen == ["queued", "queued", "running", "running"]
+    final = _data(root, ids["image"])
+    assert final["status"] == "done"
+    assert {"submitted_at", "started_at", "finished_at", "status_at"} <= set(final)

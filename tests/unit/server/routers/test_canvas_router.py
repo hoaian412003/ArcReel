@@ -62,15 +62,16 @@ def _node(client, node_type, **data):
 def test_empty_canvas_and_unknown_project(env):
     client, _, _ = env
     body = client.get("/api/v1/projects/demo/canvas").json()
-    assert (body["revision"], body["nodes"], body["edges"], body["episodes"]) == (0, [], [], [])
+    assert (body["nodes"], body["edges"]) == ([], [])
     assert client.get("/api/v1/projects/nope/canvas").status_code == 404
 
 
 def test_revision_increments_per_write(env):
     client, _, _ = env
+    start = client.get("/api/v1/projects/demo/canvas").json()["revision"]
     _node(client, "text", text="a")
     _node(client, "text", text="b")
-    assert client.get("/api/v1/projects/demo/canvas").json()["revision"] == 2
+    assert client.get("/api/v1/projects/demo/canvas").json()["revision"] == start + 2
 
 
 def test_invalid_connection_is_unprocessable(env):
@@ -159,36 +160,20 @@ def test_enqueue_failure_rolls_back_outputs(env, monkeypatch):
     assert next(n for n in graph["nodes"] if n["id"] == gen["id"])["data"]["status"] == "failed"
 
 
-def test_view_selection_is_sorted_and_persisted(env):
-    client, _, _ = env
-    res = client.put("/api/v1/projects/demo/canvas/view", json={"episodes": [3, 1, 3]})
-    assert res.json()["episodes"] == [1, 3]
-    assert client.get("/api/v1/projects/demo/canvas").json()["view"] == {"episodes": [1, 3]}
-
-
 def test_edges_to_derived_nodes_validate_by_kind(env):
     client, _, _ = env
-    writer = _node(client, "h3_writer")
-    unit = "p:unit:1:E1U1"
+    gen = _node(client, "image_generate")
+    sheet = "p:char_sheet:Hero"
     ok = client.post(
         "/api/v1/projects/demo/canvas/edges",
-        json={"source": unit, "source_handle": "unit", "target": writer["id"], "target_handle": "units"},
+        json={"source": sheet, "source_handle": "image", "target": gen["id"], "target_handle": "image1"},
     )
     assert ok.status_code == 200
     bad = client.post(
         "/api/v1/projects/demo/canvas/edges",
-        json={"source": unit, "source_handle": "text", "target": writer["id"], "target_handle": "units"},
+        json={"source": sheet, "source_handle": "image", "target": gen["id"], "target_handle": "prompt"},
     )
     assert bad.status_code == 422
-
-
-def test_episode_group_layout_is_stored_as_override(env):
-    client, _, root = env
-    res = client.post("/api/v1/projects/demo/canvas/layout", json={"positions": {"p:episode:2": {"x": 5, "y": 6}}})
-    assert res.status_code == 200
-    from lib.canvas.store import load_canvas
-
-    assert load_canvas(root)["overrides"] == {"p:episode:2": {"x": 5.0, "y": 6.0}}
 
 
 def test_node_model_choice_becomes_a_provider_override_in_the_task(env):
@@ -285,3 +270,120 @@ def test_video_and_audio_runs_enqueue_their_own_task_types(env):
     assert voice_call["payload"]["voice"] == "Ethan"
     types = sorted(n["type"] for n in client.get("/api/v1/projects/demo/canvas").json()["nodes"])
     assert types == ["audio", "audio_generate", "text", "video", "video_generate"]
+
+
+def test_canvas_signature_changes_with_canvas_and_project_files(tmp_path):
+    from server.routers.canvas import _canvas_signature
+
+    (tmp_path / "canvas").mkdir()
+    (tmp_path / "project.json").write_text("{}", encoding="utf-8")
+    first = _canvas_signature(tmp_path)
+    assert _canvas_signature(tmp_path) == first
+
+    (tmp_path / "canvas" / "canvas.json").write_text("{}", encoding="utf-8")
+    second = _canvas_signature(tmp_path)
+    assert second != first
+
+    (tmp_path / "scenes").mkdir()
+    (tmp_path / "scenes" / "a.png").write_bytes(b"x")
+    assert _canvas_signature(tmp_path) != second
+
+
+def test_note_on_a_project_asset_sheet_is_stored_and_shown_on_the_node(env):
+    client, _, root = env
+    node_id = "p:char_sheet:阿离"
+
+    assert (
+        client.put(f"/api/v1/projects/demo/canvas/nodes/{node_id}/note", json={"note": "his face"}).status_code == 200
+    )
+    import json
+
+    saved = json.loads((root / "canvas" / "canvas.json").read_text(encoding="utf-8"))
+    assert saved["notes"] == {node_id: "his face"}
+
+    client.put(f"/api/v1/projects/demo/canvas/nodes/{node_id}/note", json={"note": ""})
+    assert json.loads((root / "canvas" / "canvas.json").read_text(encoding="utf-8"))["notes"] == {}
+
+
+def test_note_on_an_uploaded_image_lives_on_the_node(env):
+    client, _, _ = env
+    image = _node(client, "image")
+
+    client.put(f"/api/v1/projects/demo/canvas/nodes/{image['id']}/note", json={"note": "a red car"})
+
+    nodes = client.get("/api/v1/projects/demo/canvas").json()["nodes"]
+    assert next(n for n in nodes if n["id"] == image["id"])["data"]["note"] == "a red car"
+
+
+def test_group_endpoint_collects_nodes_and_deleting_the_frame_releases_them(env):
+    client, _, _ = env
+    a = _node(client, "text")
+    b = _node(client, "text")
+
+    res = client.post(
+        "/api/v1/projects/demo/canvas/groups",
+        json={
+            "node_ids": [a["id"], b["id"]],
+            "label": "Face",
+            "position": {"x": 0, "y": 0},
+            "width": 600,
+            "height": 300,
+        },
+    )
+    assert res.status_code == 200, res.text
+    group = res.json()["node"]
+    nodes = {n["id"]: n for n in client.get("/api/v1/projects/demo/canvas").json()["nodes"]}
+    assert nodes[a["id"]]["parentId"] == group["id"]
+
+    client.delete(f"/api/v1/projects/demo/canvas/nodes/{group['id']}")
+    nodes = {n["id"]: n for n in client.get("/api/v1/projects/demo/canvas").json()["nodes"]}
+    assert set(nodes) == {a["id"], b["id"]}
+    assert "parentId" not in nodes[a["id"]]
+
+
+def test_group_endpoint_needs_two_nodes(env):
+    client, _, _ = env
+    a = _node(client, "text")
+
+    res = client.post(
+        "/api/v1/projects/demo/canvas/groups",
+        json={"node_ids": [a["id"], "p:char_sheet:x"], "position": {"x": 0, "y": 0}, "width": 10, "height": 10},
+    )
+
+    assert res.status_code == 404 or res.status_code == 422
+
+
+def test_members_endpoint_moves_nodes_into_and_out_of_a_project_group(env):
+    client, _, _ = env
+    text = _node(client, "text")
+
+    res = client.post(
+        "/api/v1/projects/demo/canvas/members",
+        json={"node_ids": [text["id"]], "group_id": "p:character:阿离", "positions": {text["id"]: {"x": 10, "y": 20}}},
+    )
+    assert res.status_code == 200, res.text
+    nodes = {n["id"]: n for n in client.get("/api/v1/projects/demo/canvas").json()["nodes"]}
+    # 项目里没有「阿离」：所属分组已不存在，节点留在画布上、不再挂在分组下。
+    assert "parentId" not in nodes[text["id"]]
+
+    bad = client.post(
+        "/api/v1/projects/demo/canvas/members", json={"node_ids": [text["id"]], "group_id": "p:char_text:x"}
+    )
+    assert bad.status_code == 422
+
+
+def test_upload_with_a_node_id_fills_that_image_node_instead_of_adding_one(env):
+    client, _, root = env
+    slot = _node(client, "image")
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 16
+
+    res = client.post(
+        f"/api/v1/projects/demo/canvas/images?node_id={slot['id']}", files={"file": ("a.png", png, "image/png")}
+    )
+
+    assert res.status_code == 200, res.text
+    nodes = client.get("/api/v1/projects/demo/canvas").json()["nodes"]
+    assert [n["id"] for n in nodes] == [slot["id"]]
+    assert nodes[0]["data"]["path"].startswith("canvas/uploads/") or nodes[0]["data"]["path"].startswith("canvas/")
+    assert nodes[0]["data"]["version"] == 1
+    assert (root / nodes[0]["data"]["path"]).is_file()

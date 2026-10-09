@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { CanvasEdge, CanvasNode } from "@/types/canvas";
 import { tidyLayout } from "./canvas-layout";
 
-const node = (id: string, x: number, y: number, derived = false): CanvasNode => ({
+const node = (id: string, x: number, y: number, parentId?: string): CanvasNode => ({
   id,
   type: "text",
   position: { x, y },
   data: {},
-  ...(derived ? { derived: true } : {}),
+  ...(parentId ? { parentId } : {}),
 });
 const edge = (source: string, target: string): CanvasEdge => ({
   id: `${source}>${target}`,
@@ -29,10 +29,10 @@ describe("tidyLayout", () => {
     expect(positions.b.y).toBeGreaterThan(positions.a.y);
   });
 
-  it("leaves project-derived nodes alone and survives cycles", () => {
+  it("leaves nodes inside groups alone and survives cycles", () => {
     const positions = tidyLayout(
-      [node("a", 0, 0), node("b", 0, 0), node("p:unit:1:U", 0, 0, true)],
-      [edge("a", "b"), edge("b", "a"), edge("p:unit:1:U", "a")],
+      [node("a", 0, 0), node("b", 0, 0), node("inside", 0, 0, "group")],
+      [edge("a", "b"), edge("b", "a"), edge("inside", "a")],
     );
     expect(Object.keys(positions).sort()).toEqual(["a", "b"]);
   });

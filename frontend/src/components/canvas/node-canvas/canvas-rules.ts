@@ -3,7 +3,6 @@ import type { CanvasAnyNodeType, CanvasHandleType, CanvasNode, CanvasNodeStatus 
 /** 句柄的数据类型表，与后端 `lib/canvas/graph.py` 的 INPUT_HANDLES / OUTPUT_HANDLES 一致。 */
 const INPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHandleType>>> = {
   image_generate: { prompt: "text", image1: "image" },
-  h3_writer: { units: "unit" },
   video_generate: { prompt: "text", frame: "image" },
   audio_generate: { text: "text" },
 };
@@ -11,13 +10,11 @@ const OUTPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHan
   text: { text: "text" },
   image: { image: "image" },
   image_generate: { image: "image" },
-  h3_writer: { h3: "h3" },
   video: { video: "video" },
   audio: { audio: "audio" },
   video_generate: { video: "video" },
   audio_generate: { audio: "audio" },
-  unit: { unit: "unit", text: "text" },
-  keyframe: { image: "image" },
+  asset: { asset: "asset" },
 };
 
 /** 自动挂出 / 推导出的节点上，只承接来源连线的被动输入句柄。 */
@@ -37,7 +34,8 @@ export function isValidCanvasConnection(nodes: readonly CanvasNode[], c: Connect
   if (!src || !dst) return false;
   const out = OUTPUT_HANDLES[src.type]?.[c.sourceHandle ?? ""];
   const into = INPUT_HANDLES[dst.type]?.[c.targetHandle ?? ""];
-  return out !== undefined && out === into;
+  // asset 输出口除了接同类，还能接到接受图片的输入口（图当参考图，说明随图走）。
+  return out !== undefined && into !== undefined && (out === into || (out === "asset" && into === "image"));
 }
 
 export function isBusy(status: CanvasNodeStatus | undefined): boolean {
@@ -57,9 +55,19 @@ export const ASPECT_RATIOS = ["9:16", "16:9", "1:1", "3:4", "4:3"] as const;
 export function lineageOf(
   focusId: string,
   edges: readonly { id: string; source: string; target: string }[],
+  nodes: readonly { id: string; parentId?: string }[] = [],
 ): { nodeIds: Set<string>; edgeIds: Set<string> } {
   const nodeIds = new Set([focusId]);
   const edgeIds = new Set<string>();
+  // 选中分组（角色 / 集 / 资产）：整组一起高亮，组内的连线也点亮；组外的变暗。
+  const members = nodes.filter((n) => n.parentId === focusId).map((n) => n.id);
+  if (members.length > 0) {
+    members.forEach((id) => nodeIds.add(id));
+    for (const edge of edges) {
+      if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) edgeIds.add(edge.id);
+    }
+    return { nodeIds, edgeIds };
+  }
   const walk = (from: "source" | "target", to: "source" | "target") => {
     const queue = [focusId];
     const seen = new Set(queue);
@@ -78,5 +86,28 @@ export function lineageOf(
   };
   walk("target", "source");
   walk("source", "target");
+  // 链上节点所在的分组外框保持清晰，不被一并变暗。
+  for (const node of nodes) {
+    if (node.parentId && nodeIds.has(node.id)) nodeIds.add(node.parentId);
+  }
   return { nodeIds, edgeIds };
+}
+
+/** 提示词里 `@节点id` 提到的节点，与已加入上下文的节点合并（保持先后顺序、去重）。 */
+export function referencedNodeIds(text: string, contextIds: readonly string[], nodes: readonly CanvasNode[]): string[] {
+  const mentioned = nodes.filter((n) => text.includes(`@${n.id}`)).map((n) => n.id);
+  return [...new Set([...contextIds, ...mentioned])].filter((id) => nodes.some((n) => n.id === id));
+}
+
+const CONTEXT_DATA_LIMIT = 1500;
+
+/** 发给 Agent 的说明：先列出被引用节点的 id 与当前内容，再附用户原话；Agent 据此用 canvas_* 工具直接改画布。 */
+export function buildAgentNote(text: string, ids: readonly string[], nodes: readonly CanvasNode[]): string {
+  if (ids.length === 0) return text;
+  const lines = ids.map((id) => {
+    const node = nodes.find((n) => n.id === id);
+    const data = JSON.stringify(node?.data ?? {});
+    return `- ${id} (${node?.type ?? "unknown"}): ${data.length > CONTEXT_DATA_LIMIT ? `${data.slice(0, CONTEXT_DATA_LIMIT)}…` : data}`;
+  });
+  return `Referenced canvas nodes (the user's @mentions; apply the request to these nodes):\n${lines.join("\n")}\n\n${text}`;
 }

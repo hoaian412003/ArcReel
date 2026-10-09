@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, ConfigDict, Field
 
-from lib.canvas.graph import NODE_IMAGE, CanvasGraphError, add_node, make_node
-from lib.canvas.store import CANVAS_UPLOAD_DIR
+from lib.canvas.graph import NODE_IMAGE, CanvasGraphError, add_node, find_node, make_node
+from lib.canvas.store import CANVAS_UPLOAD_DIR, canvas_path
 from lib.generation.generation_queue import get_generation_queue
 from lib.infra.api_errors import (
     BadRequestError,
@@ -68,9 +70,33 @@ class Position(BaseModel):
 
 class CreateNodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["text", "image", "image_generate", "h3_writer", "video_generate", "audio_generate"]
+    type: Literal["text", "image", "image_generate", "video_generate", "audio_generate"]
     position: Position
     data: dict[str, Any] = Field(default_factory=dict)
+
+
+class GroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_ids: list[str] = Field(min_length=2)
+    label: str = Field(default="", max_length=80)
+    position: Position
+    width: float = Field(gt=0, le=20000)
+    height: float = Field(gt=0, le=20000)
+
+
+class AssetGroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["character", "scene", "prop", "product"]
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=20000)
+    position: Position
+
+
+class MembersRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_ids: list[str] = Field(min_length=1)
+    group_id: str | None = None
+    positions: dict[str, Position] = Field(default_factory=dict)
 
 
 class PatchNodeRequest(BaseModel):
@@ -103,21 +129,63 @@ class UseTemplateRequest(BaseModel):
     position: Position
 
 
-class ViewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    episodes: list[int]
+_STREAM_SCAN_SECONDS = 0.5
+_STREAM_HEARTBEAT_SECONDS = 15.0
+_WATCHED_DIRS = ("characters", "scenes", "props", "products", "scripts")
+
+
+def _canvas_signature(project_path: Path) -> str:
+    """画布内容与它推导所依据的项目文件（project.json、各类资产图、剧本目录）的 mtime 指纹。"""
+    parts: list[str] = []
+    for path in (canvas_path(project_path), project_path / "project.json"):
+        try:
+            stat = path.stat()
+            parts.append(f"{stat.st_mtime_ns}:{stat.st_size}")
+        except OSError:
+            parts.append("-")
+    for name in _WATCHED_DIRS:
+        directory = project_path / name
+        try:
+            newest = max((p.stat().st_mtime_ns for p in directory.iterdir()), default=0)
+            parts.append(f"{directory.stat().st_mtime_ns}:{newest}")
+        except OSError:
+            parts.append("-")
+    return "|".join(parts)
+
+
+@router.get("/projects/{project_name}/canvas/stream", response_class=EventSourceResponse)
+async def stream_canvas(project_name: str, request: Request, _user: CurrentUser) -> AsyncIterator[ServerSentEvent]:
+    """画布变化推送：worker / Agent 写盘后立刻通知网页重新读取，网页不必定时轮询。
+
+    写盘可能发生在另一个进程（队列 worker），所以这里只比对文件指纹，不依赖进程内通知。
+    """
+    try:
+        project_path = await asyncio.to_thread(get_project_manager().get_project_path, project_name)
+    except FileNotFoundError as exc:
+        raise NotFoundError("project_not_found", name=project_name) from exc
+    except ValueError as exc:
+        raise BadRequestError("invalid_project_name", name=project_name) from exc
+
+    last = await asyncio.to_thread(_canvas_signature, project_path)
+    yield ServerSentEvent(event="ready", data={"signature": last})
+    idle = 0.0
+    while not await request.is_disconnected():
+        await asyncio.sleep(_STREAM_SCAN_SECONDS)
+        current = await asyncio.to_thread(_canvas_signature, project_path)
+        if current != last:
+            last = current
+            idle = 0.0
+            yield ServerSentEvent(event="changed", data={"signature": current})
+            continue
+        idle += _STREAM_SCAN_SECONDS
+        if idle >= _STREAM_HEARTBEAT_SECONDS:
+            idle = 0.0
+            yield ServerSentEvent(event="ping", data={})
 
 
 @router.get("/projects/{project_name}/canvas")
 async def get_canvas(project_name: str):
     return await _service(project_name).view(project_name)
-
-
-@router.put("/projects/{project_name}/canvas/view", dependencies=[Depends(require_project_migration_ok)])
-async def update_view(project_name: str, req: ViewRequest):
-    """选择画布上展示哪几集的项目节点；只影响展示，不动项目数据。"""
-    episodes, revision = await _service(project_name).set_view(project_name, req.episodes)
-    return {"revision": revision, "episodes": episodes}
 
 
 @router.post("/projects/{project_name}/canvas/nodes", dependencies=[Depends(require_project_migration_ok)])
@@ -131,6 +199,99 @@ async def create_node(project_name: str, req: CreateNodeRequest):
     return {"node": node, "revision": revision}
 
 
+@router.post("/projects/{project_name}/canvas/groups", dependencies=[Depends(require_project_migration_ok)])
+async def create_group(project_name: str, req: GroupRequest):
+    """把选中的节点收进一个新分组（分组框的位置与大小由网页按节点实际尺寸算好）。"""
+    try:
+        group, revision = await _service(project_name).group_nodes(
+            project_name,
+            req.node_ids,
+            req.label,
+            req.position.model_dump(),
+            {"width": req.width, "height": req.height},
+        )
+    except CanvasGraphError as exc:
+        _raise(exc)
+    return {"node": group, "revision": revision}
+
+
+@router.post("/projects/{project_name}/canvas/asset-groups", dependencies=[Depends(require_project_migration_ok)])
+async def create_asset_group(project_name: str, req: AssetGroupRequest):
+    """新建一个资产分组（描述文本 + 图片供应商 + 资产节点）；描述有了就会在项目里建出对应资产。"""
+    group, revision = await _service(project_name).create_asset_group(
+        project_name, req.kind, req.name.strip(), req.description, req.position.model_dump()
+    )
+    return {"node": group, "revision": revision}
+
+
+@router.post("/projects/{project_name}/canvas/assets/import", dependencies=[Depends(require_project_migration_ok)])
+async def import_assets(project_name: str):
+    """把项目里已有、画布上还没有的资产摆上画布（各成一个分组）。"""
+    imported, revision = await _service(project_name).import_assets(project_name)
+    return {"imported": imported, "revision": revision}
+
+
+class UnitFieldRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    field: Literal["text", "direction"]
+    value: str = Field(max_length=100000)
+
+
+@router.get("/projects/{project_name}/canvas/flow")
+async def get_flow(project_name: str):
+    """总览：每一集的来源 / 分集计划 / 单元各步骤状态，及其在画布上对应的节点。"""
+    return {"episodes": await _service(project_name).flow(project_name)}
+
+
+@router.post(
+    "/projects/{project_name}/canvas/episodes/{episode}/import", dependencies=[Depends(require_project_migration_ok)]
+)
+async def import_episode(project_name: str, episode: int):
+    """把一集的流程（来源、分集计划、每个单元的流水线、起始帧联合图）摆上画布。"""
+    try:
+        group, revision = await _service(project_name).import_episode(project_name, episode)
+    except CanvasGraphError as exc:
+        _raise(exc)
+    return {"node": group, "revision": revision}
+
+
+@router.put(
+    "/projects/{project_name}/canvas/episodes/{episode}/units/{unit_id}/field",
+    dependencies=[Depends(require_project_migration_ok)],
+)
+async def save_unit_field(project_name: str, episode: int, unit_id: str, req: UnitFieldRequest):
+    """把单元文本 / 导演说明存回剧本（依赖它的 H3 提示词与产出会按规则过期）。"""
+    try:
+        await _service(project_name).save_unit_field(project_name, episode, unit_id, req.field, req.value)
+    except CanvasGraphError as exc:
+        _raise(exc)
+    return {"saved": True}
+
+
+@router.get("/projects/{project_name}/canvas/markdown")
+async def get_markdown(project_name: str, file: str):
+    """文档节点的内容（来源文本 / 分集计划等）。"""
+    try:
+        return {"content": await _service(project_name).markdown(project_name, file)}
+    except CanvasGraphError as exc:
+        _raise(exc)
+
+
+@router.post("/projects/{project_name}/canvas/members", dependencies=[Depends(require_project_migration_ok)])
+async def update_members(project_name: str, req: MembersRequest):
+    """把节点放进某个分组（含项目推导的分组），或从分组里放出来（group_id 为空）。"""
+    try:
+        revision = await _service(project_name).set_members(
+            project_name,
+            req.node_ids,
+            req.group_id,
+            {node_id: pos.model_dump() for node_id, pos in req.positions.items()},
+        )
+    except CanvasGraphError as exc:
+        _raise(exc)
+    return {"revision": revision}
+
+
 @router.patch("/projects/{project_name}/canvas/nodes/{node_id}", dependencies=[Depends(require_project_migration_ok)])
 async def update_node(project_name: str, node_id: str, req: PatchNodeRequest):
     position = req.position.model_dump() if req.position else None
@@ -139,6 +300,21 @@ async def update_node(project_name: str, node_id: str, req: PatchNodeRequest):
     except CanvasGraphError as exc:
         _raise(exc)
     return {"node": node, "revision": revision}
+
+
+class NoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str = Field(max_length=2000, description="参考说明；空串恢复默认（资产图）或清除（其余图片）")
+
+
+@router.put(
+    "/projects/{project_name}/canvas/nodes/{node_id}/note", dependencies=[Depends(require_project_migration_ok)]
+)
+async def update_note(project_name: str, node_id: str, req: NoteRequest):
+    """给图片节点（含项目资产图）写参考说明：这张图被别的节点当参考图用时，说明连同图一起交给供应商。"""
+    revision = await _service(project_name).set_note(project_name, node_id, req.note)
+    return {"revision": revision}
 
 
 @router.delete("/projects/{project_name}/canvas/nodes/{node_id}", dependencies=[Depends(require_project_migration_ok)])
@@ -180,8 +356,10 @@ async def delete_edge(project_name: str, edge_id: str):
 
 
 @router.post("/projects/{project_name}/canvas/images", dependencies=[Depends(require_project_migration_ok)])
-async def upload_canvas_image(project_name: str, x: float = 0, y: float = 0, file: UploadFile = File(...)):
-    """上传图片，直接成为画布上的一个图片节点。"""
+async def upload_canvas_image(
+    project_name: str, x: float = 0, y: float = 0, node_id: str | None = None, file: UploadFile = File(...)
+):
+    """上传图片：默认成为画布上新的图片节点；带 ``node_id`` 时填进（或换掉）这个已有的图片节点。"""
     suffix = "." + (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
     if suffix not in _UPLOAD_EXTS:
         raise BadRequestError("canvas_upload_ext_unsupported", allowed=", ".join(_UPLOAD_EXTS))
@@ -199,12 +377,22 @@ async def upload_canvas_image(project_name: str, x: float = 0, y: float = 0, fil
         target.write_bytes(content)
 
     await asyncio.to_thread(_save)
-    node, graph = await service.mutate(
-        project_name,
-        lambda g: add_node(
-            g, make_node(NODE_IMAGE, {"x": x, "y": y}, {"label": file.filename}, server_data={"path": rel})
-        ),
-    )
+
+    def _place(graph: dict[str, Any]) -> dict[str, Any]:
+        if node_id is None:
+            return add_node(
+                graph, make_node(NODE_IMAGE, {"x": x, "y": y}, {"label": file.filename}, server_data={"path": rel})
+            )
+        node = find_node(graph, node_id)
+        if node["type"] != NODE_IMAGE or node["data"].get("generated"):
+            raise CanvasGraphError("canvas_invalid_connection")
+        node["data"].update(path=rel, version=int(node["data"].get("version") or 0) + 1)
+        return node
+
+    try:
+        node, graph = await service.mutate(project_name, _place)
+    except CanvasGraphError as exc:
+        _raise(exc)
     return {"node": node, "revision": graph["revision"]}
 
 
@@ -212,7 +400,7 @@ async def upload_canvas_image(project_name: str, x: float = 0, y: float = 0, fil
     "/projects/{project_name}/canvas/nodes/{node_id}/run", dependencies=[Depends(require_project_migration_ok)]
 )
 async def run_node(project_name: str, node_id: str, user: CurrentUser):
-    """运行节点：图片供应商节点读入连进来的提示词与参考图并挂出输出节点；H3 写作与联合图节点复用既有生成链路。"""
+    """运行节点：图片供应商节点读入连进来的提示词与参考图并挂出输出节点。"""
     try:
         return await _service(project_name).run(project_name, node_id, user_id=user.id, source="webui")
     except CanvasGraphError as exc:

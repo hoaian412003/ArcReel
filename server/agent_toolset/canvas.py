@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,8 +19,6 @@ from server.tool_runtime import CallerContext, ProjectScope, Services, ToolOutco
 
 _TEXT_PREVIEW_CHARS = 600
 
-PositiveEpisode = Annotated[int, Field(ge=1)]
-
 
 class Position(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -32,14 +30,20 @@ class Position(BaseModel):
 class GetCanvasRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    node_type: str | None = Field(
+        default=None, description="只返回这个类型的节点（如 text / image_generate / character / scene）；缺省返回全部"
+    )
+    id_contains: str | None = Field(default=None, description="只返回 id 含该子串的节点（不分大小写）")
+    include_edges: bool = Field(default=True, description="false 时不返回连线，读大画布时先看节点用")
+
 
 class CanvasAddNodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    type: Literal["text", "image_generate", "h3_writer", "video_generate", "audio_generate"] = Field(
+    type: Literal["text", "image_generate", "video_generate", "audio_generate"] = Field(
         description=(
-            "节点类型：text 文本（提示词 / 备注）；image_generate 图片供应商；h3_writer H3 提示词写作；"
-            "video_generate 视频供应商（提示词 + 可选起始帧图 → 视频）；audio_generate 语音供应商（文本 → 语音）。后四类可运行"
+            "节点类型：text 文本（提示词 / 备注）；image_generate 图片供应商；"
+            "video_generate 视频供应商（提示词 + 可选起始帧图 → 视频）；audio_generate 语音供应商（文本 → 语音）。后三类可运行"
         )
     )
     position: Position = Field(
@@ -74,6 +78,13 @@ class CanvasPatchNodeRequest(BaseModel):
     model: str | None = Field(
         default=None, description="新图像模型（供应商/模型），仅图片供应商节点；传空串恢复项目默认"
     )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "参考说明，图片节点（含项目资产图 p:*_sheet）专用：这张图被别的供应商节点当参考图时，说明随图一起交给供应商，"
+            "如「This is his face, ...」。传空串恢复默认（资产图）或清除"
+        ),
+    )
     duration_seconds: int | None = Field(default=None, ge=1, le=60, description="新视频时长（秒），仅视频供应商节点")
     voice: str | None = Field(default=None, description="新音色名，仅语音供应商节点；传空串恢复项目默认")
 
@@ -99,14 +110,6 @@ class CanvasDisconnectRequest(BaseModel):
     edge_id: str = Field(min_length=1, description="连线 id（get_canvas 返回）；由项目数据推导出的虚拟连线不能删")
 
 
-class CanvasSetEpisodesRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    episodes: list[PositiveEpisode] = Field(
-        description="画布上展示项目节点（集分组、视频单元、起始帧联合图、H3 提示词）的集；整份替换，空列表即全部隐藏。仅参考生视频项目"
-    )
-
-
 class CanvasSaveTemplateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -119,6 +122,32 @@ class CanvasUseTemplateRequest(BaseModel):
 
     template_id: str = Field(min_length=1, description="模板 id（get_canvas 的 templates 返回）")
     position: Position = Field(description="展开位置（模板左上角）")
+
+
+class CanvasImportEpisodeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    episode: int = Field(ge=1, description="集号；已经在画布上就返回现有分组")
+
+
+class CanvasImportAssetsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class CanvasGroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    node_ids: list[str] = Field(min_length=1, description="要放进新分组的节点 id")
+    label: str = Field(min_length=1, max_length=80, description="分组名")
+    position: Position = Field(description="分组左上角")
+    width: float = Field(default=900, ge=200, description="分组宽")
+    height: float = Field(default=600, ge=120, description="分组高")
+
+
+class CanvasUngroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    group_id: str = Field(min_length=1, description="分组节点 id；只拆分组，组内节点与项目资产保留")
 
 
 def _problem(exc: CanvasGraphError) -> ToolProblem:
@@ -140,28 +169,40 @@ def _digest(node: dict[str, Any]) -> dict[str, Any]:
     out = {"id": node["id"], "type": node["type"], "position": node.get("abs") or node["position"], "data": data}
     if node.get("derived"):
         out["read_only"] = True
+    if node.get("parentId"):
+        out["parent_id"] = node["parentId"]
     return out
 
 
 async def get_canvas(
-    _request: ToolRequest[GetCanvasRequest], scope: ProjectScope, _caller: CallerContext, services: Services
+    request: ToolRequest[GetCanvasRequest], scope: ProjectScope, _caller: CallerContext, services: Services
 ) -> ToolOutcome[dict[str, Any]]:
+    value = request.value
     try:
         view = await _service(services).view(scope.project_name)
     except Exception as exc:
         return ToolOutcome(problem=ToolProblem("internal_error", f"get_canvas 失败: {exc}"))
+    needle = value.id_contains.lower() if value.id_contains else None
+    nodes = [
+        n
+        for n in view["nodes"]
+        if (value.node_type is None or n["type"] == value.node_type) and (needle is None or needle in n["id"].lower())
+    ]
+    kept = {n["id"] for n in nodes}
+    filtered = value.node_type is not None or needle is not None
+    edges = [
+        {k: e[k] for k in ("id", "source", "sourceHandle", "target", "targetHandle")}
+        | ({"virtual": True} if e.get("virtual") else {})
+        for e in view["edges"]
+        if not filtered or e["source"] in kept or e["target"] in kept
+    ]
     return ToolOutcome(
         value={
             "revision": view["revision"],
-            "shown_episodes": view["view"]["episodes"],
-            "available_episodes": view["episodes"],
             "templates": view["templates"],
-            "nodes": [_digest(n) for n in view["nodes"]],
-            "edges": [
-                {k: e[k] for k in ("id", "source", "sourceHandle", "target", "targetHandle")}
-                | ({"virtual": True} if e.get("virtual") else {})
-                for e in view["edges"]
-            ],
+            "node_count": len(nodes),
+            "nodes": [_digest(n) for n in nodes],
+            "edges": edges if value.include_edges else [],
         }
     )
 
@@ -205,8 +246,13 @@ async def canvas_patch_node(
         data["duration_seconds"] = value.duration_seconds
     if value.voice is not None:
         data["voice"] = value.voice or None
+    service = _service(services)
     try:
-        node, revision = await _service(services).patch_node(
+        if value.note is not None:
+            revision = await service.set_note(scope.project_name, value.node_id, value.note)
+            if not data and value.position is None:
+                return ToolOutcome(value={"node_id": value.node_id, "note": value.note.strip(), "revision": revision})
+        node, revision = await service.patch_node(
             scope.project_name, value.node_id, value.position.model_dump() if value.position else None, data
         )
     except CanvasGraphError as exc:
@@ -245,13 +291,6 @@ async def canvas_disconnect(
     except CanvasGraphError as exc:
         return ToolOutcome(problem=_problem(exc))
     return ToolOutcome(value={"deleted": request.value.edge_id, "revision": revision})
-
-
-async def canvas_set_episodes(
-    request: ToolRequest[CanvasSetEpisodesRequest], scope: ProjectScope, _caller: CallerContext, services: Services
-) -> ToolOutcome[dict[str, Any]]:
-    episodes, revision = await _service(services).set_view(scope.project_name, list(request.value.episodes))
-    return ToolOutcome(value={"shown_episodes": episodes, "revision": revision})
 
 
 async def canvas_run_node(
@@ -293,20 +332,67 @@ async def canvas_use_template(
     return ToolOutcome(value={"nodes": [_digest(n) for n in nodes], "revision": revision})
 
 
+async def canvas_import_episode(
+    request: ToolRequest[CanvasImportEpisodeRequest], scope: ProjectScope, _caller: CallerContext, services: Services
+) -> ToolOutcome[dict[str, Any]]:
+    try:
+        group, revision = await _service(services).import_episode(scope.project_name, request.value.episode)
+    except CanvasGraphError as exc:
+        return ToolOutcome(problem=_problem(exc))
+    return ToolOutcome(value={"group": _digest(group), "revision": revision})
+
+
+async def canvas_import_assets(
+    request: ToolRequest[CanvasImportAssetsRequest], scope: ProjectScope, _caller: CallerContext, services: Services
+) -> ToolOutcome[dict[str, Any]]:
+    try:
+        created, revision = await _service(services).import_assets(scope.project_name)
+    except CanvasGraphError as exc:
+        return ToolOutcome(problem=_problem(exc))
+    return ToolOutcome(value={"created_groups": created, "revision": revision})
+
+
+async def canvas_group(
+    request: ToolRequest[CanvasGroupRequest], scope: ProjectScope, _caller: CallerContext, services: Services
+) -> ToolOutcome[dict[str, Any]]:
+    value = request.value
+    try:
+        group, revision = await _service(services).group_nodes(
+            scope.project_name,
+            list(value.node_ids),
+            value.label,
+            value.position.model_dump(),
+            {"width": value.width, "height": value.height},
+        )
+    except CanvasGraphError as exc:
+        return ToolOutcome(problem=_problem(exc))
+    return ToolOutcome(value={"group": _digest(group), "revision": revision})
+
+
+async def canvas_ungroup(
+    request: ToolRequest[CanvasUngroupRequest], scope: ProjectScope, _caller: CallerContext, services: Services
+) -> ToolOutcome[dict[str, Any]]:
+    try:
+        revision = await _service(services).delete_node(scope.project_name, request.value.group_id)
+    except CanvasGraphError as exc:
+        return ToolOutcome(problem=_problem(exc))
+    return ToolOutcome(value={"ungrouped": request.value.group_id, "revision": revision})
+
+
 _HANDLES_NOTE = (
     "句柄（只有同数据类型的句柄能连）：text 节点输出 text；image 节点输出 image；"
-    "image_generate 输入 prompt(text)、image1(image)，输出 image（一张图）；h3_writer 输入 units(unit)，输出 h3；"
+    "image_generate 输入 prompt(text)、image1(image)，输出 image（一张图）；"
     "image_generate 的输出句柄 image 也可直接连到另一个 image_generate 的 image1，或连到 video_generate 的 frame（起始帧）：运行时取它最近一次产出的图。"
     "video_generate 输入 prompt(text)、frame(image)，输出 video；audio_generate 输入 text(text)，输出 audio。"
-    "每个角色是一个分组 p:character:<角色名>，组内是只读的 描述文本 p:char_text:<名> + 参考图 p:char_ref:<名> → 图片供应商 "
-    "p:char_gen:<名> → 资产图 p:char_sheet:<名>；资产图节点输出 image，可连到别处的 image1。"
-    "视频单元节点 p:unit:<集>:<单元> 输出 unit、text；起始帧联合图节点 p:keyframe:<集>:<联合图> 输出 image。"
+    "角色 / 场景 / 道具 / 商品都是普通分组（group）：组内是文本 → 图片供应商 → 图片 → 资产节点（asset，输出 image）。"
+    "资产节点 = 发布键：它的输入图成为项目资产图；删除分组只从画布移除，项目资产保留。"
+    "提示词里写 @[名称] 即自动带上同名资产的图，无需连线。"
 )
 
 GET_CANVAS = ToolDeclaration(
     name="get_canvas",
     description=(
-        "读取项目的节点画布：节点（落盘节点与按选中集推导的只读项目节点）、连线、展示中的集与可展示的集。"
+        "读取项目的节点画布：节点（落盘节点与项目推导的只读节点）与连线。"
         "画布是用户在界面上直接看到的创作图，你的改动会实时出现在他们面前。" + _HANDLES_NOTE + "只读，无副作用。"
     ),
     request_model=GetCanvasRequest,
@@ -318,7 +404,7 @@ GET_CANVAS = ToolDeclaration(
 CANVAS_ADD_NODE = ToolDeclaration(
     name="canvas_add_node",
     description=(
-        "在画布上新增一个节点（文本 / 图片供应商 / H3 写作 / 视频供应商 / 语音供应商）。图片 / 视频 / 语音节点由用户上传或运行产出，不能新增。"
+        "在画布上新增一个节点（文本 / 图片供应商 / 视频供应商 / 语音供应商）。图片 / 视频 / 语音节点由用户上传或运行产出，不能新增。"
         "新增后用 canvas_connect 连线，再用 canvas_run_node 运行。"
     ),
     request_model=CanvasAddNodeRequest,
@@ -338,7 +424,7 @@ CANVAS_PATCH_NODE = ToolDeclaration(
 
 CANVAS_DELETE_NODE = ToolDeclaration(
     name="canvas_delete_node",
-    description="删除画布上的一个落盘节点及其连线；正在排队或运行的节点不能删。项目推导的只读节点不能删（用 canvas_set_episodes 隐藏整集）。",
+    description="删除画布上的一个落盘节点及其连线；正在排队或运行的节点不能删。项目推导的只读节点不能删。",
     request_model=CanvasNodeRequest,
     migration=BLOCKED,
     domain_key="canvas_node",
@@ -363,23 +449,10 @@ CANVAS_DISCONNECT = ToolDeclaration(
     handler=canvas_disconnect,
 )
 
-CANVAS_SET_EPISODES = ToolDeclaration(
-    name="canvas_set_episodes",
-    description=(
-        "选择画布上展示哪几集的项目节点（集分组含视频单元、起始帧联合图与 H3 提示词），只影响展示，不动项目数据。"
-        "仅参考生视频项目有可展示的集。"
-    ),
-    request_model=CanvasSetEpisodesRequest,
-    migration=BLOCKED,
-    domain_key="canvas_view",
-    handler=canvas_set_episodes,
-)
-
 CANVAS_RUN_NODE = ToolDeclaration(
     name="canvas_run_node",
     description=(
         "运行一个节点并立即返回任务 id（不等结果）：image_generate / video_generate / audio_generate 读入连进来的文本（与参考图 / 起始帧），挂出一个图片 / 视频 / 语音输出节点；"
-        "h3_writer 为它所连的视频单元重写 H3 提示词（单元正文原样保留）；p:keyframe 节点生成这张起始帧联合图；p:char_gen / p:character 生成该角色的资产图（要求角色已有描述；描述与参考图在项目里改，不在画布上改）。"
         "结果出现在画布上，用 get_canvas 查看进度。"
     ),
     request_model=CanvasNodeRequest,
@@ -391,7 +464,7 @@ CANVAS_RUN_NODE = ToolDeclaration(
 CANVAS_SAVE_TEMPLATE = ToolDeclaration(
     name="canvas_save_template",
     description=(
-        "把画布上选中的节点（文本、图片供应商、H3 写作）与它们之间的连线存成模板，便于在别的位置或别的集重用。"
+        "把画布上选中的节点（文本、图片供应商、视频供应商、语音供应商）与它们之间的连线存成模板，便于在别的位置重用。"
         "运行产出的图片、上传的图片与项目推导节点不入模板。"
     ),
     request_model=CanvasSaveTemplateRequest,
@@ -409,6 +482,46 @@ CANVAS_USE_TEMPLATE = ToolDeclaration(
     handler=canvas_use_template,
 )
 
+CANVAS_IMPORT_EPISODE = ToolDeclaration(
+    name="canvas_import_episode",
+    description=(
+        "把一集的制作流程摆上画布：分组「EPxx · 标题」，内含来源与规划 markdown 节点，"
+        "每个单元一行（单元脚本 → 导演 → 关键帧 → H3 提示词 → 生成视频 → 视频 → 配音文本 → 生成音色 → 配音）。"
+        "已在画布上则返回现有分组。"
+    ),
+    request_model=CanvasImportEpisodeRequest,
+    migration=BLOCKED,
+    domain_key="canvas_node",
+    handler=canvas_import_episode,
+)
+
+CANVAS_IMPORT_ASSETS = ToolDeclaration(
+    name="canvas_import_assets",
+    description="把项目里有、画布上还没有分组的角色 / 场景 / 道具 / 商品摆上画布（每个一个分组）。",
+    request_model=CanvasImportAssetsRequest,
+    migration=BLOCKED,
+    domain_key="canvas_node",
+    handler=canvas_import_assets,
+)
+
+CANVAS_GROUP = ToolDeclaration(
+    name="canvas_group",
+    description="把若干节点放进一个新分组（只是画布上的归类，不改项目数据）。",
+    request_model=CanvasGroupRequest,
+    migration=BLOCKED,
+    domain_key="canvas_node",
+    handler=canvas_group,
+)
+
+CANVAS_UNGROUP = ToolDeclaration(
+    name="canvas_ungroup",
+    description="拆掉一个分组：组内节点保留并回到画布，项目资产不受影响。",
+    request_model=CanvasUngroupRequest,
+    migration=BLOCKED,
+    domain_key="canvas_node",
+    handler=canvas_ungroup,
+)
+
 CANVAS_TOOLS = (
     GET_CANVAS,
     CANVAS_ADD_NODE,
@@ -416,10 +529,13 @@ CANVAS_TOOLS = (
     CANVAS_DELETE_NODE,
     CANVAS_CONNECT,
     CANVAS_DISCONNECT,
-    CANVAS_SET_EPISODES,
     CANVAS_RUN_NODE,
     CANVAS_SAVE_TEMPLATE,
     CANVAS_USE_TEMPLATE,
+    CANVAS_IMPORT_EPISODE,
+    CANVAS_IMPORT_ASSETS,
+    CANVAS_GROUP,
+    CANVAS_UNGROUP,
 )
 
 __all__ = ["CANVAS_TOOLS"]

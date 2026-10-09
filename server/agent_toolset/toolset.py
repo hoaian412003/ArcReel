@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from server.agent_toolset.asset_admin import ASSET_ADMIN_TOOLS
 from server.agent_toolset.canvas import CANVAS_TOOLS
 from server.agent_toolset.content_read import CONTENT_READ_TOOLS
 from server.agent_toolset.declaration import AgentToolDeclaration, Blocked, ToolDeclaration
@@ -30,6 +31,7 @@ AGENT_TOOLSET: tuple[AgentToolDeclaration, ...] = (
     *SCRIPT_AUTHORING_TOOLS,
     *KEYFRAME_PLANNING_TOOLS,
     *CANVAS_TOOLS,
+    *ASSET_ADMIN_TOOLS,
     *REPAIR_CHANNEL_TOOLS,
     *REVIEW_ASSISTANT_TOOLS,
     *SCRIPT_EDITING_TOOLS,

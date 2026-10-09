@@ -1,4 +1,4 @@
-"""画布项目视图：参考生视频项目里选中的集推导成集 / 单元 / 起始帧 / H3 节点与它们的虚拟连线。"""
+"""画布项目视图：项目里的角色、场景、道具、商品推导成分组、子节点与它们的虚拟连线。"""
 
 from itertools import pairwise
 from pathlib import Path
@@ -17,89 +17,9 @@ class _PM:
         return self.root
 
 
-UNITS = [
-    {"unit_id": "E1U1", "text": "The duel begins", "duration_seconds": 8},
-    {
-        "unit_id": "E1U2",
-        "text": "The duel ends",
-        "duration_seconds": 6,
-        "h3_prompt": {"summary": "x", "source_text_hash": "h"},
-    },
-]
-PROJECT = {
-    "generation_mode": "reference_video",
-    "episodes": [{"episode": 1, "title": "Pilot", "script_file": "episode_1.json"}],
-}
-
-
 @pytest.fixture
-def patched(monkeypatch, tmp_path):
-    monkeypatch.setattr(canvas_view, "is_h3_ref2va", lambda _p: True)
-    monkeypatch.setattr(canvas_view, "read_formal_script", lambda *_a: {"video_units": UNITS})
-    monkeypatch.setattr(
-        canvas_view.KeyframeBoardService,
-        "state",
-        lambda _self, _n, _e: {
-            "units": [{"unit_id": "E1U1", "cell_id": "K01"}],
-            "sheets": [
-                {
-                    "id": "S1",
-                    "scene": "arena",
-                    "image": None,
-                    "problem": None,
-                    "cells": [{"id": "K01", "status": "draft"}],
-                }
-            ],
-        },
-    )
+def patched(tmp_path):
     return _PM(tmp_path)
-
-
-def _status(unit):
-    return "current" if unit["unit_id"] == "E1U2" else "missing"
-
-
-def test_view_lays_out_episode_group_with_unit_keyframe_and_h3_columns(patched):
-    nodes, edges = canvas_view.build_project_view(patched, "demo", PROJECT, [1], {}, h3_status=_status)
-    by_id = {n["id"]: n for n in nodes}
-    group = by_id[derived_id("episode", 1)]
-    unit = by_id[derived_id("unit", 1, "E1U2")]
-
-    assert group["data"]["unit_count"] == 2
-    assert unit["parentId"] == group["id"]
-    assert by_id[derived_id("h3_prompt", 1, "E1U2")]["data"]["status"] == "current"
-    assert by_id[derived_id("h3_prompt", 1, "E1U1")]["data"]["status"] == "missing"
-    assert by_id[derived_id("keyframe", 1, "S1")]["data"]["cell_count"] == 1
-    pairs = {(e["source"], e["target"]) for e in edges}
-    assert (derived_id("keyframe", 1, "S1"), derived_id("unit", 1, "E1U1")) in pairs
-    assert (derived_id("unit", 1, "E1U1"), derived_id("h3_prompt", 1, "E1U1")) in pairs
-    assert all(e["virtual"] for e in edges)
-
-
-def test_episode_group_position_comes_from_overrides(patched):
-    nodes, _ = canvas_view.build_project_view(
-        patched, "demo", PROJECT, [1], {derived_id("episode", 1): {"x": 500, "y": 40}}
-    )
-    group = next(n for n in nodes if n["type"] == "episode")
-    child = next(n for n in nodes if n["id"] == derived_id("unit", 1, "E1U1"))
-    assert group["position"] == {"x": 500.0, "y": 40.0}
-    assert child["abs"]["x"] == 500.0 + child["position"]["x"]
-
-
-def test_non_reference_projects_and_unknown_episodes_yield_nothing(patched):
-    assert canvas_view.build_project_view(patched, "demo", {"generation_mode": "storyboard"}, [1], {}) == ([], [])
-    assert canvas_view.build_project_view(patched, "demo", PROJECT, [9], {}) == ([], [])
-    assert canvas_view.list_episodes({"generation_mode": "storyboard"}) == []
-    assert canvas_view.list_episodes(PROJECT) == [{"episode": 1, "title": "Pilot"}]
-
-
-def test_writer_edges_attach_to_the_h3_nodes_of_connected_units():
-    unit = derived_id("unit", 1, "E1U1")
-    h3 = derived_id("h3_prompt", 1, "E1U1")
-    stored = [{"id": "e", "source": unit, "sourceHandle": "unit", "target": "h3_writer_a", "targetHandle": "units"}]
-    out = canvas_view.writer_output_edges(stored, {h3})
-    assert [(e["source"], e["sourceHandle"], e["target"]) for e in out] == [("h3_writer_a", "h3", h3)]
-    assert canvas_view.writer_output_edges(stored, set()) == []
 
 
 CHARACTER_PROJECT = {
@@ -115,11 +35,11 @@ def test_every_project_gets_a_group_per_character_with_text_reference_generator_
     (patched.root / "characters").mkdir()
     (patched.root / "characters" / "阿离.png").write_bytes(b"png")
 
-    nodes, edges = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, [], {})
+    nodes, edges = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, {})
 
     by_id = {n["id"]: n for n in nodes}
     group = by_id[derived_id("character", "阿离")]
-    assert (group["type"], group["derived"], group["data"]["name"]) == ("character", True, "阿离")
+    assert (group["type"], group["derived"], group["data"]["name"]) == ("group", True, "阿离")
     parts = {kind: by_id[derived_id(kind, "阿离")] for kind in ("char_text", "char_ref", "char_gen", "char_sheet")}
     assert {k: v["type"] for k, v in parts.items()} == {
         "char_text": "text",
@@ -144,18 +64,12 @@ def test_every_project_gets_a_group_per_character_with_text_reference_generator_
 
 def test_character_groups_stack_on_the_left_and_use_overrides(patched):
     placed = {derived_id("character", "阿宁"): {"x": 12, "y": 34}}
-    nodes, _ = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, [], placed)
-    groups = {n["data"]["name"]: n for n in nodes if n["type"] == "character"}
+    nodes, _ = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, placed)
+    groups = {n["data"]["name"]: n for n in nodes if n["type"] == "group" and n["id"].startswith("p:character:")}
     assert groups["阿宁"]["position"] == {"x": 12.0, "y": 34.0}
     assert groups["阿离"]["position"]["x"] < 0
     child = next(n for n in nodes if n["id"] == derived_id("char_sheet", "阿宁"))
     assert child["abs"]["x"] == 12.0 + child["position"]["x"]
-
-
-def test_characters_sit_alongside_episode_groups_in_reference_projects(patched):
-    project = {**PROJECT, "characters": {"阿离": {"character_sheet": ""}}}
-    nodes, _ = canvas_view.build_project_view(patched, "demo", project, [1], {}, h3_status=_status)
-    assert {n["type"] for n in nodes} >= {"character", "episode", "unit", "image_generate"}
 
 
 DERIVATIVE_PROJECT = {
@@ -175,7 +89,7 @@ DERIVATIVE_PROJECT = {
 
 
 def test_each_derivative_is_a_row_in_its_character_group_that_edits_the_base_sheet(patched):
-    nodes, edges = canvas_view.build_project_view(patched, "demo", DERIVATIVE_PROJECT, [], {})
+    nodes, edges = canvas_view.build_project_view(patched, "demo", DERIVATIVE_PROJECT, {})
     by_id = {n["id"]: n for n in nodes}
     group = by_id[derived_id("character", "阿离")]
     other = by_id[derived_id("character", "阿宁")]
@@ -215,12 +129,12 @@ ASSET_PROJECT = {
 
 
 def test_scenes_props_and_products_get_description_generator_sheet_groups_below_the_characters(patched):
-    nodes, edges = canvas_view.build_project_view(patched, "demo", ASSET_PROJECT, [], {})
+    nodes, edges = canvas_view.build_project_view(patched, "demo", ASSET_PROJECT, {})
     by_id = {n["id"]: n for n in nodes}
 
     for asset, name in (("scene", "茶楼"), ("prop", "玉佩"), ("product", "马克杯")):
         group = by_id[derived_id(asset, name)]
-        assert (group["type"], group["data"]["asset"]) == ("character", asset)
+        assert (group["type"], group["data"]["asset"]) == ("group", asset)
         parts = [by_id[derived_id(f"{asset}_{part}", name)] for part in ("text", "gen", "sheet")]
         assert [p["type"] for p in parts] == ["text", "image_generate", "image"]
         assert all(p["parentId"] == group["id"] and p["data"]["asset"] == asset for p in parts)
@@ -231,7 +145,45 @@ def test_scenes_props_and_products_get_description_generator_sheet_groups_below_
     assert by_id[derived_id("scene_sheet", "茶楼")]["data"]["path"] == "scenes/茶楼.png"
     assert by_id[derived_id("product_sheet", "马克杯")]["data"]["path"] is None
     # 分组自上而下依次排开，互不重叠。
-    ordered = sorted((n for n in nodes if n["type"] == "character"), key=lambda n: n["position"]["y"])
+    ordered = sorted((n for n in nodes if n["type"] == "group"), key=lambda n: n["position"]["y"])
     assert [n["data"]["asset"] for n in ordered] == ["character", "scene", "prop", "product"]
     for upper, lower in pairwise(ordered):
         assert lower["position"]["y"] >= upper["position"]["y"] + upper["height"]
+
+
+def test_every_asset_sheet_gets_an_asset_port_carrying_the_image_and_note(patched):
+    (patched.root / "characters").mkdir()
+    (patched.root / "characters" / "阿离.png").write_bytes(b"png")
+
+    nodes, edges = canvas_view.build_project_view(
+        patched, "demo", CHARACTER_PROJECT, {}, notes={derived_id("char_sheet", "阿离"): "This is her face."}
+    )
+
+    by_id = {n["id"]: n for n in nodes}
+    port = by_id[derived_id("char_port", "阿离")]
+    sheet = by_id[derived_id("char_sheet", "阿离")]
+    assert (port["type"], port["parentId"], port["data"]["role"]) == ("asset", sheet["parentId"], "port")
+    assert port["data"]["path"] == "characters/阿离.png"
+    assert port["data"]["note"] == "This is her face."
+    assert port["data"]["note_target"] == sheet["id"]
+    assert port["position"]["x"] > sheet["position"]["x"]
+    assert (sheet["id"], "image", port["id"], "in") in {
+        (e["source"], e["sourceHandle"], e["target"], e["targetHandle"]) for e in edges
+    }
+    assert derived_id("char_port", "阿宁") in by_id
+
+
+def test_a_node_the_user_dragged_inside_its_group_keeps_that_spot_and_is_pinned(patched):
+    (patched.root / "characters").mkdir()
+    (patched.root / "characters" / "阿离.png").write_bytes(b"png")
+    sheet_id = derived_id("char_sheet", "阿离")
+
+    nodes, _ = canvas_view.build_project_view(patched, "demo", CHARACTER_PROJECT, {sheet_id: {"x": 123.0, "y": 456.0}})
+
+    by_id = {n["id"]: n for n in nodes}
+    sheet = by_id[sheet_id]
+    group = by_id[derived_id("character", "阿离")]
+    assert sheet["position"] == {"x": 123.0, "y": 456.0}
+    assert sheet["abs"] == {"x": group["position"]["x"] + 123.0, "y": group["position"]["y"] + 456.0}
+    assert sheet["data"]["pinned"] is True
+    assert "pinned" not in by_id[derived_id("char_gen", "阿离")]["data"]

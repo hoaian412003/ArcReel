@@ -124,6 +124,7 @@ import type {
   CanvasNodeType,
   CanvasRunResult,
   CanvasTemplateSummary,
+  CanvasFlowEpisode,
 } from "@/types/canvas";
 import type { DirectionReview, DirectionReviewDecision, FlowBoard, ReviewTask, ReviewTaskKind, ReviewTasksResponse } from "@/types/flow";
 import type { Screenplay, ScreenplayOperation } from "@/types/screenplay";
@@ -1528,6 +1529,24 @@ class API {
     return `/projects/${encodeURIComponent(projectName)}/canvas`;
   }
 
+  /** 订阅画布变化：收到 `changed` 就该重新读取画布；`onOpen` / `onError` 用来在推送不可用时退回轮询。 */
+  static openCanvasStream(options: {
+    projectName: string;
+    onChanged: () => void;
+    onOpen?: () => void;
+    onError?: () => void;
+  }): SseStreamHandle {
+    return openSseStream({
+      url: `${API_BASE}${this.canvasBase(options.projectName)}/stream`,
+      headers: sseHeaders,
+      onMessage(message) {
+        if (message.event === "ready") options.onOpen?.();
+        else if (message.event === "changed") options.onChanged();
+      },
+      onError: sseErrorHandler(() => options.onError?.()),
+    });
+  }
+
   static async getCanvas(projectName: string, options: { signal?: AbortSignal } = {}): Promise<CanvasGraph> {
     return this.request(this.canvasBase(projectName), { signal: options.signal });
   }
@@ -1537,6 +1556,14 @@ class API {
     body: { type: CanvasNodeType; position: { x: number; y: number }; data?: CanvasNodeData },
   ): Promise<{ node: CanvasNode; revision: number }> {
     return this.request(`${this.canvasBase(projectName)}/nodes`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** 图片节点（含项目资产图）的参考说明：作为参考图被引用时随图交给供应商；空串恢复默认 / 清除。 */
+  static async setCanvasNodeNote(projectName: string, nodeId: string, note: string): Promise<{ revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/nodes/${encodeURIComponent(nodeId)}/note`, {
+      method: "PUT",
+      body: JSON.stringify({ note }),
+    });
   }
 
   static async updateCanvasNode(
@@ -1554,6 +1581,65 @@ class API {
     return this.request(`${this.canvasBase(projectName)}/nodes/${encodeURIComponent(nodeId)}`, { method: "DELETE" });
   }
 
+  /** 新建资产分组（描述文本 + 图片供应商 + 资产节点）；描述有了就会在项目里建出对应资产。 */
+  static async createCanvasAssetGroup(
+    projectName: string,
+    body: { kind: "character" | "scene" | "prop" | "product"; name: string; description: string; position: { x: number; y: number } },
+  ): Promise<{ node: CanvasNode; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/asset-groups`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** 把项目里已有、画布上还没有的资产摆上画布（各成一个分组）。 */
+  static async importCanvasAssets(projectName: string): Promise<{ imported: number; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/assets/import`, { method: "POST" });
+  }
+
+  /** 总览：每一集的来源 / 分集计划 / 单元各步骤状态，及其在画布上对应的节点。 */
+  static async getCanvasFlow(projectName: string): Promise<{ episodes: CanvasFlowEpisode[] }> {
+    return this.request(`${this.canvasBase(projectName)}/flow`);
+  }
+
+  /** 把一集的流程摆上画布（已经在画布上就返回现有分组）。 */
+  static async importCanvasEpisode(projectName: string, episode: number): Promise<{ node: CanvasNode; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/episodes/${episode}/import`, { method: "POST" });
+  }
+
+  /** 把单元文本 / 导演说明存回剧本。 */
+  static async saveCanvasUnitField(
+    projectName: string,
+    episode: number,
+    unitId: string,
+    field: "text" | "direction",
+    value: string,
+  ): Promise<{ saved: boolean }> {
+    return this.request(`${this.canvasBase(projectName)}/episodes/${episode}/units/${encodeURIComponent(unitId)}/field`, {
+      method: "PUT",
+      body: JSON.stringify({ field, value }),
+    });
+  }
+
+  /** 文档节点的内容（来源文本 / 分集计划等）。 */
+  static async getCanvasMarkdown(projectName: string, file: string): Promise<{ content: string }> {
+    return this.request(`${this.canvasBase(projectName)}/markdown?file=${encodeURIComponent(file)}`);
+  }
+
+  /** 把选中的落盘节点收进一个新分组；分组框的位置与大小按节点实际尺寸算好后传来。 */
+  static async groupCanvasNodes(
+    projectName: string,
+    body: { node_ids: string[]; label: string; position: { x: number; y: number }; width: number; height: number },
+  ): Promise<{ node: CanvasNode; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/groups`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** 把节点放进某个分组（用户自建或项目推导的），或从分组里放出来（`groupId` 为 null）；`positions` 随新归属：进组相对分组、出组为绝对。 */
+  static async setCanvasMembers(
+    projectName: string,
+    body: { node_ids: string[]; group_id: string | null; positions: Record<string, { x: number; y: number }> },
+  ): Promise<{ revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/members`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** 保存拖动后的位置。 */
   static async updateCanvasLayout(
     projectName: string,
     positions: Record<string, { x: number; y: number }>,
@@ -1571,10 +1657,6 @@ class API {
     return this.request(`${this.canvasBase(projectName)}/edges`, { method: "POST", body: JSON.stringify(body) });
   }
 
-  static async setCanvasView(projectName: string, episodes: number[]): Promise<{ revision: number; episodes: number[] }> {
-    return this.request(`${this.canvasBase(projectName)}/view`, { method: "PUT", body: JSON.stringify({ episodes }) });
-  }
-
   static async deleteCanvasEdge(projectName: string, edgeId: string): Promise<{ revision: number }> {
     return this.request(`${this.canvasBase(projectName)}/edges/${encodeURIComponent(edgeId)}`, { method: "DELETE" });
   }
@@ -1586,6 +1668,15 @@ class API {
     position: { x: number; y: number },
   ): Promise<{ node: CanvasNode; revision: number }> {
     return API.postFileUpload(`${this.canvasBase(projectName)}/images?x=${position.x}&y=${position.y}`, file);
+  }
+
+  /** 把图片填进（或换掉）已有的图片节点。 */
+  static async fillCanvasImage(
+    projectName: string,
+    nodeId: string,
+    file: File,
+  ): Promise<{ node: CanvasNode; revision: number }> {
+    return API.postFileUpload(`${this.canvasBase(projectName)}/images?node_id=${encodeURIComponent(nodeId)}`, file);
   }
 
   /** 运行前须先跑的上游节点（缺产物或已过期的），先上游后下游，最后一项是它自己。 */

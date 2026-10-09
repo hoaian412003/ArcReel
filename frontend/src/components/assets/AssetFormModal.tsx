@@ -15,6 +15,8 @@ type Mode = "create" | "edit" | "import";
 
 interface Props {
   type: AssetType;
+  /** 覆盖标题里的类型名（如画布的「商品」复用道具表单）。 */
+  typeLabel?: string;
   mode: Mode;
   initialData?: Partial<Asset>;
   previewImageUrl?: string;
@@ -40,7 +42,7 @@ const TYPE_ICON: Record<AssetType, React.ComponentType<{ className?: string }>> 
 };
 
 export function AssetFormModal({
-  type, mode, initialData, previewImageUrl, derivatives, imageFingerprint, conflictWith, onClose, onSubmit,
+  type, typeLabel: typeLabelOverride, mode, initialData, previewImageUrl, derivatives, imageFingerprint, conflictWith, onClose, onSubmit,
 }: Props) {
   const { t } = useTranslation("assets");
   const [name, setName] = useState(initialData?.name ?? "");
@@ -73,7 +75,7 @@ export function AssetFormModal({
   const TypeIcon = TYPE_ICON[type];
 
   const isCharacter = type === "character";
-  const typeLabel = t(`type.${type}`);
+  const typeLabel = typeLabelOverride ?? t(`type.${type}`);
   const title = mode === "create" ? t("create_title", { type: typeLabel })
     : mode === "edit" ? t("edit_title", { type: typeLabel, name: initialData?.name })
     : t("import_title", { name: initialData?.name });

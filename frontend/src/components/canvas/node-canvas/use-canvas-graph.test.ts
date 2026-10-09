@@ -8,8 +8,6 @@ const graph = (revision: number, text = "a"): CanvasGraph => ({
   revision,
   nodes: [{ id: "n", type: "text", position: { x: 0, y: 0 }, data: { text } }],
   edges: [],
-  view: { episodes: [] },
-  episodes: [],
   templates: [],
 });
 

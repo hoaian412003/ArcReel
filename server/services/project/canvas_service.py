@@ -10,15 +10,12 @@ import asyncio
 from typing import Any
 
 from lib.canvas.graph import (
-    ASSET_GROUP_TYPES,
     BUSY_STATUSES,
-    KIND_CHAR_GEN,
-    KIND_CHARACTER,
-    KIND_DERIV_GEN,
-    KIND_KEYFRAME,
+    NODE_ASSET,
     NODE_AUDIO_GENERATE,
-    NODE_H3_WRITER,
+    NODE_GROUP,
     NODE_IMAGE_GENERATE,
+    NODE_TEXT,
     NODE_VIDEO_GENERATE,
     STATUS_FAILED,
     STATUS_QUEUED,
@@ -27,44 +24,32 @@ from lib.canvas.graph import (
     add_run_outputs,
     branch_plan,
     connect,
-    derived_kind,
     disconnect,
     find_node,
+    group_nodes,
     instantiate_template,
     make_node,
     make_template,
+    new_id,
     patch_node,
     remove_node,
+    resolve_asset_node,
     resolve_generate_inputs,
     resolve_reference_labels,
+    set_members,
+    set_note,
     stale_generated_images,
+    utc_now_iso,
 )
 from lib.canvas.store import load_canvas, mutate_canvas
-from lib.config.resolver import ConfigResolver
-from lib.db import async_session_factory
 from lib.generation.generation_queue import GenerationQueue
-from lib.generation.generation_queue_client import TaskSpec, WorkerOfflineError, enqueue_task_only
-from lib.infra.api_errors import ApiError
-from lib.project.asset_derivatives import DERIVATIVE_TASK_TYPE, DerivativeSheetSource, resolve_derivative_sheet_source
-from lib.project.asset_types import ASSET_SPECS, resolve_asset_key
+from lib.generation.generation_queue_client import TaskSpec
 from lib.project.project_manager import ProjectManager
-from lib.prompts.video_prompt_profile import is_h3_ref2va
-from server.services.project.canvas_view import build_project_view, list_episodes, writer_output_edges
-from server.services.project.keyframe_plan import KeyframePlanError
-from server.services.project.keyframe_sheets import enqueue_keyframe_sheet
+from server.services.project import canvas_episodes
+from server.services.project.canvas_assets import import_project_assets, to_primitives
+from server.services.project.canvas_publish import publish_asset_groups
+from server.services.project.canvas_view import build_project_view
 from server.services.tasks.canvas_tasks import CANVAS_AUDIO_TASK_TYPE, CANVAS_IMAGE_TASK_TYPE, CANVAS_VIDEO_TASK_TYPE
-from server.services.tasks.derivative_sheet_tasks import build_derivative_sheet_instruction
-from server.text_generation import TextGenerationError, TextGenerationRequest, prompt_authoring_preflight
-from server.tool_runtime import TEXT_EPISODE_SCRIPT_TASK_TYPE
-
-UNIT_NODE_PREFIX = "p:unit:"
-#: 可以被用户摆位置的派生节点（位置存进画布的 overrides）。
-_MOVABLE_DERIVED = frozenset({"episode", "character", *ASSET_GROUP_TYPES})
-#: 运行即「生成这个资产的资产图」的派生节点种类：各类资产分组本身与其中的图片供应商节点。
-_ASSET_RUN_KINDS = frozenset(
-    {KIND_CHARACTER, KIND_CHAR_GEN, *ASSET_GROUP_TYPES, *(f"{a}_gen" for a in ASSET_GROUP_TYPES)}
-)
-
 
 #: 供应商节点类型 → (任务类型, 队列媒体类型)。
 _PROVIDER_TASKS: dict[str, tuple[str, str]] = {
@@ -113,24 +98,124 @@ class CanvasService:
 
     # ---- 读 ----
 
-    def view_sync(self, project_name: str) -> dict[str, Any]:
-        """落盘图 + 选中集的派生节点；返回给界面 / Agent 的完整画布。"""
-        graph = load_canvas(self.pm.get_project_path(project_name))
+    def _derived_assets(
+        self, project_name: str, graph: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """项目里现有资产的推导视图，只用来把它们搬上画布。"""
         project = self.pm.load_project(project_name)
-        derived_nodes, virtual_edges = build_project_view(
-            self.pm, project_name, project, graph["view"]["episodes"], graph["overrides"]
-        )
-        derived = {n["id"]: n for n in derived_nodes}
-        stale = stale_generated_images(graph, derived)
-        nodes = [{**n, "data": {**n["data"], "stale": True}} if n["id"] in stale else n for n in graph["nodes"]]
-        known = {n["id"] for n in nodes} | set(derived)
+        return build_project_view(self.pm, project_name, project, graph["overrides"], notes=graph["notes"])
+
+    def ensure_migrated_sync(self, project_name: str) -> dict[str, Any]:
+        """第一次读到的画布：把早先与项目绑定的节点转成普通节点，并把项目里已有的资产摆成分组。只做一次。"""
+        project_path = self.pm.get_project_path(project_name)
+        graph = load_canvas(project_path)
+        if graph["meta"].get("primitives"):
+            return graph
+        nodes, edges = self._derived_assets(project_name, graph)
+
+        def _apply(g: dict[str, Any]) -> None:
+            to_primitives(g)
+            import_project_assets(g, nodes, edges)
+            g["meta"]["primitives"] = True
+
+        _, graph = mutate_canvas(self.pm, project_path, _apply)
+        return graph
+
+    async def import_episode(self, project_name: str, episode: int) -> tuple[dict[str, Any], int]:
+        """把一集的流程摆上画布（已经在画布上就返回现有分组）。"""
+        try:
+            group, graph = await self.mutate(
+                project_name,
+                lambda g: canvas_episodes.import_episode(self.pm, project_name, g, episode),
+            )
+        except canvas_episodes.EpisodeFlowError as exc:
+            raise CanvasGraphError(exc.code, **exc.params) from exc
+        return group, graph["revision"]
+
+    async def flow(self, project_name: str) -> list[dict[str, Any]]:
+        def _run() -> list[dict[str, Any]]:
+            graph = self.ensure_migrated_sync(project_name)
+            return canvas_episodes.flow_status(self.pm, project_name, graph)
+
+        return await asyncio.to_thread(_run)
+
+    async def save_unit_field(self, project_name: str, episode: int, unit_id: str, field: str, value: str) -> None:
+        try:
+            await asyncio.to_thread(
+                canvas_episodes.save_unit_field, self.pm, project_name, episode, unit_id, field, value
+            )
+        except canvas_episodes.EpisodeFlowError as exc:
+            raise CanvasGraphError(exc.code, **exc.params) from exc
+
+    async def markdown(self, project_name: str, file: str) -> str:
+        project_path = await asyncio.to_thread(self.pm.get_project_path, project_name)
+        try:
+            return await asyncio.to_thread(canvas_episodes.read_markdown, project_path, file)
+        except canvas_episodes.EpisodeFlowError as exc:
+            raise CanvasGraphError(exc.code, **exc.params) from exc
+
+    async def import_assets(self, project_name: str) -> tuple[int, int]:
+        """把项目里有、画布上还没有分组的资产摆上画布；返回（新增分组数，revision）。"""
+
+        def _run() -> tuple[int, int]:
+            project_path = self.pm.get_project_path(project_name)
+            graph = load_canvas(project_path)
+            nodes, edges = self._derived_assets(project_name, graph)
+            created, graph = mutate_canvas(self.pm, project_path, lambda g: import_project_assets(g, nodes, edges))
+            return len(created), graph["revision"]
+
+        return await asyncio.to_thread(_run)
+
+    async def create_asset_group(
+        self, project_name: str, kind: str, name: str, description: str, position: dict[str, float]
+    ) -> tuple[dict[str, Any], int]:
+        """新建一个资产分组：组里是描述文本、图片供应商和资产节点；描述有了就会建出项目资产（见 canvas_publish）。"""
+
+        def _apply(graph: dict[str, Any]) -> dict[str, Any]:
+            frame = make_node(NODE_GROUP, position, {"label": name, "asset": kind, "width": 900.0, "height": 420.0})
+            frame["data"]["autolayout"] = True
+            graph["nodes"].insert(0, frame)
+            text = make_node(NODE_TEXT, {"x": 28, "y": 70}, {"text": description})
+            generator = make_node(NODE_IMAGE_GENERATE, {"x": 340, "y": 70})
+            asset = make_node(NODE_ASSET, {"x": 700, "y": 70})
+            for child in (text, generator, asset):
+                child["parentId"] = frame["id"]
+                graph["nodes"].append(child)
+            graph["edges"].append(
+                {
+                    "id": new_id("edge"),
+                    "source": text["id"],
+                    "sourceHandle": "text",
+                    "target": generator["id"],
+                    "targetHandle": "prompt",
+                }
+            )
+            return frame
+
+        frame, graph = await self.mutate(project_name, _apply)
+        return frame, graph["revision"]
+
+    def view_sync(self, project_name: str) -> dict[str, Any]:
+        """画布；资产节点带上它接着的那张图，方便界面显示。"""
+        graph = self.ensure_migrated_sync(project_name)
+        stale = stale_generated_images(graph, {})
+        nodes = []
+        for n in graph["nodes"]:
+            if n["type"] == NODE_ASSET:
+                n = resolve_asset_node(graph, n)
+            nodes.append({**n, "data": {**n["data"], "stale": True}} if n["id"] in stale else n)
+        nodes = canvas_episodes.refresh_outputs(self.pm, project_name, nodes)
+        known = {n["id"] for n in nodes}
+        # 所属的分组已不存在：节点留在画布上，不再挂在分组下。
+        nodes = [
+            {k: v for k, v in n.items() if k != "parentId"} if n.get("parentId") not in {None, *known} else n
+            for n in nodes
+        ]
         stored = [e for e in graph["edges"] if e["source"] in known and e["target"] in known]
         return {
             "revision": graph["revision"],
-            "nodes": [*derived_nodes, *nodes],
-            "edges": [*virtual_edges, *writer_output_edges(stored, set(derived)), *stored],
-            "view": graph["view"],
-            "episodes": list_episodes(project),
+            "nodes": nodes,
+            "edges": stored,
             "templates": [
                 {"id": t["id"], "name": t["name"], "node_count": len(t["nodes"])} for t in graph["templates"]
             ],
@@ -143,7 +228,10 @@ class CanvasService:
 
     async def mutate[T](self, project_name: str, fn: Any) -> tuple[T, dict[str, Any]]:
         project_path = await asyncio.to_thread(self.pm.get_project_path, project_name)
-        return await asyncio.to_thread(mutate_canvas, self.pm, project_path, fn)
+        result = await asyncio.to_thread(mutate_canvas, self.pm, project_path, fn)
+        # 画布上的资产分组变了就写到项目资产里（只在内容变了时才真写，失败只记日志）。
+        await asyncio.to_thread(publish_asset_groups, self.pm, project_name)
+        return result
 
     async def add_node(
         self, project_name: str, node_type: str, position: dict[str, float], data: dict[str, Any] | None
@@ -156,6 +244,32 @@ class CanvasService:
     ) -> tuple[dict[str, Any], int]:
         node, graph = await self.mutate(project_name, lambda g: patch_node(g, node_id, position=position, data=data))
         return node, graph["revision"]
+
+    async def set_note(self, project_name: str, node_id: str, note: str) -> int:
+        """图片节点（含项目资产图）的参考说明：随图一起交给供应商，描述这张图是什么。"""
+        _, graph = await self.mutate(project_name, lambda g: set_note(g, node_id, note))
+        return graph["revision"]
+
+    async def group_nodes(
+        self,
+        project_name: str,
+        node_ids: list[str],
+        label: str,
+        position: dict[str, float],
+        size: dict[str, float],
+    ) -> tuple[dict[str, Any], int]:
+        group, graph = await self.mutate(project_name, lambda g: group_nodes(g, node_ids, label, position, size))
+        return group, graph["revision"]
+
+    async def set_members(
+        self,
+        project_name: str,
+        node_ids: list[str],
+        group_id: str | None,
+        positions: dict[str, dict[str, float]],
+    ) -> int:
+        _, graph = await self.mutate(project_name, lambda g: set_members(g, node_ids, group_id, positions))
+        return graph["revision"]
 
     async def delete_node(self, project_name: str, node_id: str) -> int:
         _, graph = await self.mutate(project_name, lambda g: remove_node(g, node_id))
@@ -178,18 +292,9 @@ class CanvasService:
             for node in graph["nodes"]:
                 if (pos := positions.get(node["id"])) is not None:
                     node["position"] = dict(pos)
-            # 派生节点（集分组）不落盘，只登记摆放位置。
-            for node_id, pos in positions.items():
-                if derived_kind(node_id) in _MOVABLE_DERIVED:
-                    graph["overrides"][node_id] = dict(pos)
 
         _, graph = await self.mutate(project_name, _apply)
         return graph["revision"]
-
-    async def set_view(self, project_name: str, episodes: list[int]) -> tuple[list[int], int]:
-        chosen = sorted(set(episodes))
-        _, graph = await self.mutate(project_name, lambda g: g["view"].update(episodes=chosen))
-        return chosen, graph["revision"]
 
     # ---- 模板 ----
 
@@ -227,38 +332,24 @@ class CanvasService:
         """运行 ``node_id`` 前须先跑的上游节点（只含缺产物或已过期的），最后一项是它自己。"""
 
         def _plan() -> list[dict[str, str]]:
-            project_path = self.pm.get_project_path(project_name)
-            graph = load_canvas(project_path)
-            derived_nodes, _ = build_project_view(
-                self.pm, project_name, self.pm.load_project(project_name), graph["view"]["episodes"], graph["overrides"]
-            )
-            derived = {n["id"]: n for n in derived_nodes}
-            stale_ids = stale_generated_images(graph, derived)
+            graph = self.ensure_migrated_sync(project_name)
+            stale_ids = stale_generated_images(graph, {})
             graph["nodes"] = [
                 {**n, "data": {**n["data"], "stale": True}} if n["id"] in stale_ids else n for n in graph["nodes"]
             ]
-            return branch_plan(graph, node_id, derived)
+            return branch_plan(graph, node_id, {})
 
         return await asyncio.to_thread(_plan)
 
     async def run(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
-        """运行一个节点，立即返回入队结果。图片供应商 / H3 写作 / 起始帧联合图三类节点可运行。"""
-        kind = derived_kind(node_id)
-        if kind == KIND_DERIV_GEN:
-            return await self._run_derivative(project_name, node_id, user_id=user_id, source=source)
-        if kind in _ASSET_RUN_KINDS:
-            return await self._run_asset(project_name, node_id, user_id=user_id, source=source)
-        if kind == KIND_KEYFRAME:
-            return await self._run_keyframe(project_name, node_id, user_id=user_id, source=source)
+        """运行一个节点，立即返回入队结果。图片 / 视频 / 语音供应商节点与各类资产图节点可运行。"""
         project_path = await asyncio.to_thread(self.pm.get_project_path, project_name)
-        graph = await asyncio.to_thread(load_canvas, project_path)  # 落盘图不含派生节点，可运行的派生节点上面已分流
+        graph = await asyncio.to_thread(load_canvas, project_path)
         node = next((n for n in graph["nodes"] if n["id"] == node_id), None)
         if node is None:
             raise CanvasGraphError("canvas_node_not_found", id=node_id)
         if node["type"] in _PROVIDER_TASKS:
             return await self._run_provider(project_name, node_id, user_id=user_id, source=source)
-        if node["type"] == NODE_H3_WRITER:
-            return await self._run_h3_writer(project_name, node_id, user_id=user_id, source=source)
         raise CanvasGraphError("canvas_node_not_runnable", id=node_id)
 
     async def _run_provider(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
@@ -268,14 +359,11 @@ class CanvasService:
             node = find_node(graph, node_id)
             if node["data"].get("status") in BUSY_STATUSES:
                 raise CanvasGraphError("canvas_node_busy", id=node_id)
-            derived_nodes, _ = build_project_view(
-                self.pm, project_name, self.pm.load_project(project_name), graph["view"]["episodes"], graph["overrides"]
-            )
-            derived = {n["id"]: n for n in derived_nodes}
-            prompt, references = resolve_generate_inputs(graph, node_id, derived)
+            derived: dict[str, dict[str, Any]] = {}
+            prompt, references = resolve_generate_inputs(graph, node_id, derived, strict=True)
             if not prompt:
                 raise CanvasGraphError("canvas_prompt_required")
-            labels = resolve_reference_labels(graph, node_id, derived)
+            labels = resolve_reference_labels(graph, node_id, derived, strict=True)
             frozen.update(
                 prompt=prompt,
                 references=references,
@@ -283,7 +371,7 @@ class CanvasService:
                 task_type=_PROVIDER_TASKS[node["type"]],
             )
             media_node = add_run_outputs(graph, node_id, prompt)
-            node["data"].update(status=STATUS_QUEUED, error=None)
+            node["data"].update(status=STATUS_QUEUED, error=None, submitted_at=utc_now_iso(), status_at=utc_now_iso())
             return media_node
 
         media_node, _ = await self.mutate(project_name, _prepare)
@@ -332,130 +420,3 @@ class CanvasService:
             "image_node_id": media_node["id"],
             "media_node_id": media_node["id"],
         }
-
-    async def _run_h3_writer(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
-        """为写作节点所连的视频单元重写 H3 提示词：每集一个文本任务，单元正文原样保留。"""
-        view = await self.view(project_name)
-        by_episode: dict[int, list[str]] = {}
-        for edge in view["edges"]:
-            if edge["target"] != node_id or edge["targetHandle"] != "units" or edge.get("virtual"):
-                continue
-            if not edge["source"].startswith(UNIT_NODE_PREFIX):
-                continue
-            episode, _, unit_id = edge["source"][len(UNIT_NODE_PREFIX) :].partition(":")
-            by_episode.setdefault(int(episode), []).append(unit_id)
-        if not by_episode:
-            raise CanvasGraphError("canvas_h3_writer_no_units")
-        project = await asyncio.to_thread(self.pm.load_project, project_name)
-        if not is_h3_ref2va(project):
-            raise CanvasGraphError("canvas_h3_profile_required")
-        project_path = await asyncio.to_thread(self.pm.get_project_path, project_name)
-        task_ids: list[str] = []
-        for episode, unit_ids in sorted(by_episode.items()):
-            try:
-                await asyncio.to_thread(prompt_authoring_preflight, project_path, episode)
-                request = TextGenerationRequest(
-                    episode=episode, entry_ids=tuple(dict.fromkeys(unit_ids)), keep_text=True
-                )
-                result = await enqueue_task_only(
-                    project_name=project_name,
-                    task_type=TEXT_EPISODE_SCRIPT_TASK_TYPE,
-                    media_type="text",
-                    resource_id=f"episode-{episode}",
-                    payload=request.to_payload(),
-                    source=source,
-                    user_id=user_id,
-                )
-            except TextGenerationError as exc:
-                raise CanvasGraphError("canvas_run_failed", message=str(exc)) from exc
-            except WorkerOfflineError as exc:
-                raise CanvasGraphError("canvas_worker_offline") from exc
-            task_ids.append(result["task_id"])
-        return {"success": True, "task_id": task_ids[0], "task_ids": task_ids}
-
-    async def _run_keyframe(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
-        _, _, episode, sheet_id = node_id.split(":", 3)
-        try:
-            result = await enqueue_keyframe_sheet(
-                self.pm, project_name, int(episode), sheet_id, user_id=user_id, source=source, queue=self.queue
-            )
-        except KeyframePlanError as exc:
-            raise CanvasGraphError("canvas_run_failed", message=exc.message) from exc
-        return {"success": True, "task_id": result["task_id"], "task_ids": [result["task_id"]]}
-
-    async def _run_asset(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
-        """生成角色 / 场景 / 道具 / 商品的资产图：描述只取项目里存的条目，与资产页的「生成」是同一条入队链路。"""
-        kind = derived_kind(node_id) or ""
-        asset_type = "character" if kind.startswith(("char", "character")) else kind.split("_", 1)[0]
-        spec = ASSET_SPECS[asset_type]
-        name = node_id.split(":", 2)[2]
-
-        def _resolve() -> str:
-            project = self.pm.load_project(project_name)
-            key = resolve_asset_key(project.get(spec.bucket_key), name)
-            if key is None:
-                raise CanvasGraphError("canvas_node_not_found", id=node_id)
-            entry = project[spec.bucket_key][key]
-            description = entry.get("description") if isinstance(entry, dict) else None
-            if not isinstance(description, str) or not description.strip():
-                raise CanvasGraphError("canvas_character_description_required", name=key)
-            return key
-
-        key = await asyncio.to_thread(_resolve)
-        task = TaskSpec.from_request(task_type=asset_type, media_type="image", resource_id=key)
-        result = await self.queue.enqueue_task(
-            project_name=project_name,
-            task_type=task.task_type,
-            media_type=task.media_type,
-            resource_id=task.resource_id,
-            payload=task.payload,
-            source=source,
-            user_id=user_id,
-        )
-        return {"success": True, "task_id": result["task_id"], "task_ids": [result["task_id"]]}
-
-    async def _run_derivative(self, project_name: str, node_id: str, *, user_id: str, source: str) -> dict[str, Any]:
-        """生成角色衍生的资产图：以本体资产图为唯一参考、按衍生的变化描述编辑，与角色页的「生成衍生」同一条入队链路。"""
-        owner, _, derivative = node_id.split(":", 2)[2].partition("/")
-
-        def _resolve() -> tuple[dict[str, Any], DerivativeSheetSource]:
-            project = self.pm.load_project(project_name)
-            try:
-                return project, resolve_derivative_sheet_source(project, owner, derivative)
-            except KeyError as exc:
-                raise CanvasGraphError("canvas_node_not_found", id=node_id) from exc
-            except ApiError as exc:
-                codes = {
-                    "derivative_description_required": "canvas_derivative_description_required",
-                    "derivative_owner_sheet_missing": "canvas_derivative_owner_sheet_missing",
-                }
-                if exc.key == "derivative_not_found" or exc.status_code == 404:
-                    raise CanvasGraphError("canvas_node_not_found", id=node_id) from exc
-                raise CanvasGraphError(
-                    codes.get(exc.key, "canvas_run_failed"), name=derivative, message=exc.key
-                ) from exc
-
-        project, target = await asyncio.to_thread(_resolve)
-        try:
-            resolved = await ConfigResolver(async_session_factory).resolve_image_backend(
-                project, None, generation_type="i2i"
-            )
-        except ValueError as exc:
-            raise CanvasGraphError("canvas_run_failed", message="no i2i image provider configured") from exc
-        spec = TaskSpec.from_request(
-            task_type=DERIVATIVE_TASK_TYPE,
-            media_type="image",
-            resource_id=target.target.artifact_id,
-            prompt=build_derivative_sheet_instruction(target.description),
-        )
-        result = await self.queue.enqueue_task(
-            project_name=project_name,
-            task_type=spec.task_type,
-            media_type=spec.media_type,
-            resource_id=spec.resource_id,
-            payload=spec.payload,
-            source=source,
-            user_id=user_id,
-            provider_id=resolved.provider_id,
-        )
-        return {"success": True, "task_id": result["task_id"], "task_ids": [result["task_id"]]}

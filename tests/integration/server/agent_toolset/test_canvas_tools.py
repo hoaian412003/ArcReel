@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
+from lib.canvas.graph import make_node
 from lib.project.project_manager import ProjectManager
 from server.agent_toolset import canvas as canvas_tools
-from server.services.project import canvas_service
 from server.services.project.workflow_planner import WorkflowPlanner
 from server.tool_runtime import CallerContext, ProjectScope, Services, ToolRequest
 from tests.fakes import FakeConfigResolver
@@ -138,59 +138,13 @@ async def test_running_without_a_prompt_is_a_problem_not_a_task(ctx: Services) -
     assert _queue(ctx).calls == []
 
 
-async def test_episode_view_exposes_read_only_project_nodes_and_h3_writer_runs_per_episode(
-    ctx: Services, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    shown = await _call(canvas_tools.canvas_set_episodes, canvas_tools.CanvasSetEpisodesRequest(episodes=[1]), ctx)
-    assert shown.value == {"shown_episodes": [1], "revision": 1}
+async def test_episode_nodes_are_no_longer_part_of_the_canvas(ctx: Services) -> None:
     view = await _canvas(ctx)
-    units = [n for n in view["nodes"] if n["type"] == "unit"]
-    assert [n["id"] for n in units] == ["p:unit:1:E1U01", "p:unit:1:E1U02"]
-    assert all(n["read_only"] for n in view["nodes"] if n["type"] in {"unit", "episode", "h3_prompt"})
+    assert not [n for n in view["nodes"] if n["type"] in {"unit", "episode", "h3_prompt", "keyframe"}]
+    assert "available_episodes" not in view
 
-    undeletable = await _call(
-        canvas_tools.canvas_delete_node, canvas_tools.CanvasNodeRequest(node_id="p:unit:1:E1U01"), ctx
-    )
-    assert undeletable.problem is not None
-
-    writer = await _call(
-        canvas_tools.canvas_add_node,
-        canvas_tools.CanvasAddNodeRequest(type="h3_writer", position={"x": 1500, "y": 0}),
-        ctx,
-    )
-    assert writer.value is not None
-    writer_id = writer.value["node"]["id"]
-    empty = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id=writer_id), ctx)
-    assert empty.problem is not None
-    assert empty.problem.code == "canvas_h3_writer_no_units"
-
-    for unit in units:
-        await _call(
-            canvas_tools.canvas_connect,
-            canvas_tools.CanvasConnectRequest(
-                source=unit["id"], source_handle="unit", target=writer_id, target_handle="units"
-            ),
-            ctx,
-        )
-    enqueued: list[dict[str, Any]] = []
-
-    async def _enqueue(**kwargs: Any) -> dict[str, Any]:
-        enqueued.append(kwargs)
-        return {"task_id": "text-task"}
-
-    monkeypatch.setattr(canvas_service, "prompt_authoring_preflight", lambda *_a: None)
-    monkeypatch.setattr(canvas_service, "enqueue_task_only", _enqueue)
-
-    run = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id=writer_id), ctx)
-
-    assert run.problem is None
-    assert run.value is not None
-    assert run.value["task_ids"] == ["text-task"]
-    assert enqueued[0]["payload"]["entry_ids"] == ["E1U01", "E1U02"]
-    assert enqueued[0]["payload"]["keep_text"] is True
-    after = await _canvas(ctx)
-    outputs = [e for e in after["edges"] if e["source"] == writer_id and e["sourceHandle"] == "h3"]
-    assert {e["target"] for e in outputs} == {"p:h3_prompt:1:E1U01", "p:h3_prompt:1:E1U02"}
+    gone = await _call(canvas_tools.canvas_delete_node, canvas_tools.CanvasNodeRequest(node_id="p:unit:1:E1U01"), ctx)
+    assert gone.problem is not None
 
 
 async def test_long_texts_are_truncated_in_the_agent_digest(ctx: Services) -> None:
@@ -203,84 +157,210 @@ async def test_long_texts_are_truncated_in_the_agent_digest(ctx: Services) -> No
     assert len(node["data"]["text"]) < 700
 
 
-async def test_each_character_is_a_group_whose_sheet_feeds_references_and_whose_generator_runs(ctx: Services) -> None:
+def _group(view: dict[str, Any], name: str) -> dict[str, Any]:
+    return next(n for n in view["nodes"] if n["type"] == "group" and n["data"].get("label") == name)
+
+
+def _members(view: dict[str, Any], group: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """分组里的节点，按类型取（同类型取第一个）。"""
+    found: dict[str, dict[str, Any]] = {}
+    for n in view["nodes"]:
+        if n.get("parent_id") == group["id"]:
+            found.setdefault(n["type"], n)
+    return found
+
+
+async def test_project_assets_appear_on_the_canvas_as_plain_groups_and_nodes(ctx: Services) -> None:
     ctx.projects.add_character("demo", "阿离", "少女，黑色短发")
-    ctx.projects.add_character("demo", "阿宁", "")
-    sheet = "p:char_sheet:阿离"
+    ctx.projects.add_scenes_batch("demo", {"茶楼": {"description": "旧楼"}})
 
     view = await _canvas(ctx)
-    by_type: dict[str, list[str]] = {}
-    for node in view["nodes"]:
-        by_type.setdefault(node["id"].split(":")[1], []).append(node["id"])
-    assert sorted(by_type["character"]) == ["p:character:阿宁", "p:character:阿离"]
-    assert sorted(by_type) == ["char_gen", "char_ref", "char_sheet", "char_text", "character"]
-    assert all(n["read_only"] for n in view["nodes"] if n["id"].startswith("p:char"))
-    inner = {(e["source"], e["target"]) for e in view["edges"] if e.get("virtual")}
-    assert ("p:char_text:阿离", "p:char_gen:阿离") in inner
-    assert ("p:char_gen:阿离", sheet) in inner
 
-    generator = await _call(
-        canvas_tools.canvas_add_node,
-        canvas_tools.CanvasAddNodeRequest(type="image_generate", position={"x": 600, "y": 0}),
+    hero = _group(view, "阿离")
+    assert hero["data"]["asset"] == "character"
+    assert _group(view, "茶楼")["data"]["asset"] == "scene"
+    members = _members(view, hero)
+    assert set(members) == {"text", "image", "image_generate", "asset"}
+    assert members["text"]["data"]["text"] == "少女，黑色短发"
+    # 没有任何只读 / 绑定标记：全是普通节点，可以自由编辑。
+    assert not any(n.get("read_only") or "bound" in n["data"] or "link" in n["data"] for n in view["nodes"])
+    edges = {(e["source"], e["target"]) for e in view["edges"]}
+    assert (members["text"]["id"], members["image_generate"]["id"]) in edges
+
+
+async def test_a_group_generator_runs_like_any_image_generate_node(ctx: Services) -> None:
+    ctx.projects.add_character("demo", "阿离", "少女，黑色短发")
+    ctx.projects.add_character("demo", "阿宁", "")
+    view = await _canvas(ctx)
+
+    generator = _members(view, _group(view, "阿离"))["image_generate"]
+    run = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id=generator["id"]), ctx)
+
+    assert run.problem is None
+    call = _queue(ctx).calls[0]
+    assert call["task_type"] == "canvas_image"
+    assert call["payload"]["prompt"] == "少女，黑色短发"
+
+    blank = _members(view, _group(view, "阿宁"))["image_generate"]
+    empty = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id=blank["id"]), ctx)
+    assert empty.problem is not None
+    assert empty.problem.code == "canvas_prompt_required"
+
+
+async def test_a_new_asset_group_creates_the_project_asset_and_the_picture_on_its_asset_node_becomes_its_sheet(
+    ctx: Services, tmp_path: Path
+) -> None:
+    from PIL import Image
+
+    service = canvas_tools._service(ctx)
+    _, _ = await service.create_asset_group("demo", "character", "阿离", "少女", {"x": 0, "y": 0})
+
+    # 描述写在分组里的文本节点上，写出去就是项目里这个资产的描述。
+    assert ctx.projects.load_project("demo")["characters"]["阿离"]["description"] == "少女"
+    view = await _canvas(ctx)
+    text = _members(view, _group(view, "阿离"))["text"]
+    await _call(
+        canvas_tools.canvas_patch_node,
+        canvas_tools.CanvasPatchNodeRequest(node_id=text["id"], text="少女，长发"),
         ctx,
     )
-    assert generator.value is not None
+    assert ctx.projects.load_project("demo")["characters"]["阿离"]["description"] == "少女，长发"
+
+    # 接一张图到资产节点：这张图成为资产图（走与「上传资产图」同一条入口）。
+    project_dir = ctx.projects.get_project_path("demo")
+    (project_dir / "canvas" / "images").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 8), "red").save(project_dir / "canvas" / "images" / "pic.png")
+
+    def _add_image(graph: dict[str, Any]) -> str:
+        image = make_node("image", {"x": 0, "y": 0}, {}, server_data={"path": "canvas/images/pic.png", "version": 1})
+        graph["nodes"].append(image)
+        return image["id"]
+
+    image_id, _ = await service.mutate("demo", _add_image)
+    asset = _members(view, _group(view, "阿离"))["asset"]
     wired = await _call(
         canvas_tools.canvas_connect,
         canvas_tools.CanvasConnectRequest(
-            source=sheet, source_handle="image", target=generator.value["node"]["id"], target_handle="image1"
+            source=image_id, source_handle="image", target=asset["id"], target_handle="image"
         ),
         ctx,
     )
     assert wired.problem is None
 
-    run = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:char_gen:阿离"), ctx)
-    assert run.problem is None
-    call = _queue(ctx).calls[0]
-    assert (call["task_type"], call["resource_id"], call["media_type"]) == ("character", "阿离", "image")
-
-    blank = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:char_gen:阿宁"), ctx)
-    assert blank.problem is not None
-    assert blank.problem.code == "canvas_character_description_required"
+    sheet = ctx.projects.load_project("demo")["characters"]["阿离"]["character_sheet"]
+    assert sheet == "characters/阿离.png"
+    assert (project_dir / sheet).is_file()
 
 
-async def test_derivative_generators_are_runnable_only_with_a_description_and_a_base_sheet(ctx: Services) -> None:
-    ctx.projects.add_character("demo", "阿离", "少女")
+async def test_editing_the_project_elsewhere_is_not_overwritten_by_the_canvas(ctx: Services) -> None:
+    service = canvas_tools._service(ctx)
+    await service.create_asset_group("demo", "scene", "茶楼", "旧楼", {"x": 0, "y": 0})
+    ctx.projects.update_asset_entry("scene", "demo", "茶楼", lambda entry: entry.update(description="新楼"))
 
-    def _register(entry: dict) -> None:
-        entry["derivatives"] = {
-            "幼年": {"description": "年纪更小"},
-            "空白": {"description": ""},
-        }
+    # 画布上随后做任何别的编辑，都不会把项目里改过的描述冲回旧值。
+    await _call(
+        canvas_tools.canvas_add_node,
+        canvas_tools.CanvasAddNodeRequest(type="text", position={"x": 5, "y": 5}, text="x"),
+        ctx,
+    )
 
-    ctx.projects.update_asset_entry("character", "demo", "阿离", _register)
+    assert ctx.projects.load_project("demo")["scenes"]["茶楼"]["description"] == "新楼"
 
+
+async def test_get_canvas_filters_nodes(ctx: Services) -> None:
+    for kind in ("text", "image_generate"):
+        await _call(
+            canvas_tools.canvas_add_node,
+            canvas_tools.CanvasAddNodeRequest(type=kind, position={"x": 0, "y": 0}),
+            ctx,
+        )
+
+    outcome = await _call(
+        canvas_tools.get_canvas, canvas_tools.GetCanvasRequest(node_type="image_generate", include_edges=False), ctx
+    )
+
+    assert outcome.value is not None
+    assert [n["type"] for n in outcome.value["nodes"]] == ["image_generate"]
+    assert outcome.value["node_count"] == 1
+    assert outcome.value["edges"] == []
+
+
+async def test_an_episode_is_imported_as_one_group_with_a_lane_of_plain_nodes_per_unit(ctx: Services) -> None:
+    service = canvas_tools._service(ctx)
+    project_dir = ctx.projects.get_project_path("demo")
+    (project_dir / "source").mkdir(exist_ok=True)
+    (project_dir / "source" / "episode_1.txt").write_text("第一章 原文", encoding="utf-8")
+
+    group, _ = await service.import_episode("demo", 1)
+    again, _ = await service.import_episode("demo", 1)
+
+    assert again["id"] == group["id"]
+    assert group["data"]["episode"] == 1
     view = await _canvas(ctx)
-    ids = {n["id"] for n in view["nodes"]}
-    assert {"p:deriv_gen:阿离/幼年", "p:deriv_sheet:阿离/幼年", "p:deriv_text:阿离/空白"} <= ids
+    members = [n for n in view["nodes"] if n.get("parent_id") == group["id"]]
+    steps = {(n["data"].get("unit"), n["data"]["step"]) for n in members if n["data"].get("step")}
+    assert {
+        ("E1U01", step)
+        for step in ("script", "direction", "keyframe", "h3", "video_gen", "video", "dub_text", "voice_gen", "voice")
+    } <= steps
+    assert {n["data"]["step"] for n in members if n["type"] == "markdown"} == {"source", "plan"}
+    assert not any(n.get("read_only") for n in view["nodes"])
+    script = next(n for n in members if n["data"].get("unit") == "E1U01" and n["data"]["step"] == "script")
+    assert script["data"]["text"] == "阿离看向阿宁。"
+    assert script["data"]["script_value"] == "阿离看向阿宁。"
+    # 单元里的节点都是普通类型，连成 H3 提示词 → 视频供应商 → 视频。
+    ids = {(n["data"].get("unit"), n["data"]["step"]): n["id"] for n in members if n["data"].get("step")}
+    edges = {(e["source"], e["target"]) for e in view["edges"]}
+    assert (ids[("E1U01", "h3")], ids[("E1U01", "video_gen")]) in edges
+    assert (ids[("E1U01", "video_gen")], ids[("E1U01", "video")]) in edges
 
-    no_description = await _call(
-        canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:deriv_gen:阿离/空白"), ctx
+
+async def test_unit_text_is_saved_back_to_the_script_only_on_request(ctx: Services) -> None:
+    service = canvas_tools._service(ctx)
+    group, _ = await service.import_episode("demo", 1)
+    view = await _canvas(ctx)
+    script = next(n for n in view["nodes"] if n["data"].get("unit") == "E1U01" and n["data"].get("step") == "script")
+
+    await _call(
+        canvas_tools.canvas_patch_node,
+        canvas_tools.CanvasPatchNodeRequest(node_id=script["id"], text="新的文本"),
+        ctx,
     )
-    assert no_description.problem is not None
-    assert no_description.problem.code == "canvas_derivative_description_required"
+    unchanged = ctx.projects.load_script("demo", "episode_1.json")["video_units"][0]["text"]
+    assert unchanged == "阿离看向阿宁。"
+    shown = next(n for n in (await _canvas(ctx))["nodes"] if n["id"] == script["id"])
+    assert (shown["data"]["text"], shown["data"]["script_value"]) == ("新的文本", "阿离看向阿宁。")
 
-    no_sheet = await _call(
-        canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:deriv_gen:阿离/幼年"), ctx
-    )
-    assert no_sheet.problem is not None
-    assert no_sheet.problem.code == "canvas_derivative_owner_sheet_missing"
-    assert _queue(ctx).calls == []
+    await service.save_unit_field("demo", 1, "E1U01", "text", "新的文本")
+
+    assert ctx.projects.load_script("demo", "episode_1.json")["video_units"][0]["text"] == "新的文本"
+    assert group["data"]["episode"] == 1
 
 
-async def test_scene_generators_run_the_scene_task_and_need_a_description(ctx: Services) -> None:
-    ctx.projects.add_scenes_batch("demo", {"茶楼": {"description": "旧楼"}, "空场": {"description": ""}})
+async def test_flow_overview_lists_every_unit_step_with_the_node_to_jump_to(ctx: Services) -> None:
+    service = canvas_tools._service(ctx)
+    await service.import_episode("demo", 1)
 
-    run = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:scene_gen:茶楼"), ctx)
-    assert run.problem is None
-    call = _queue(ctx).calls[0]
-    assert (call["task_type"], call["resource_id"]) == ("scene", "茶楼")
+    episodes = await service.flow("demo")
 
-    blank = await _call(canvas_tools.canvas_run_node, canvas_tools.CanvasNodeRequest(node_id="p:scene_gen:空场"), ctx)
-    assert blank.problem is not None
-    assert blank.problem.code == "canvas_character_description_required"
+    episode = next(e for e in episodes if e["episode"] == 1)
+    assert episode["group_id"] is not None
+    first = episode["units"][0]
+    assert first["unit_id"] == "E1U01"
+    assert first["steps"]["script"]["state"] == "done"
+    assert first["steps"]["video"]["state"] == "empty"
+    assert first["steps"]["script"]["node_id"]
+
+
+async def test_document_nodes_read_only_source_and_draft_files(ctx: Services) -> None:
+    service = canvas_tools._service(ctx)
+    project_dir = ctx.projects.get_project_path("demo")
+    (project_dir / "source").mkdir(exist_ok=True)
+    (project_dir / "source" / "episode_1.txt").write_text("原文", encoding="utf-8")
+
+    assert await service.markdown("demo", "source/episode_1.txt") == "原文"
+    from lib.canvas.graph import CanvasGraphError
+
+    for bad in ("project.json", "../outside.txt", "source/../project.json"):
+        with pytest.raises(CanvasGraphError):
+            await service.markdown("demo", bad)

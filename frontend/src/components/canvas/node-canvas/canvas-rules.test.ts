@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CanvasNode } from "@/types/canvas";
-import { graphHasBusyNode, isValidCanvasConnection, lineageOf } from "./canvas-rules";
+import { buildAgentNote, graphHasBusyNode, isValidCanvasConnection, lineageOf, referencedNodeIds } from "./canvas-rules";
 
 const node = (id: string, type: CanvasNode["type"], status?: CanvasNode["data"]["status"]): CanvasNode => ({
   id,
@@ -55,22 +55,6 @@ describe("lineageOf", () => {
   });
 });
 
-describe("derived node connections", () => {
-  const derived: CanvasNode[] = [
-    { id: "u", type: "unit", position: { x: 0, y: 0 }, data: {}, derived: true },
-    { id: "k", type: "keyframe", position: { x: 0, y: 0 }, data: {}, derived: true },
-    { id: "w", type: "h3_writer", position: { x: 0, y: 0 }, data: {} },
-    { id: "g", type: "image_generate", position: { x: 0, y: 0 }, data: {} },
-  ];
-
-  it("wires units into the writer and units/keyframes into the image generator", () => {
-    expect(isValidCanvasConnection(derived, { source: "u", sourceHandle: "unit", target: "w", targetHandle: "units" })).toBe(true);
-    expect(isValidCanvasConnection(derived, { source: "u", sourceHandle: "text", target: "g", targetHandle: "prompt" })).toBe(true);
-    expect(isValidCanvasConnection(derived, { source: "k", sourceHandle: "image", target: "g", targetHandle: "image1" })).toBe(true);
-    expect(isValidCanvasConnection(derived, { source: "u", sourceHandle: "text", target: "w", targetHandle: "units" })).toBe(false);
-  });
-});
-
 describe("video and audio providers", () => {
   const media: CanvasNode[] = [
     { id: "t", type: "text", position: { x: 0, y: 0 }, data: {} },
@@ -92,15 +76,15 @@ describe("video and audio providers", () => {
   });
 });
 
-describe("character groups", () => {
+describe("image sources inside groups", () => {
   const nodes: CanvasNode[] = [
-    { id: "p:char_sheet:Hero", type: "image", position: { x: 0, y: 0 }, data: {}, derived: true },
+    { id: "sheet", type: "image", position: { x: 0, y: 0 }, data: {} },
     { id: "g", type: "image_generate", position: { x: 0, y: 0 }, data: {} },
     { id: "v", type: "video_generate", position: { x: 0, y: 0 }, data: {} },
   ];
 
   it("offers the character sheet as image1 or a video start frame, never as text", () => {
-    const sheet = { source: "p:char_sheet:Hero", sourceHandle: "image" };
+    const sheet = { source: "sheet", sourceHandle: "image" };
     expect(isValidCanvasConnection(nodes, { ...sheet, target: "g", targetHandle: "image1" })).toBe(true);
     expect(isValidCanvasConnection(nodes, { ...sheet, target: "v", targetHandle: "frame" })).toBe(true);
     expect(isValidCanvasConnection(nodes, { ...sheet, target: "g", targetHandle: "prompt" })).toBe(false);
@@ -111,5 +95,62 @@ describe("character groups", () => {
     const more: CanvasNode[] = [...nodes, { id: "g2", type: "image_generate", position: { x: 0, y: 0 }, data: {} }];
     expect(isValidCanvasConnection(more, { ...out, sourceHandle: "image", targetHandle: "image1" })).toBe(true);
     expect(isValidCanvasConnection(more, { ...out, sourceHandle: "text", targetHandle: "prompt" })).toBe(false);
+  });
+});
+
+describe("agent context", () => {
+  const nodes = [
+    { id: "p1", type: "text", position: { x: 0, y: 0 }, data: { text: "hello" } },
+    { id: "p2", type: "text", position: { x: 0, y: 0 }, data: { text: "bye" } },
+  ] as unknown as CanvasNode[];
+
+  it("merges chips with @mentions and drops unknown ids", () => {
+    expect(referencedNodeIds("@p2 only face", ["p1", "gone"], nodes)).toEqual(["p1", "p2"]);
+  });
+
+  it("prefixes the note with referenced node content", () => {
+    const note = buildAgentNote("only face", ["p1"], nodes);
+    expect(note).toContain("- p1 (text)");
+    expect(note).toContain("hello");
+    expect(note.endsWith("only face")).toBe(true);
+    expect(buildAgentNote("hi", [], nodes)).toBe("hi");
+  });
+});
+
+describe("lineage of groups", () => {
+  const nodes = [
+    { id: "g", parentId: undefined },
+    { id: "a", parentId: "g" },
+    { id: "b", parentId: "g" },
+    { id: "other", parentId: undefined },
+  ];
+  const edges = [
+    { id: "e1", source: "a", target: "b" },
+    { id: "e2", source: "b", target: "other" },
+  ];
+
+  it("highlights a selected group together with everything inside it", () => {
+    const lineage = lineageOf("g", edges, nodes);
+    expect([...lineage.nodeIds].sort()).toEqual(["a", "b", "g"]);
+    expect([...lineage.edgeIds]).toEqual(["e1"]);
+  });
+
+  it("keeps the group frame bright when a child is selected", () => {
+    expect(lineageOf("a", edges, nodes).nodeIds.has("g")).toBe(true);
+  });
+});
+
+describe("asset port connections", () => {
+  const nodes = [
+    { id: "p:char_port:A", type: "asset", position: { x: 0, y: 0 }, data: {} },
+    { id: "gen", type: "image_generate", position: { x: 0, y: 0 }, data: {} },
+    { id: "vid", type: "video_generate", position: { x: 0, y: 0 }, data: {} },
+  ] as unknown as CanvasNode[];
+
+  it("connects an asset output to reference-image inputs only", () => {
+    const from = { source: "p:char_port:A", sourceHandle: "asset" };
+    expect(isValidCanvasConnection(nodes, { ...from, target: "gen", targetHandle: "image1" })).toBe(true);
+    expect(isValidCanvasConnection(nodes, { ...from, target: "vid", targetHandle: "frame" })).toBe(true);
+    expect(isValidCanvasConnection(nodes, { ...from, target: "gen", targetHandle: "prompt" })).toBe(false);
   });
 });

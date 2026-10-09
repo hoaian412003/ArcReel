@@ -103,27 +103,17 @@ def test_derived_nodes_connect_by_kind_and_feed_run_inputs():
     from lib.canvas.graph import derived_id
 
     graph = empty_graph()
-    writer = _add(graph, "h3_writer")
     gen = _add(graph, "image_generate")
-    unit = derived_id("unit", 1, "E1U1")
-    sheet = derived_id("keyframe", 1, "S1")
-    connect(graph, unit, "unit", writer["id"], "units")
-    connect(graph, unit, "text", gen["id"], "prompt")
+    sheet = derived_id("char_sheet", "Hero")
     connect(graph, sheet, "image", gen["id"], "image1")
     with pytest.raises(CanvasGraphError):
-        connect(graph, unit, "unit", gen["id"], "prompt")
+        connect(graph, sheet, "image", gen["id"], "prompt")
 
     derived = {
-        unit: {"id": unit, "type": "unit", "position": {"x": 0, "y": 0}, "data": {"text": "a duel at dawn"}},
-        sheet: {
-            "id": sheet,
-            "type": "keyframe",
-            "position": {"x": 0, "y": 0},
-            "data": {"path": "keyframes/episode_1/S1.png"},
-        },
+        sheet: {"id": sheet, "type": "image", "position": {"x": 0, "y": 0}, "data": {"path": "characters/Hero.png"}}
     }
-    assert resolve_generate_inputs(graph, gen["id"], derived) == ("a duel at dawn", ["keyframes/episode_1/S1.png"])
-    # 该集没有展示（派生节点没加载）时，指向它的连线被跳过而不是报错。
+    assert resolve_generate_inputs(graph, gen["id"], derived) == ("", ["characters/Hero.png"])
+    # 派生节点没加载时，指向它的连线被跳过而不是报错。
     assert resolve_generate_inputs(graph, gen["id"], {}) == ("", [])
 
 
@@ -147,22 +137,22 @@ def test_reference_labels_follow_the_reference_order_and_build_a_legend():
     graph = empty_graph()
     gen = _add(graph, "image_generate")
     first = add_node(graph, make_node("image", {"x": 0, "y": 10}, {"label": "hero.png"}, server_data={"path": "a.png"}))
-    sheet = derived_id("keyframe", 1, "S1")
+    sheet = derived_id("char_sheet", "Hero")
     connect(graph, first["id"], "image", gen["id"], "image1")
     connect(graph, sheet, "image", gen["id"], "image1")
     derived = {
         sheet: {
             "id": sheet,
-            "type": "keyframe",
+            "type": "image",
             "position": {"x": 0, "y": 99},
-            "data": {"path": "k.png", "sheet_id": "S1"},
+            "data": {"path": "k.png", "name": "Hero"},
         }
     }
 
     labels = resolve_reference_labels(graph, gen["id"], derived)
 
-    assert labels == ["hero.png", "keyframe S1"]
-    assert reference_legend(labels).endswith("图1: hero.png\n图2: keyframe S1")
+    assert labels == ["hero.png", "Hero"]
+    assert reference_legend(labels).endswith("图1: hero.png\n图2: Hero")
     assert reference_legend([]) == ""
 
 
@@ -352,3 +342,315 @@ def test_a_derivative_generator_output_resolves_to_its_sheet_and_is_labelled_wit
     }
     assert resolve_generate_inputs(graph, gen["id"], derived)[1] == ["characters/derivatives/阿离/幼年.png"]
     assert resolve_reference_labels(graph, gen["id"], derived) == ["阿离/幼年"]
+
+
+def test_run_outputs_record_when_the_run_was_submitted() -> None:
+    from lib.canvas.graph import STATUS_DONE, STATUS_RUNNING, add_run_outputs, status_timestamps
+
+    graph = {"nodes": [], "edges": [], "revision": 0}
+    source = add_node(graph, make_node("image_generate", {"x": 0, "y": 0}))
+
+    media = add_run_outputs(graph, source["id"], "p")
+
+    assert media["data"]["submitted_at"] == media["data"]["status_at"]
+    assert set(status_timestamps({"status": STATUS_RUNNING})) == {"status_at", "started_at"}
+    assert set(status_timestamps({"status": STATUS_DONE})) == {"status_at", "finished_at"}
+    assert status_timestamps({"error": None}) == {}
+
+
+def test_reference_note_travels_with_the_image_into_the_legend() -> None:
+    from lib.canvas.graph import apply_notes, default_note, resolve_reference_labels, set_note
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "revision": 0}
+    generator = add_node(graph, make_node("image_generate", {"x": 0, "y": 0}))
+    sheet = {
+        "id": "p:char_sheet:阿离",
+        "type": "image",
+        "derived": True,
+        "position": {"x": 0, "y": 0},
+        "data": {"name": "阿离", "asset": "character", "role": "sheet", "path": "characters/a.png"},
+    }
+    derived = {sheet["id"]: sheet}
+    graph["edges"].append(
+        {"id": "e", "source": sheet["id"], "sourceHandle": "image", "target": generator["id"], "targetHandle": "image1"}
+    )
+
+    apply_notes([sheet], graph["notes"])
+    assert sheet["data"]["note"] == default_note(sheet["data"]) == "Character sheet of 阿离."
+    assert resolve_reference_labels(graph, generator["id"], derived) == ["Character sheet of 阿离."]
+
+    set_note(graph, sheet["id"], "This is his face, front view.")
+    apply_notes([sheet], graph["notes"])
+    assert resolve_reference_labels(graph, generator["id"], derived) == ["This is his face, front view."]
+
+    set_note(graph, sheet["id"], "")
+    assert graph["notes"] == {}
+
+
+def test_note_on_a_stored_image_node_lives_in_its_data() -> None:
+    from lib.canvas.graph import set_note
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "revision": 0}
+    image = add_node(graph, make_node("image", {"x": 0, "y": 0}))
+
+    set_note(graph, image["id"], "  a cat  ")
+    assert image["data"]["note"] == "a cat"
+    set_note(graph, image["id"], "")
+    assert "note" not in image["data"]
+
+
+def _asset(graph, name, path, note="", derivative=None, kind="character"):
+    """画布上一个资产：资产分组（标题 = 资产名）里一张图接到资产节点。同名分组只建一次。"""
+    group = next(
+        (n for n in graph["nodes"] if n["type"] == "group" and n["data"].get("label") == name),
+        None,
+    ) or add_node(graph, make_node("group", {"x": 0, "y": 0}, {"label": name, "asset": kind}))
+    image = add_node(graph, make_node("image", {"x": 0, "y": 0}, {}, server_data={"path": path}))
+    asset = add_node(graph, make_node("asset", {"x": 0, "y": 0}, {"note": note, "derivative": derivative or ""}))
+    if not derivative:
+        asset["data"].pop("derivative")
+    for node in (image, asset):
+        node["parentId"] = group["id"]
+    graph["edges"].append(
+        {
+            "id": f"e-{asset['id']}",
+            "source": image["id"],
+            "sourceHandle": "image",
+            "target": asset["id"],
+            "targetHandle": "image",
+        }
+    )
+    return asset
+
+
+def _prompt_graph(prompt):
+    graph = {"nodes": [], "edges": [], "notes": {}, "meta": {}, "revision": 0}
+    text = add_node(graph, make_node("text", {"x": 0, "y": 0}, {"text": prompt}))
+    generator = add_node(graph, make_node("image_generate", {"x": 400, "y": 0}))
+    graph["edges"].append(
+        {"id": "e1", "source": text["id"], "sourceHandle": "text", "target": generator["id"], "targetHandle": "prompt"}
+    )
+    return graph, generator["id"]
+
+
+def test_mentions_become_numbered_references_and_pull_in_the_asset_image() -> None:
+    from lib.canvas.graph import resolve_generate_inputs, resolve_reference_labels
+
+    graph, generator = _prompt_graph("@Hán Thăng/trẻ meets @Hán Thăng, then @Hán Thăng/trẻ again, mail me@x.com")
+    _asset(graph, "Hán Thăng", "c/h.png", "his face")
+    _asset(graph, "Hán Thăng", "c/t.png", "young", derivative="trẻ")
+
+    prompt, refs = resolve_generate_inputs(graph, generator)
+
+    assert prompt == "图1 meets 图2, then 图1 again, mail me@x.com"
+    assert refs == ["c/t.png", "c/h.png"]
+    assert resolve_reference_labels(graph, generator) == ["young", "his face"]
+
+
+def test_a_mention_of_an_already_connected_asset_reuses_its_number() -> None:
+    from lib.canvas.graph import resolve_generate_inputs
+
+    graph, generator = _prompt_graph("@阿离 smiles")
+    asset = _asset(graph, "阿离", "c/a.png", "her")
+    graph["edges"].append(
+        {"id": "e2", "source": asset["id"], "sourceHandle": "asset", "target": generator, "targetHandle": "image1"}
+    )
+
+    prompt, refs = resolve_generate_inputs(graph, generator)
+
+    assert (prompt, refs) == ("图1 smiles", ["c/a.png"])
+
+
+def test_longest_name_wins_and_prefix_of_a_longer_word_is_not_a_mention() -> None:
+    from lib.canvas.graph import resolve_generate_inputs
+
+    graph, generator = _prompt_graph("@Xe Land Rover and @Xe, not @Xenon")
+    _asset(graph, "Xe", "c/1.png")
+    _asset(graph, "Xe Land Rover", "c/2.png")
+
+    prompt, refs = resolve_generate_inputs(graph, generator)
+
+    assert prompt == "图1 and 图2, not @Xenon"
+    assert refs == ["c/2.png", "c/1.png"]
+
+
+def test_mention_of_an_asset_without_an_image_fails_when_strict_and_stays_literal_otherwise() -> None:
+    from lib.canvas.graph import CanvasGraphError, resolve_generate_inputs
+
+    graph, generator = _prompt_graph("@阿宁 waves")
+    _asset(graph, "阿宁", None)
+
+    assert resolve_generate_inputs(graph, generator) == ("@阿宁 waves", [])
+    with pytest.raises(CanvasGraphError) as caught:
+        resolve_generate_inputs(graph, generator, strict=True)
+    assert caught.value.code == "canvas_mention_no_image"
+
+
+def test_asset_node_takes_its_image_from_whatever_feeds_it_and_the_latest_run_wins() -> None:
+    from lib.canvas.graph import resolve_asset_node
+
+    graph, generator = _prompt_graph("p")
+    group = add_node(graph, make_node("group", {"x": 0, "y": 0}, {"label": "阿离", "asset": "character"}))
+    asset = add_node(graph, make_node("asset", {"x": 0, "y": 0}))
+    asset["parentId"] = group["id"]
+    graph["edges"].append(
+        {"id": "eg", "source": generator, "sourceHandle": "image", "target": asset["id"], "targetHandle": "image"}
+    )
+    assert "path" not in resolve_asset_node(graph, asset)["data"]
+
+    done = add_node(
+        graph, make_node("image", {"x": 0, "y": 0}, {}, server_data={"path": "canvas/images/x.png", "version": 3})
+    )
+    done["data"].update(generated=True, status="done")
+    graph["edges"].append(
+        {"id": "eo", "source": generator, "sourceHandle": "image", "target": done["id"], "targetHandle": "in"}
+    )
+
+    resolved = resolve_asset_node(graph, asset)["data"]
+    assert (resolved["path"], resolved["version"], resolved["name"], resolved["asset"]) == (
+        "canvas/images/x.png",
+        3,
+        "阿离",
+        "character",
+    )
+
+
+def test_a_finished_run_inside_an_asset_group_replaces_the_picture_the_asset_node_shows() -> None:
+    from lib.canvas.graph import wire_result_to_asset
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "meta": {}, "revision": 0}
+    group = add_node(graph, make_node("group", {"x": 0, "y": 0}, {"label": "阿离", "asset": "character"}))
+    generator = add_node(graph, make_node("image_generate", {"x": 0, "y": 0}))
+    old = add_node(graph, make_node("image", {"x": 0, "y": 0}))
+    new = add_node(graph, make_node("image", {"x": 0, "y": 0}))
+    asset = add_node(graph, make_node("asset", {"x": 0, "y": 0}))
+    for node in (generator, asset):
+        node["parentId"] = group["id"]
+    graph["edges"].append(
+        {"id": "e0", "source": old["id"], "sourceHandle": "image", "target": asset["id"], "targetHandle": "image"}
+    )
+
+    wire_result_to_asset(graph, generator["id"], new["id"])
+
+    feeds = [e["source"] for e in graph["edges"] if e["target"] == asset["id"]]
+    assert feeds == [new["id"]]
+
+
+def test_asset_node_connects_to_reference_inputs_but_not_to_text_inputs() -> None:
+    from lib.canvas.graph import CanvasGraphError, connect
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "meta": {}, "revision": 0}
+    generator = add_node(graph, make_node("image_generate", {"x": 0, "y": 0}))
+    asset = add_node(graph, make_node("asset", {"x": 0, "y": 0}))
+
+    edge = connect(graph, asset["id"], "asset", generator["id"], "image1")
+    assert edge["targetHandle"] == "image1"
+    with pytest.raises(CanvasGraphError):
+        connect(graph, asset["id"], "asset", generator["id"], "prompt")
+
+
+def test_an_image_can_be_connected_into_an_asset_node() -> None:
+    from lib.canvas.graph import connect
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "meta": {}, "revision": 0}
+    image = add_node(graph, make_node("image", {"x": 0, "y": 0}))
+    asset = add_node(graph, make_node("asset", {"x": 0, "y": 0}))
+
+    assert connect(graph, image["id"], "image", asset["id"], "image")["targetHandle"] == "image"
+
+
+def test_bracketed_script_mentions_are_expanded_too() -> None:
+    from lib.canvas.graph import resolve_generate_inputs
+
+    graph, generator = _prompt_graph("@[Phòng khách] @[Hán Thăng/trẻ] nhìn @[Không có], @Phòng khách")
+    _asset(graph, "Phòng khách", "s/a.png", "the hall", kind="scene")
+    _asset(graph, "Hán Thăng", "c/h.png", "his face", derivative="trẻ")
+
+    prompt, refs = resolve_generate_inputs(graph, generator)
+
+    assert prompt == "图1 图2 nhìn @[Không có], 图1"
+    assert refs == ["s/a.png", "c/h.png"]
+
+
+def test_grouping_moves_children_into_the_group_frame_and_ungrouping_restores_them() -> None:
+    from lib.canvas.graph import group_nodes, ungroup
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "revision": 0}
+    a = add_node(graph, make_node("text", {"x": 500, "y": 300}))
+    b = add_node(graph, make_node("image_generate", {"x": 900, "y": 340}))
+
+    group = group_nodes(graph, [a["id"], b["id"]], "Face", {"x": 450, "y": 250}, {"width": 800, "height": 400})
+
+    assert graph["nodes"][0] is group
+    assert (a["parentId"], a["position"]) == (group["id"], {"x": 50.0, "y": 50.0})
+    assert b["position"] == {"x": 450.0, "y": 90.0}
+    assert group["data"] == {"label": "Face", "width": 800.0, "height": 400.0}
+
+    ungroup(graph, group["id"])
+
+    assert [n["id"] for n in graph["nodes"]] == [a["id"], b["id"]]
+    assert "parentId" not in a
+    assert a["position"] == {"x": 500.0, "y": 300.0}
+
+
+def test_deleting_a_group_frame_keeps_its_nodes() -> None:
+    from lib.canvas.graph import group_nodes, remove_node
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "revision": 0}
+    a = add_node(graph, make_node("text", {"x": 10, "y": 10}))
+    b = add_node(graph, make_node("text", {"x": 20, "y": 20}))
+    group = group_nodes(graph, [a["id"], b["id"]], "", {"x": 0, "y": 0}, {"width": 100, "height": 100})
+
+    remove_node(graph, group["id"])
+
+    assert {n["id"] for n in graph["nodes"]} == {a["id"], b["id"]}
+
+
+def test_grouping_rejects_groups_nodes_already_grouped_and_single_nodes() -> None:
+    from lib.canvas.graph import CanvasGraphError, group_nodes
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "revision": 0}
+    a, b, c = (add_node(graph, make_node("text", {"x": i, "y": 0})) for i in range(3))
+    group = group_nodes(graph, [a["id"], b["id"]], "g", {"x": 0, "y": 0}, {"width": 50, "height": 50})
+
+    for ids, code in (
+        ([a["id"], c["id"]], "canvas_group_invalid"),
+        ([group["id"], c["id"]], "canvas_group_invalid"),
+        ([c["id"]], "canvas_group_too_small"),
+    ):
+        with pytest.raises(CanvasGraphError) as caught:
+            group_nodes(graph, ids, "x", {"x": 0, "y": 0}, {"width": 50, "height": 50})
+        assert caught.value.code == code
+
+
+def test_nodes_can_be_dropped_into_a_project_group_and_released_again() -> None:
+    from lib.canvas.graph import CanvasGraphError, set_members
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "revision": 0}
+    text = add_node(graph, make_node("text", {"x": 900, "y": 900}))
+
+    set_members(graph, [text["id"]], "p:character:阿离", {text["id"]: {"x": 40, "y": 80}})
+    assert (text["parentId"], text["position"]) == ("p:character:阿离", {"x": 40.0, "y": 80.0})
+
+    set_members(graph, [text["id"]], None, {text["id"]: {"x": 500, "y": 600}})
+    assert "parentId" not in text
+    assert text["position"] == {"x": 500.0, "y": 600.0}
+
+    for bad_group in ("p:char_text:阿离", "text_unknown"):
+        with pytest.raises(CanvasGraphError):
+            set_members(graph, [text["id"]], bad_group, {})
+    with pytest.raises(CanvasGraphError):
+        set_members(graph, ["p:char_sheet:阿离"], "p:character:阿离", {})
+
+
+def test_a_user_group_moves_to_the_front_when_it_gains_members() -> None:
+    from lib.canvas.graph import group_nodes, set_members
+
+    graph = {"nodes": [], "edges": [], "notes": {}, "revision": 0}
+    a, b, c = (add_node(graph, make_node("text", {"x": i, "y": 0})) for i in range(3))
+    group = group_nodes(graph, [a["id"], b["id"]], "g", {"x": 0, "y": 0}, {"width": 50, "height": 50})
+    graph["nodes"].append(graph["nodes"].pop(0))  # 模拟分组被排到了后面
+
+    set_members(graph, [c["id"]], group["id"], {c["id"]: {"x": 5, "y": 5}})
+
+    assert graph["nodes"][0] is group

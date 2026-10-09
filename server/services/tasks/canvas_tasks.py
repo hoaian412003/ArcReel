@@ -16,16 +16,20 @@ from typing import Any
 from lib.canvas.graph import (
     STATUS_DONE,
     STATUS_FAILED,
+    STATUS_QUEUED,
     STATUS_RUNNING,
     CanvasGraphError,
     find_node,
     reference_legend,
+    status_timestamps,
 )
 from lib.canvas.store import mutate_canvas
 from lib.db.base import DEFAULT_USER_ID
 from lib.infra.path_safety import PathTraversalError, safe_join
+from lib.infra.poll_sync_hook import listen_provider_status
 from lib.project.project_manager import get_project_manager
 from lib.project.resource_paths import CANVAS_IMAGE_RESOURCE_TYPE, CANVAS_VIDEO_RESOURCE_TYPE, resource_relative_path
+from server.services.project.canvas_publish import finish_run
 from server.services.tasks.generation_context import (
     AudioLaneRequest,
     ImageLaneRequest,
@@ -43,6 +47,18 @@ CANVAS_AUDIO_RESOURCE_TYPE = "audio"
 _ERROR_MAX_CHARS = 500
 
 
+# 供应商轮询报告的状态里，能映射成节点「排队 / 运行」的那些；其余（成功、失败等）由任务收尾统一写回。
+_PROVIDER_STATUS = {
+    "QUEUED": STATUS_QUEUED,
+    "PENDING": STATUS_QUEUED,
+    "WAITING": STATUS_QUEUED,
+    "CREATE": STATUS_QUEUED,
+    "CREATED": STATUS_QUEUED,
+    "RUNNING": STATUS_RUNNING,
+    "PROCESSING": STATUS_RUNNING,
+}
+
+
 async def _patch_nodes(project_name: str, patches: dict[str, dict[str, Any]]) -> None:
     """尽力把服务端字段写回节点；节点已被用户删除时静默跳过。"""
     pm = get_project_manager()
@@ -51,7 +67,7 @@ async def _patch_nodes(project_name: str, patches: dict[str, dict[str, Any]]) ->
     def _apply(graph: dict[str, Any]) -> None:
         for node_id, data in patches.items():
             try:
-                find_node(graph, node_id)["data"].update(data)
+                find_node(graph, node_id)["data"].update({**data, **status_timestamps(data)})
             except CanvasGraphError:
                 logger.info("画布节点 %s 已不存在，跳过写回", node_id)
 
@@ -96,8 +112,24 @@ async def _run_node_task(
         return patches
 
     await _patch_nodes(project_name, _both(status=STATUS_RUNNING, error=None))
+    reported = STATUS_RUNNING
+
+    async def _on_provider_status(provider_status: str) -> None:
+        """供应商自己的排队 / 运行状态：变了才写回节点（每次轮询都写盘没有意义）。"""
+        nonlocal reported
+        mapped = _PROVIDER_STATUS.get(provider_status)
+        if mapped is None or mapped == reported:
+            return
+        reported = mapped
+        patch = _both(status=mapped, error=None)
+        if mapped == STATUS_QUEUED:
+            for data in patch.values():
+                data["started_at"] = None
+        await _patch_nodes(project_name, patch)
+
     try:
-        version = await generate(project, project_path)
+        with listen_provider_status(_on_provider_status):
+            version = await generate(project, project_path)
     except BaseException as exc:
         failed = _both(status=STATUS_FAILED, error=str(exc)[:_ERROR_MAX_CHARS])
         await asyncio.shield(_patch_nodes(project_name, failed))
@@ -107,6 +139,9 @@ async def _run_node_task(
     patches = _both(status=STATUS_DONE, error=None)
     patches[resource_id].update(path=rel_path, version=version)
     await _patch_nodes(project_name, patches)
+    if generator_id:
+        # 出的图接到所在资产分组的资产节点并发布到项目；这一步失败不能把已经成功的生成任务判成失败。
+        await asyncio.to_thread(finish_run, pm, project_name, generator_id, resource_id)
     return {"file_path": rel_path, "version": version, "resource_type": resource_type}
 
 

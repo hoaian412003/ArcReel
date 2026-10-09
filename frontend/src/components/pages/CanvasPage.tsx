@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Bot } from "lucide-react";
 import { ClaudePanel } from "@/components/claude/ClaudePanel";
+import { CanvasErrorBoundary } from "@/components/canvas/node-canvas/CanvasErrorBoundary";
 import { NodeCanvasPage } from "@/components/canvas/node-canvas/NodeCanvasPage";
 import { TaskFailureListener } from "@/components/layout/TaskFailureListener";
 import { useProjectEventsSSE } from "@/hooks/useProjectEventsSSE";
@@ -41,7 +42,9 @@ export function CanvasPage() {
       <TaskFailureListener projectName={sseProject} />
       <main className="relative min-w-0 flex-1">
         {loaded ? (
-          <NodeCanvasPage key={projectName} projectName={projectName} />
+          <CanvasErrorBoundary>
+            <NodeCanvasPage key={projectName} projectName={projectName} />
+          </CanvasErrorBoundary>
         ) : (
           <div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-text-3">
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />

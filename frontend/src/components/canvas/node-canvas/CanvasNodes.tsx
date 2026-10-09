@@ -1,24 +1,24 @@
 import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Box, Clapperboard, Film, Landmark, Package, Image as ImageIcon, Layers, Loader2, Mic, PenLine, Play, Plus, Sparkles, Type, Upload, User, Video, X } from "lucide-react";
+import { Handle, NodeResizer, Position, useNodeId, type Node, type NodeProps } from "@xyflow/react";
+import { AlertTriangle, AtSign, Package, Image as ImageIcon, Loader2, Mic, Play, Sparkles, Type, Upload, Video, X, ChevronDown, ChevronUp, FileText, Save } from "lucide-react";
 import { API } from "@/api";
 import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/types/canvas";
 import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
-import type { OtherAssetKind } from "@/components/canvas/lorebook/useCharacterAssets";
-import { useBusyNodeIds, useCanvasActions, useCharacterNodeContext } from "./canvas-context";
+import { ImageLightbox } from "@/components/ui/ImageLightbox";
+import { useBusyNodeIds, useCanvasActions } from "./canvas-context";
 import { ASPECT_RATIOS, PASSIVE_INPUT_HANDLE, isBusy } from "./canvas-rules";
+import { NodeStatusLine } from "./NodeStatusLine";
 
 export type CanvasFlowNode = Node<CanvasNodeData, CanvasAnyNodeType>;
 
 const HANDLE_COLOR: Record<CanvasHandleType, string> = {
   text: "var(--color-accent)",
   image: "oklch(0.74 0.13 190)",
-  unit: "oklch(0.78 0.13 80)",
-  h3: "oklch(0.72 0.14 150)",
   video: "oklch(0.72 0.15 25)",
   audio: "oklch(0.78 0.12 320)",
+  asset: "oklch(0.8 0.14 55)",
 };
 const TEXT_SAVE_DELAY_MS = 600;
 
@@ -41,15 +41,13 @@ function handleStyle(type: CanvasHandleType, connectable = true): CSSProperties 
   return style;
 }
 
-const UNIT_HANDLE_STYLE = { ...handleStyle("unit"), top: "35%" };
-const UNIT_TEXT_HANDLE_STYLE = { ...handleStyle("text"), top: "65%" };
-
 function NodeShell({
   selected,
   width,
   icon,
   title,
   onRemove,
+  compact,
   children,
 }: {
   selected: boolean;
@@ -57,9 +55,13 @@ function NodeShell({
   icon: ReactNode;
   title: string;
   onRemove?: () => void;
+  /** 流水线节点：`true` 显示成紧凑卡片，`false` 展开，`undefined` 表示这个节点没有紧凑形态。 */
+  compact?: boolean;
   children: ReactNode;
 }) {
   const { t } = useTranslation("dashboard");
+  const nodeId = useNodeId();
+  const { addToContext, setData } = useCanvasActions();
   return (
     <div
       style={{ width }}
@@ -67,9 +69,31 @@ function NodeShell({
         selected ? "border-accent/70" : "border-hairline"
       }`}
     >
-      <div className="flex items-center gap-1.5 border-b border-hairline px-3 py-1.5 text-[11px] font-medium text-text-3">
+      <div className="flex items-center gap-1.5 border-b border-hairline px-3 py-1.5 text-[12px] font-semibold text-text-2">
         {icon}
         <span className="flex-1 truncate">{title}</span>
+        {nodeId && compact !== undefined && (
+          <button
+            type="button"
+            className={`nodrag ${ICON_BTN_CLS}`}
+            onClick={() => void setData(nodeId, { compact: !compact })}
+            title={compact ? t("node_canvas_expand") : t("node_canvas_collapse")}
+            aria-label={compact ? t("node_canvas_expand") : t("node_canvas_collapse")}
+          >
+            {compact ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />}
+          </button>
+        )}
+        {nodeId && (
+          <button
+            type="button"
+            className={`nodrag ${ICON_BTN_CLS}`}
+            onClick={() => addToContext(nodeId)}
+            title={t("node_canvas_add_context")}
+            aria-label={t("node_canvas_add_context")}
+          >
+            <AtSign className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
         {onRemove && (
           <button type="button" className={`nodrag ${ICON_BTN_CLS}`} onClick={onRemove} aria-label={t("node_canvas_delete")}>
             <X className="h-3.5 w-3.5" aria-hidden="true" />
@@ -83,33 +107,77 @@ function NodeShell({
 
 function HandleLabel({ side, children }: { side: "left" | "right"; children: ReactNode }) {
   return (
-    <span className={`pointer-events-none absolute top-1/2 -translate-y-1/2 text-[10px] text-text-4 ${side === "left" ? "left-4" : "right-4"}`}>
+    <span className={`pointer-events-none absolute top-1/2 -translate-y-1/2 text-[10.5px] text-text-3 ${side === "left" ? "left-4" : "right-4"}`}>
       {children}
     </span>
   );
 }
 
-/** 角色分组里的节点（id 形如 `p:char_*:<角色名>`）：内容取自项目，写操作走角色接口，不能删。 */
-/** 资产分组（角色 / 场景 / 道具 / 商品）里的节点：内容取自项目，写操作走各自的资产接口，不能删。 */
-function isCharacterPart(id: string): boolean {
-  return /^p:(char_|deriv_|scene_|prop_|product_)/.test(id);
+
+/** 画布上的图片：双击放大查看（Esc 或点背景关闭）。 */
+function CanvasImage({ src, alt, className }: { src: string; alt: string; className: string }) {
+  const { t } = useTranslation("dashboard");
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <img
+        src={src}
+        alt={alt}
+        title={t("node_canvas_image_zoom_hint")}
+        className={`${className} cursor-zoom-in`}
+        draggable={false}
+        loading="lazy"
+        decoding="async"
+        onDoubleClick={() => setOpen(true)}
+      />
+      {open ? <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} /> : null}
+    </>
+  );
 }
 
-/** 角色以外的资产（场景 / 道具 / 商品）里的节点所属类型；角色与普通节点返回 null。 */
-function otherAsset(data: CanvasNodeData): OtherAssetKind | null {
-  return data.asset === "scene" || data.asset === "prop" || data.asset === "product" ? data.asset : null;
-}
+/** 图片的参考说明：这张图被别的节点当参考图时，说明连同图一起交给供应商（如「This is his face…」）。 */
+function NoteField({ id, note }: { id: string; note: string | undefined }) {
+  const { t } = useTranslation("dashboard");
+  const { setNote } = useCanvasActions();
+  const [draft, setDraft] = useState(note ?? "");
+  const dirty = useRef(false);
 
-function isDerivativePart(id: string): boolean {
-  return id.startsWith("p:deriv_");
+  useEffect(() => {
+    if (!dirty.current) setDraft(note ?? "");
+  }, [note]);
+
+  const commit = () => {
+    if (!dirty.current) return;
+    dirty.current = false;
+    void setNote(id, draft);
+  };
+
+  return (
+    <label className="mt-2 block">
+      <span className="mb-1 block text-[10.5px] text-text-4">{t("node_canvas_note_label")}</span>
+      <textarea
+        className={`nodrag nowheel ${INPUT_CLS} min-h-[44px] resize-none text-[11px]`}
+        rows={2}
+        value={draft}
+        placeholder={t("node_canvas_note_placeholder")}
+        onChange={(e) => {
+          dirty.current = true;
+          setDraft(e.target.value);
+        }}
+        onBlur={commit}
+      />
+    </label>
+  );
 }
 
 function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const { setText, remove } = useCanvasActions();
-  const characters = useCharacterNodeContext();
-  const bound = isCharacterPart(id);
+  const { setText, remove, saveUnitField } = useCanvasActions();
   const [draft, setDraft] = useState(data.text ?? "");
+  const compact = data.step ? Boolean(data.compact) : undefined;
+  // 单元文本 / 导演说明：画布上改了，要点「存回剧本」才会写进剧本。
+  const scriptField = data.step === "script" ? "text" : data.step === "direction" ? "direction" : null;
+  const unsaved = scriptField !== null && data.script_value !== undefined && draft !== data.script_value;
   const dirty = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -126,40 +194,24 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     dirty.current = false;
-    const other = otherAsset(data);
-    if (isDerivativePart(id)) void characters?.assets.saveDerivativeDescription(data.name ?? "", data.derivative ?? "", value);
-    else if (other) void characters?.assets.saveAssetDescription(other, data.name ?? "", value);
-    else if (bound) void characters?.assets.saveDescription(data.name ?? "", value);
-    else void setText(id, value);
+    void setText(id, value);
   };
 
   return (
     <NodeShell
       selected={selected}
-      width={280}
+      width={data.step ? 300 : 280}
       icon={<Type className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={
-        isDerivativePart(id)
-          ? t("node_canvas_derivative_prompt", { name: data.derivative })
-          : bound
-            ? t("node_canvas_character_prompt")
-            : data.generated
-              ? t("node_canvas_text_generated")
-              : (data.label ?? t("node_canvas_text_label"))
-      }
-      onRemove={
-        isDerivativePart(id)
-          ? () => {
-              if (window.confirm(t("node_canvas_derivative_delete_confirm", { name: data.derivative })))
-                void characters?.assets.deleteDerivative(data.name ?? "", data.derivative ?? "");
-            }
-          : bound
-            ? undefined
-            : () => void remove(id)
-      }
+      title={data.generated ? t("node_canvas_text_generated") : (data.label ?? t("node_canvas_text_label"))}
+      onRemove={data.step ? undefined : () => void remove(id)}
+      compact={compact}
     >
+      {data.step === "h3" && data.h3_status && data.h3_status !== "current" ? (
+        <p className="mb-1.5 text-[10.5px] text-amber-300">{t(`node_canvas_h3_status_${data.h3_status}`)}</p>
+      ) : null}
       <textarea
-        className={`nodrag nowheel ${INPUT_CLS} min-h-[96px] resize-y`}
+        className={`nodrag nowheel ${INPUT_CLS} ${compact ? "min-h-[52px] max-h-[64px]" : "min-h-[96px]"} resize-y`}
+        rows={compact ? 2 : undefined}
         value={draft}
         placeholder={t("node_canvas_text_placeholder")}
         onChange={(e) => {
@@ -173,6 +225,19 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
           if (dirty.current) flush(draft);
         }}
       />
+      {unsaved && scriptField && data.ep !== undefined && data.unit ? (
+        <button
+          type="button"
+          className={`nodrag mt-2 w-full justify-center ${GHOST_BTN_CLS}`}
+          title={t("node_canvas_save_to_script_hint")}
+          onClick={() => {
+            if (window.confirm(t("node_canvas_save_to_script_confirm"))) void saveUnitField(data.ep ?? 0, data.unit ?? "", scriptField, draft);
+          }}
+        >
+          <Save className="h-3.5 w-3.5" aria-hidden="true" />
+          {t("node_canvas_save_to_script")}
+        </button>
+      ) : null}
       {data.generated ? (
         <Handle type="target" position={Position.Left} id={PASSIVE_INPUT_HANDLE} isConnectable={false} style={handleStyle("text", false)} />
       ) : null}
@@ -183,36 +248,19 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
 
 function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const { projectName, remove } = useCanvasActions();
-  const characters = useCharacterNodeContext();
-  const bound = isCharacterPart(id);
+  const { projectName, remove, uploadImage } = useCanvasActions();
   const uploadInput = useRef<HTMLInputElement>(null);
-  // 角色资产图在生成队列里时，资产图节点显示占位。
-  const busy =
-    isBusy(data.status) ||
-    (data.role === "sheet" &&
-      Boolean(
-        (otherAsset(data) ? characters?.assets.generatingAssets[otherAsset(data) as OtherAssetKind] : characters?.assets.generating)?.has(
-          data.name ?? "",
-        ),
-      )) ||
-    (data.role === "derivative" && Boolean(characters?.assets.generatingDerivatives.has(`${data.name}/${data.derivative}`)));
+  const busy = isBusy(data.status);
   const failed = data.status === "failed";
+  const compact = data.step ? Boolean(data.compact) : undefined;
   return (
     <NodeShell
       selected={selected}
-      width={240}
+      width={compact ? 220 : 240}
       icon={<ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={
-        data.role === "reference"
-          ? t("node_canvas_character_reference")
-          : data.role === "sheet"
-            ? t(`node_canvas_${data.asset ?? "character"}_sheet`)
-            : data.role === "derivative"
-              ? t("node_canvas_derivative_sheet", { name: data.derivative })
-              : (data.label ?? t("node_canvas_image_label"))
-      }
-      onRemove={bound || busy ? undefined : () => void remove(id)}
+      title={data.label ?? t("node_canvas_image_label")}
+      onRemove={busy || data.step ? undefined : () => void remove(id)}
+      compact={compact}
     >
       {data.stale ? (
         <p className="mb-2 flex items-center gap-1.5 rounded-[6px] bg-amber-400/10 px-2 py-1 text-[10.5px] text-amber-300">
@@ -220,15 +268,12 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
           {t("node_canvas_stale")}
         </p>
       ) : null}
-      <div className="flex min-h-[160px] items-center justify-center overflow-hidden rounded-[8px] border border-hairline bg-black/30">
+      <div className={`flex ${compact ? "min-h-[64px]" : "min-h-[160px]"} items-center justify-center overflow-hidden rounded-[8px] border border-dashed border-hairline bg-black/30`}>
         {data.path ? (
-          <img
+          <CanvasImage
             src={API.getFileUrl(projectName, data.path, data.version ?? null)}
             alt={data.label ?? t("node_canvas_image_label")}
-            className="nodrag max-h-[320px] w-full object-contain"
-            draggable={false}
-            loading="lazy"
-            decoding="async"
+            className={`nodrag ${compact ? "max-h-[96px]" : "max-h-[320px]"} w-full object-contain`}
           />
         ) : busy ? (
           <span className="flex items-center gap-2 text-[12px] text-text-3">
@@ -245,7 +290,9 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
           <span className="text-[12px] text-text-4">{t("node_canvas_image_empty")}</span>
         )}
       </div>
-      {data.role === "reference" ? (
+      {data.generated ? <NodeStatusLine data={data} /> : null}
+      {data.path && !compact ? <NoteField id={id} note={data.note} /> : null}
+      {data.generated || compact ? null : (
         <>
           <input
             ref={uploadInput}
@@ -254,21 +301,17 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) void characters?.assets.uploadReference(data.name ?? "", file);
+              if (file) void uploadImage(id, file);
               e.target.value = "";
             }}
           />
-          <button
-            type="button"
-            className={`nodrag mt-2 w-full justify-center ${GHOST_BTN_CLS}`}
-            onClick={() => uploadInput.current?.click()}
-          >
+          <button type="button" className={`nodrag mt-2 w-full justify-center ${GHOST_BTN_CLS}`} onClick={() => uploadInput.current?.click()}>
             <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-            {data.path ? t("node_canvas_character_reference_replace") : t("node_canvas_character_reference_upload")}
+            {data.path ? t("node_canvas_image_replace") : t("node_canvas_image_upload")}
           </button>
         </>
-      ) : null}
-      {data.generated || data.role === "sheet" || data.role === "derivative" ? (
+      )}
+      {data.generated ? (
         <Handle type="target" position={Position.Left} id={PASSIVE_INPUT_HANDLE} isConnectable={false} style={handleStyle("image", false)} />
       ) : null}
       <Handle type="source" position={Position.Right} id="image" style={handleStyle("image")} />
@@ -278,30 +321,22 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
 
 /**
  * 图片供应商节点（仿 RunningHub 工作流节点）：输入 image1（参考图）与 prompt，输出一张图。
- * 角色分组里的那一个绑定项目里的角色：运行即生成该角色的资产图，不暴露模型 / 画幅。
+ * 提示词里的 `@资产名` 运行时换成「图N」并自动带上该资产的图与说明。
  */
 function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { setAspectRatio, setModel, imageModels, run, remove } = useCanvasActions();
-  const characters = useCharacterNodeContext();
-  const bound = isCharacterPart(id);
-  const derivative = isDerivativePart(id);
-  const busy = derivative
-    ? Boolean(characters?.assets.generatingDerivatives.has(`${data.name}/${data.derivative}`))
-    : bound
-      ? Boolean(
-          (otherAsset(data) ? characters?.assets.generatingAssets[otherAsset(data) as OtherAssetKind] : characters?.assets.generating)?.has(
-            data.name ?? "",
-          ),
-        )
-      : isBusy(data.status);
+  const busyIds = useBusyNodeIds();
+  const busy = isBusy(data.status) || busyIds.has(id);
+  const compact = data.step ? Boolean(data.compact) : undefined;
   return (
     <NodeShell
       selected={selected}
       width={280}
       icon={<Sparkles className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={t("node_canvas_generate_label")}
-      onRemove={bound || busy ? undefined : () => void remove(id)}
+      title={typeof data.title === "string" && data.title ? data.title : t("node_canvas_generate_label")}
+      onRemove={busy || data.step ? undefined : () => void remove(id)}
+      compact={compact}
     >
       <div className="relative -mx-3 mb-2 h-6">
         <Handle type="target" position={Position.Left} id="image1" style={handleStyle("image")} />
@@ -313,55 +348,39 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         <Handle type="target" position={Position.Left} id="prompt" style={handleStyle("text")} />
         <HandleLabel side="left">{t("node_canvas_handle_prompt")}</HandleLabel>
       </div>
-      {bound ? (
-        <p className="mb-3 text-[10.5px] leading-snug text-text-4">
-          {derivative ? t("node_canvas_derivative_generate_hint") : t("node_canvas_character_generate_hint")}
-        </p>
-      ) : (
-        <>
-          <div className="nodrag mb-2">
-            <ProviderModelSelect
-              value={data.model ?? ""}
-              options={imageModels.options}
-              providerNames={imageModels.providerNames}
-              modelNames={imageModels.modelNames}
-              onChange={(value) => void setModel(id, value)}
-              allowDefault
-              defaultLabel={t("node_canvas_model_default")}
-              aria-label={t("node_canvas_model_label")}
-            />
-          </div>
-          <label className="mb-3 flex items-center justify-between gap-2 text-[11.5px] text-text-3">
-            {t("node_canvas_aspect_ratio")}
-            <select
-              className={`nodrag ${INPUT_CLS} !w-auto !py-1`}
-              value={data.aspect_ratio ?? "9:16"}
-              disabled={busy}
-              onChange={(e) => void setAspectRatio(id, e.target.value)}
-            >
-              {ASPECT_RATIOS.map((ratio) => (
-                <option key={ratio} value={ratio}>
-                  {ratio}
-                </option>
-              ))}
-            </select>
-          </label>
-        </>
-      )}
-      <button
-        type="button"
-        className={`nodrag w-full justify-center ${ACCENT_BTN_SM_CLS}`}
-        disabled={busy}
-        onClick={() => {
-          if (derivative) characters?.assets.generateDerivative(data.name ?? "", data.derivative ?? "");
-          else if (otherAsset(data)) characters?.assets.generateAsset(otherAsset(data) as OtherAssetKind, data.name ?? "");
-          else if (bound) characters?.assets.generate(data.name ?? "");
-          else void run(id);
-        }}
-      >
+      {compact ? null : <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t("node_canvas_mention_hint")}</p>}
+      <div className={`nodrag mb-2 ${compact ? "hidden" : ""}`}>
+        <ProviderModelSelect
+          value={data.model ?? ""}
+          options={imageModels.options}
+          providerNames={imageModels.providerNames}
+          modelNames={imageModels.modelNames}
+          onChange={(value) => void setModel(id, value)}
+          allowDefault
+          defaultLabel={t("node_canvas_model_default")}
+          aria-label={t("node_canvas_model_label")}
+        />
+      </div>
+      <label className={`mb-3 flex items-center justify-between gap-2 text-[11.5px] text-text-3 ${compact ? "hidden" : ""}`}>
+        {t("node_canvas_aspect_ratio")}
+        <select
+          className={`nodrag ${INPUT_CLS} !w-auto !py-1`}
+          value={data.aspect_ratio ?? "9:16"}
+          disabled={busy}
+          onChange={(e) => void setAspectRatio(id, e.target.value)}
+        >
+          {ASPECT_RATIOS.map((ratio) => (
+            <option key={ratio} value={ratio}>
+              {ratio}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="button" className={`nodrag w-full justify-center ${ACCENT_BTN_SM_CLS}`} disabled={busy} onClick={() => void run(id)}>
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
         {busy ? t("node_canvas_running") : t("node_canvas_run")}
       </button>
+      <NodeStatusLine data={data} />
       {data.status === "failed" && data.error ? (
         <p className="mt-2 line-clamp-3 text-[10.5px] text-red-300">{data.error}</p>
       ) : null}
@@ -369,231 +388,84 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
   );
 }
 
-function StatusPill({ tone, children }: { tone: "ok" | "warn" | "muted"; children: ReactNode }) {
-  const cls =
-    tone === "ok"
-      ? "bg-emerald-400/10 text-emerald-300"
-      : tone === "warn"
-        ? "bg-amber-400/10 text-amber-300"
-        : "bg-white/5 text-text-4";
-  return <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${cls}`}>{children}</span>;
-}
-
-function EpisodeGroupView({ data, selected }: NodeProps<CanvasFlowNode>) {
+/**
+ * 资产节点：接一张图（可以空着，等图来），一个 `asset` 输出口把「图 + 参考说明」交给下游当参考。
+ * 放在资产分组里时，它接着的图也就是这个资产在项目里的资产图。
+ */
+function AssetNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  return (
-    <div
-      className={`h-full w-full rounded-[16px] border border-dashed bg-white/[0.02] ${selected ? "border-accent/60" : "border-hairline-strong"}`}
-    >
-      <div className="flex items-center gap-2 px-4 py-3 text-[12px] font-medium text-text-2">
-        <Layers className="h-3.5 w-3.5" aria-hidden="true" />
-        {t("node_canvas_episode_title", { episode: data.episode })}
-        {data.title ? <span className="truncate text-text-4">{data.title}</span> : null}
-        <span className="ml-auto text-[11px] text-text-4">{t("node_canvas_episode_units", { count: data.unit_count ?? 0 })}</span>
-      </div>
-    </div>
-  );
-}
-
-function UnitNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
-  const { t } = useTranslation("dashboard");
-  return (
-    <NodeShell
-      selected={selected}
-      width={300}
-      icon={<Film className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={`${data.unit_id ?? ""}${data.duration_seconds ? ` · ${data.duration_seconds}s` : ""}`}
-    >
-      <p className="nowheel line-clamp-5 whitespace-pre-wrap text-[11.5px] leading-snug text-text-2">{data.text}</p>
-      <Handle type="target" position={Position.Left} id="frame" isConnectable={false} style={handleStyle("image", false)} />
-      <Handle type="source" position={Position.Right} id="unit" style={UNIT_HANDLE_STYLE} />
-      <Handle type="source" position={Position.Right} id="text" style={UNIT_TEXT_HANDLE_STYLE} />
-      <HandleLabel side="right">{t("node_canvas_handle_unit_text")}</HandleLabel>
-    </NodeShell>
-  );
-}
-
-function KeyframeNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
-  const { t } = useTranslation("dashboard");
-  const { projectName, runKeyframe } = useCanvasActions();
-  const busyNodeIds = useBusyNodeIds();
-  const nodeKey = `${data.episode}:${data.sheet_id}`;
-  const busy = busyNodeIds.has(nodeKey);
+  const { projectName, remove } = useCanvasActions();
+  const name = data.derivative ? `${data.name ?? ""}/${data.derivative}` : (data.name ?? "");
   return (
     <NodeShell
       selected={selected}
       width={260}
-      icon={<Clapperboard className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={t("node_canvas_keyframe_title", { id: data.sheet_id })}
+      icon={<Package className="h-3.5 w-3.5" aria-hidden="true" />}
+      title={name ? t("node_canvas_asset_label", { name }) : t("node_canvas_asset_plain")}
+      onRemove={() => void remove(id)}
     >
-      <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        <StatusPill tone="muted">{t("node_canvas_keyframe_cells", { count: data.cell_count ?? 0 })}</StatusPill>
-        {data.stale ? <StatusPill tone="warn">{t("node_canvas_stale_short")}</StatusPill> : null}
-        {data.approved && !data.stale && data.path ? <StatusPill tone="ok">{t("node_canvas_keyframe_approved")}</StatusPill> : null}
+      <div className="relative -mx-3 mb-2 h-6">
+        <Handle type="target" position={Position.Left} id="image" style={handleStyle("image")} />
+        <HandleLabel side="left">{t("node_canvas_handle_image")}</HandleLabel>
       </div>
-      <div className="mb-2 flex min-h-[120px] items-center justify-center overflow-hidden rounded-[8px] border border-hairline bg-black/30">
+      <div className="flex min-h-[80px] items-center justify-center overflow-hidden rounded-[8px] border border-dashed border-hairline bg-black/30">
         {data.path ? (
-          <img
+          <CanvasImage
             src={API.getFileUrl(projectName, data.path, data.version ?? null)}
-            alt={t("node_canvas_keyframe_title", { id: data.sheet_id })}
-            className="max-h-[200px] w-full object-contain"
-            draggable={false}
-            loading="lazy"
-            decoding="async"
+            alt={name}
+            className="nodrag max-h-[120px] w-full object-contain"
           />
         ) : (
-          <span className="text-[12px] text-text-4">{t("node_canvas_image_empty")}</span>
+          <span className="text-[12px] text-text-4">{t("node_canvas_asset_empty")}</span>
         )}
       </div>
-      {data.problem ? <p className="mb-2 text-[10.5px] text-amber-300">{t("node_canvas_keyframe_problem", { name: data.problem.name })}</p> : null}
-      <button
-        type="button"
-        className={`nodrag w-full justify-center ${ACCENT_BTN_SM_CLS}`}
-        disabled={busy || Boolean(data.problem)}
-        onClick={() => void runKeyframe(data.episode ?? 0, data.sheet_id ?? "")}
-      >
-        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
-        {busy ? t("node_canvas_running") : data.path ? t("node_canvas_regenerate") : t("node_canvas_run")}
-      </button>
-      <Handle type="source" position={Position.Right} id="image" style={handleStyle("image")} />
+      <NoteField id={id} note={data.note} />
+      <Handle type="source" position={Position.Right} id="asset" style={handleStyle("asset")} />
     </NodeShell>
   );
 }
 
-function H3PromptNodeView({ data, selected }: NodeProps<CanvasFlowNode>) {
+/** 分组：标题可改、可缩放；删掉分组框只是拆组，里面的节点保留。资产分组的标题就是资产名。 */
+function GroupView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const status = data.status as string | undefined;
-  const tone = status === "current" ? "ok" : status === "stale" ? "warn" : "muted";
-  const sections = Object.entries(data.sections ?? {});
+  const { setData, resizeGroup, remove } = useCanvasActions();
+  const [draft, setDraft] = useState(data.label ?? "");
+  const dirty = useRef(false);
+  useEffect(() => {
+    if (!dirty.current) setDraft(data.label ?? "");
+  }, [data.label]);
   return (
-    <NodeShell
-      selected={selected}
-      width={300}
-      icon={<PenLine className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={t("node_canvas_h3_title", { id: data.unit_id })}
-    >
-      <div className="mb-2">
-        <StatusPill tone={tone}>{t(`node_canvas_h3_status_${status ?? "missing"}`)}</StatusPill>
-      </div>
-      {sections.length > 0 ? (
-        <div className="nodrag nowheel max-h-[220px] space-y-2 overflow-y-auto pr-1">
-          {sections.map(([name, body]) => (
-            <div key={name}>
-              <p className="text-[10px] uppercase tracking-wide text-text-4">{name}</p>
-              <p className="whitespace-pre-wrap text-[11px] leading-snug text-text-2">{body}</p>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="text-[11.5px] text-text-4">{t("node_canvas_h3_empty")}</p>
-      )}
-      <Handle type="target" position={Position.Left} id={PASSIVE_INPUT_HANDLE} isConnectable={false} style={handleStyle("h3", false)} />
-    </NodeShell>
-  );
-}
-
-function H3WriterNodeView({ id, selected }: NodeProps<CanvasFlowNode>) {
-  const { t } = useTranslation("dashboard");
-  const { runWriter, remove } = useCanvasActions();
-  const busyNodeIds = useBusyNodeIds();
-  const busy = busyNodeIds.has(id);
-  return (
-    <NodeShell
-      selected={selected}
-      width={260}
-      icon={<PenLine className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={t("node_canvas_h3_writer_label")}
-      onRemove={busy ? undefined : () => void remove(id)}
-    >
-      <div className="relative -mx-3 mb-3 h-6">
-        <Handle type="target" position={Position.Left} id="units" style={handleStyle("unit")} />
-        <HandleLabel side="left">{t("node_canvas_handle_units")}</HandleLabel>
-        <Handle type="source" position={Position.Right} id="h3" style={handleStyle("h3")} />
-        <HandleLabel side="right">{t("node_canvas_handle_h3")}</HandleLabel>
-      </div>
-      <p className="mb-3 text-[10.5px] leading-snug text-text-4">{t("node_canvas_h3_writer_hint")}</p>
-      <button type="button" className={`nodrag w-full justify-center ${ACCENT_BTN_SM_CLS}`} disabled={busy} onClick={() => void runWriter(id)}>
-        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
-        {busy ? t("node_canvas_running") : t("node_canvas_run")}
-      </button>
-    </NodeShell>
-  );
-}
-
-function CharacterGroupView({ data, selected }: NodeProps<CanvasFlowNode>) {
-  const { t } = useTranslation("dashboard");
-  const characters = useCharacterNodeContext();
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [saving, setSaving] = useState(false);
-  return (
-    <div
-      className={`h-full w-full rounded-[16px] border border-dashed bg-white/[0.02] ${selected ? "border-accent/60" : "border-hairline-strong"}`}
-    >
-      <div className="flex items-center gap-2 px-4 py-3 text-[13px] font-medium text-text-2">
-        {data.asset === "scene" ? (
-          <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
-        ) : data.asset === "prop" ? (
-          <Box className="h-3.5 w-3.5" aria-hidden="true" />
-        ) : data.asset === "product" ? (
-          <Package className="h-3.5 w-3.5" aria-hidden="true" />
-        ) : (
-          <User className="h-3.5 w-3.5" aria-hidden="true" />
-        )}
-        <span className="truncate">{data.name}</span>
-        {data.asset && data.asset !== "character" ? null : (
-          <button
-            type="button"
-            className={`nodrag ml-auto ${GHOST_BTN_CLS}`}
-            aria-expanded={adding}
-            onClick={() => setAdding((open) => !open)}
-          >
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            {t("node_canvas_derivative_add")}
-          </button>
-        )}
-      </div>
-      {adding ? (
-        <form
-          className="nodrag nowheel mx-4 mb-2 flex flex-col gap-2 rounded-[10px] border border-hairline bg-bg-grad-a/90 p-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!characters || !name.trim() || !description.trim()) return;
-            setSaving(true);
-            characters.assets
-              .addDerivative(data.name ?? "", name.trim(), description.trim())
-              .then(() => {
-                setName("");
-                setDescription("");
-                setAdding(false);
-              })
-              .catch(() => {
-                /* 失败已 toast，表单保持打开供修改后重试 */
-              })
-              .finally(() => setSaving(false));
+    <div className={`h-full w-full rounded-[16px] border border-dashed bg-white/[0.025] ${selected ? "border-accent/70" : "border-hairline-strong"}`}>
+      <NodeResizer
+        isVisible={selected}
+        minWidth={240}
+        minHeight={160}
+        onResizeEnd={(_, params) => void resizeGroup(id, { x: params.x, y: params.y }, params.width, params.height)}
+      />
+      <div className="flex items-center gap-2 px-4 py-2.5">
+        <input
+          className="nodrag min-w-0 flex-1 bg-transparent text-[15px] font-semibold text-text placeholder:text-text-4 focus-visible:outline-none"
+          value={draft}
+          placeholder={t("node_canvas_group_label")}
+          aria-label={t("node_canvas_group_label")}
+          onChange={(e) => {
+            dirty.current = true;
+            setDraft(e.target.value);
           }}
-        >
-          <input
-            className={`${INPUT_CLS} !py-1`}
-            value={name}
-            placeholder={t("node_canvas_derivative_name_placeholder")}
-            aria-label={t("node_canvas_derivative_name_placeholder")}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <textarea
-            className={`${INPUT_CLS} min-h-[64px] resize-y`}
-            value={description}
-            placeholder={t("node_canvas_derivative_description_placeholder")}
-            aria-label={t("node_canvas_derivative_description_placeholder")}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <button type="submit" className={`self-end ${ACCENT_BTN_SM_CLS}`} disabled={saving || !name.trim() || !description.trim()}>
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
-            {t("node_canvas_derivative_create")}
-          </button>
-        </form>
-      ) : null}
+          onBlur={() => {
+            dirty.current = false;
+            if (draft !== (data.label ?? "")) void setData(id, { label: draft });
+          }}
+        />
+        {data.asset ? (
+          <span className="shrink-0 rounded-full border border-hairline px-2 py-0.5 text-[10.5px] font-medium text-text-3" title={t("node_canvas_group_asset_hint")}>
+            {t(`node_canvas_group_kind_${data.asset}`)}
+          </span>
+        ) : null}
+        <button type="button" className={`nodrag ${GHOST_BTN_CLS}`} onClick={() => void remove(id)}>
+          {t("node_canvas_ungroup")}
+        </button>
+      </div>
     </div>
   );
 }
@@ -604,9 +476,11 @@ const DURATIONS = [4, 5, 6, 8, 10, 12, 15] as const;
 function MediaOutputBody({
   data,
   kind,
+  compact = false,
 }: {
   data: CanvasNodeData;
   kind: "video" | "audio";
+  compact?: boolean;
 }) {
   const { t } = useTranslation("dashboard");
   const { projectName } = useCanvasActions();
@@ -615,7 +489,7 @@ function MediaOutputBody({
     const src = API.getFileUrl(projectName, data.path, data.version ?? null);
     return kind === "video" ? (
       // eslint-disable-next-line jsx-a11y/media-has-caption -- 用户自己生成的预览，没有字幕源
-      <video src={src} controls preload="metadata" className="nodrag max-h-[320px] w-full rounded-[8px] bg-black/30" />
+      <video src={src} controls preload="metadata" className={`nodrag ${compact ? "max-h-[110px]" : "max-h-[320px]"} w-full rounded-[8px] bg-black/30`} />
     ) : (
       // eslint-disable-next-line jsx-a11y/media-has-caption -- 合成语音的试听，文本就在上游文本节点里
       <audio src={src} controls preload="metadata" className="nodrag w-full" />
@@ -646,15 +520,18 @@ function MediaOutputBody({
 function VideoNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { remove } = useCanvasActions();
+  const compact = data.step ? Boolean(data.compact) : undefined;
   return (
     <NodeShell
       selected={selected}
-      width={280}
+      width={compact ? 240 : 280}
       icon={<Video className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={t("node_canvas_video_label")}
-      onRemove={isBusy(data.status) ? undefined : () => void remove(id)}
+      title={data.label ? `${data.label} · ${t("node_canvas_video_label")}` : t("node_canvas_video_label")}
+      onRemove={isBusy(data.status) || data.step ? undefined : () => void remove(id)}
+      compact={compact}
     >
-      <MediaOutputBody data={data} kind="video" />
+      <MediaOutputBody data={data} kind="video" compact={compact} />
+      <NodeStatusLine data={data} />
       <Handle type="target" position={Position.Left} id={PASSIVE_INPUT_HANDLE} isConnectable={false} style={handleStyle("video", false)} />
       <Handle type="source" position={Position.Right} id="video" style={handleStyle("video")} />
     </NodeShell>
@@ -664,17 +541,57 @@ function VideoNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
 function AudioNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { remove } = useCanvasActions();
+  const compact = data.step ? Boolean(data.compact) : undefined;
   return (
     <NodeShell
       selected={selected}
-      width={280}
+      width={compact ? 240 : 280}
       icon={<Mic className="h-3.5 w-3.5" aria-hidden="true" />}
-      title={t("node_canvas_audio_label")}
-      onRemove={isBusy(data.status) ? undefined : () => void remove(id)}
+      title={data.label ? `${data.label} · ${t("node_canvas_audio_label")}` : t("node_canvas_audio_label")}
+      onRemove={isBusy(data.status) || data.step ? undefined : () => void remove(id)}
+      compact={compact}
     >
-      <MediaOutputBody data={data} kind="audio" />
+      <MediaOutputBody data={data} kind="audio" compact={compact} />
+      <NodeStatusLine data={data} />
       <Handle type="target" position={Position.Left} id={PASSIVE_INPUT_HANDLE} isConnectable={false} style={handleStyle("audio", false)} />
       <Handle type="source" position={Position.Right} id="audio" style={handleStyle("audio")} />
+    </NodeShell>
+  );
+}
+
+/** 文档节点：项目里一份文本 / markdown 文件（来源、分集计划…）的只读预览，点开看全文。 */
+function MarkdownNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
+  const { t } = useTranslation("dashboard");
+  const { projectName, openMarkdown, remove } = useCanvasActions();
+  const [preview, setPreview] = useState<string | null>(null);
+  const file = data.file ?? "";
+  useEffect(() => {
+    if (!file) return;
+    const controller = new AbortController();
+    API.getCanvasMarkdown(projectName, file)
+      .then((res) => {
+        if (!controller.signal.aborted) setPreview(res.content);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setPreview("");
+      });
+    return () => controller.abort();
+  }, [file, projectName]);
+  const title = data.title || file;
+  return (
+    <NodeShell
+      selected={selected}
+      width={300}
+      icon={<FileText className="h-3.5 w-3.5" aria-hidden="true" />}
+      title={title}
+      onRemove={data.step ? undefined : () => void remove(id)}
+    >
+      <p className="line-clamp-5 min-h-[56px] whitespace-pre-wrap text-[11.5px] leading-snug text-text-3">
+        {preview === null ? t("node_canvas_loading") : preview.trim() || t("node_canvas_markdown_empty")}
+      </p>
+      <button type="button" className={`nodrag mt-2 w-full justify-center ${GHOST_BTN_CLS}`} onClick={() => openMarkdown(file, title)}>
+        {t("node_canvas_markdown_open")}
+      </button>
     </NodeShell>
   );
 }
@@ -693,14 +610,17 @@ function RunButton({ id, busy }: { id: string; busy: boolean }) {
 function VideoGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { setAspectRatio, setData, remove } = useCanvasActions();
-  const busy = isBusy(data.status);
+  const busyIds = useBusyNodeIds();
+  const busy = isBusy(data.status) || busyIds.has(id);
+  const compact = data.step ? Boolean(data.compact) : undefined;
   return (
     <NodeShell
       selected={selected}
       width={280}
       icon={<Video className="h-3.5 w-3.5" aria-hidden="true" />}
       title={t("node_canvas_video_generate_label")}
-      onRemove={busy ? undefined : () => void remove(id)}
+      onRemove={busy || data.step ? undefined : () => void remove(id)}
+      compact={compact}
     >
       <div className="relative -mx-3 mb-2 h-6">
         <Handle type="target" position={Position.Left} id="prompt" style={handleStyle("text")} />
@@ -712,8 +632,8 @@ function VideoGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         <Handle type="source" position={Position.Right} id="video" style={handleStyle("video")} />
         <HandleLabel side="right">{t("node_canvas_handle_video")}</HandleLabel>
       </div>
-      <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t("node_canvas_frame_hint")}</p>
-      <div className="mb-3 grid grid-cols-2 gap-2 text-[11.5px] text-text-3">
+      {compact ? null : <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t("node_canvas_frame_hint")}</p>}
+      <div className={`mb-3 grid grid-cols-2 gap-2 text-[11.5px] text-text-3 ${compact ? "hidden" : ""}`}>
         <label className="flex flex-col gap-1">
           {t("node_canvas_aspect_ratio")}
           <select className={`nodrag ${INPUT_CLS} !py-1`} value={data.aspect_ratio ?? "9:16"} disabled={busy} onChange={(e) => void setAspectRatio(id, e.target.value)}>
@@ -741,6 +661,7 @@ function VideoGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         </label>
       </div>
       <RunButton id={id} busy={busy} />
+      <NodeStatusLine data={data} />
       {data.status === "failed" && data.error ? <p className="mt-2 line-clamp-3 text-[10.5px] text-red-300">{data.error}</p> : null}
     </NodeShell>
   );
@@ -749,7 +670,9 @@ function VideoGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
 function AudioGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { setData, remove } = useCanvasActions();
-  const busy = isBusy(data.status);
+  const busyIds = useBusyNodeIds();
+  const busy = isBusy(data.status) || busyIds.has(id);
+  const compact = data.step ? Boolean(data.compact) : undefined;
   const [voice, setVoice] = useState(data.voice ?? "");
   return (
     <NodeShell
@@ -757,7 +680,8 @@ function AudioGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
       width={260}
       icon={<Mic className="h-3.5 w-3.5" aria-hidden="true" />}
       title={t("node_canvas_audio_generate_label")}
-      onRemove={busy ? undefined : () => void remove(id)}
+      onRemove={busy || data.step ? undefined : () => void remove(id)}
+      compact={compact}
     >
       <div className="relative -mx-3 mb-3 h-6">
         <Handle type="target" position={Position.Left} id="text" style={handleStyle("text")} />
@@ -765,7 +689,7 @@ function AudioGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         <Handle type="source" position={Position.Right} id="audio" style={handleStyle("audio")} />
         <HandleLabel side="right">{t("node_canvas_handle_audio")}</HandleLabel>
       </div>
-      <label className="mb-3 flex flex-col gap-1 text-[11.5px] text-text-3">
+      <label className={`mb-3 flex flex-col gap-1 text-[11.5px] text-text-3 ${compact ? "hidden" : ""}`}>
         {t("node_canvas_voice")}
         <input
           className={`nodrag ${INPUT_CLS} !py-1`}
@@ -779,23 +703,21 @@ function AudioGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
         />
       </label>
       <RunButton id={id} busy={busy} />
+      <NodeStatusLine data={data} />
       {data.status === "failed" && data.error ? <p className="mt-2 line-clamp-3 text-[10.5px] text-red-300">{data.error}</p> : null}
     </NodeShell>
   );
 }
 
 export const canvasNodeTypes = {
-  character: memo(CharacterGroupView),
   video: memo(VideoNodeView),
   audio: memo(AudioNodeView),
   video_generate: memo(VideoGenerateNodeView),
   audio_generate: memo(AudioGenerateNodeView),
-  episode: memo(EpisodeGroupView),
-  unit: memo(UnitNodeView),
-  keyframe: memo(KeyframeNodeView),
-  h3_prompt: memo(H3PromptNodeView),
-  h3_writer: memo(H3WriterNodeView),
   text: memo(TextNodeView),
   image: memo(ImageNodeView),
   image_generate: memo(ImageGenerateNodeView),
+  asset: memo(AssetNodeView),
+  group: memo(GroupView),
+  markdown: memo(MarkdownNodeView),
 };

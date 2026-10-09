@@ -27,13 +27,14 @@ def _load(path: Path) -> dict[str, Any]:
     graph["revision"] = int(raw.get("revision") or 0)
     graph["nodes"] = [n for n in raw.get("nodes", []) if isinstance(n, dict)]
     graph["edges"] = [e for e in raw.get("edges", []) if isinstance(e, dict)]
-    raw_view = raw.get("view")
-    episodes = raw_view.get("episodes", []) if isinstance(raw_view, dict) else []
-    graph["view"] = {"episodes": [n for n in episodes if isinstance(n, int)]}
     templates = raw.get("templates")
     graph["templates"] = [t for t in templates if isinstance(t, dict)] if isinstance(templates, list) else []
     overrides = raw.get("overrides")
     graph["overrides"] = dict(overrides) if isinstance(overrides, dict) else {}
+    notes = raw.get("notes")
+    graph["notes"] = {k: v for k, v in notes.items() if isinstance(v, str)} if isinstance(notes, dict) else {}
+    meta = raw.get("meta")
+    graph["meta"] = dict(meta) if isinstance(meta, dict) else {}
     normalize_legacy(graph)
     return graph
 
