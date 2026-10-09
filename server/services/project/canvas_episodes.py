@@ -193,7 +193,7 @@ def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any],
         board["data"]["generated"] = True
         board["data"]["status"] = "done" if board["data"]["path"] else "idle"
         _tag(board, episode, "kf_sheet", sheet=sheet["id"])
-        _place(graph, board, group, BOARD_COLUMN_X, y + 40)
+        _place(graph, board, group, BOARD_COLUMN_X, y + 190)
         graph["edges"].append(
             {
                 "id": new_id("edge"),
