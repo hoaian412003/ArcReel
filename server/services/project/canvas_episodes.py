@@ -29,7 +29,7 @@ from lib.canvas.graph import (
     new_id,
 )
 from lib.project.project_manager import ProjectManager, find_episode
-from lib.script import script_review
+from lib.script import screenplay, script_review
 from lib.script.reference_video.h3_prompt import H3PromptUnavailable, load_h3_prompt
 from lib.script.script_editor import patch_field
 from server.services.project.direction_review import read_formal_script
@@ -131,10 +131,34 @@ def episode_group(graph: dict[str, Any], episode: int) -> dict[str, Any] | None:
     )
 
 
+_DOCS = (
+    ("source", "EP source", "source/episode_{ep}.txt"),
+    ("screenplay", "Screenplay", "drafts/episode_{ep}/screenplay.json"),
+    ("plan", "Script plan", "drafts/episode_{ep}/script_plan_reference_units.json"),
+)
+
+
+def ensure_docs(graph: dict[str, Any], group: dict[str, Any], episode: int) -> None:
+    """集分组顶部的文档节点（来源 → 剧本 → 单元拆解）：缺哪个补哪个，已有的不动。"""
+    have = {n["data"].get("step") for n in graph["nodes"] if n.get("parentId") == group["id"]}
+    for index, (step, label, template) in enumerate(_DOCS):
+        if step in have:
+            continue
+        doc = make_node(NODE_MARKDOWN, {"x": 0, "y": 0}, {"file": template.format(ep=episode), "title": label})
+        doc["data"].update(ep=episode, step=step)
+        _place(graph, doc, group, BOARD_COLUMN_X + index * (COLUMN_WIDTH + 30), DOC_TOP)
+    needed = BOARD_COLUMN_X + len(_DOCS) * (COLUMN_WIDTH + 30) + 28
+    if float(group["data"].get("width") or 0) < needed:
+        group["data"]["width"] = float(needed)
+    if float(group["data"].get("height") or 0) < DOC_TOP + 260:
+        group["data"]["height"] = float(DOC_TOP + 260)
+
+
 def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any], episode: int) -> dict[str, Any]:
     """把第 ``episode`` 集的流程摆上画布（已经在画布上就原样返回那个分组）。"""
     existing = episode_group(graph, episode)
     if existing is not None:
+        ensure_docs(graph, existing, episode)
         return existing
     project = pm.load_project(project_name)
     meta = find_episode(project, episode)
@@ -164,12 +188,7 @@ def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any],
     group["data"]["episode"] = episode
     graph["nodes"].insert(0, group)
 
-    source_file = f"source/episode_{episode}.txt"
-    plan_file = f"drafts/episode_{episode}/script_plan_reference_units.json"
-    for index, (file, label) in enumerate(((source_file, "EP source"), (plan_file, "Script plan"))):
-        doc = make_node(NODE_MARKDOWN, {"x": 0, "y": 0}, {"file": file, "title": label})
-        doc["data"].update(ep=episode, step="source" if index == 0 else "plan")
-        _place(graph, doc, group, BOARD_COLUMN_X + index * (COLUMN_WIDTH + 30), DOC_TOP)
+    ensure_docs(graph, group, episode)
 
     aspect = str(project.get("aspect_ratio") or "9:16")
     keyframe_nodes: dict[str, dict[str, Any]] = {}
@@ -404,8 +423,24 @@ def refresh_outputs(pm: ProjectManager, project_name: str, nodes: list[dict[str,
         elif unit is not None and step in ("script", "direction"):
             field = "text" if step == "script" else "direction"
             node = {**node, "data": {**data, "script_value": str(unit.get(field) or "")}}
+        elif step in ("source", "screenplay", "plan") and data.get("file"):
+            extra: dict[str, Any] = {"file_rev": _version(project_path, _exists(project_path, data["file"]))}
+            if step == "screenplay":
+                extra.update(_screenplay_state(project_path, episode))
+            node = {**node, "data": {**data, **extra}}
         result.append(node)
     return result
+
+
+def _screenplay_state(project_path: Path, episode: int) -> dict[str, Any]:
+    try:
+        data = screenplay.load_screenplay(project_path, episode)
+    except screenplay.ScreenplayError:
+        return {"screenplay_status": "corrupt", "screenplay_fingerprint": None}
+    return {
+        "screenplay_status": screenplay.review_status(data),
+        "screenplay_fingerprint": screenplay.screenplay_fingerprint(data) if data else None,
+    }
 
 
 def save_unit_field(pm: ProjectManager, project_name: str, episode: int, unit_id: str, field: str, value: str) -> None:
@@ -448,6 +483,13 @@ def read_markdown(project_path: Path, file: str) -> str:
         data = json.loads(raw)
     except ValueError:
         return raw
+    if path.name == screenplay.SCREENPLAY_FILENAME and isinstance(data, dict):
+        try:
+            return screenplay.render_markdown(
+                screenplay.load_screenplay(project_path, int(path.parent.name.split("_")[-1])) or data
+            )
+        except (screenplay.ScreenplayError, ValueError):
+            return raw
     return _plan_markdown(data) if isinstance(data, dict) else f"```json\n{raw}\n```"
 
 
@@ -519,6 +561,7 @@ def flow_status(pm: ProjectManager, project_name: str, graph: dict[str, Any]) ->
                 "episode": episode,
                 "title": str(meta.get("title") or ""),
                 "source": bool(_exists(project_path, f"source/episode_{episode}.txt")),
+                "screenplay": _screenplay_state(project_path, episode)["screenplay_status"],
                 "plan": bool(_exists(project_path, f"drafts/episode_{episode}/script_plan_reference_units.json")),
                 "group_id": group["id"] if group else None,
                 "units": rows,

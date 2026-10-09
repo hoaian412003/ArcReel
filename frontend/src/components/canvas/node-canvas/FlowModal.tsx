@@ -89,6 +89,7 @@ export function FlowModal({
                 </h3>
                 <span className="text-[11px] text-text-4">
                   {ep.source ? t("node_canvas_flow_has_source") : t("node_canvas_flow_no_source")} ·{" "}
+                  {t(`node_canvas_screenplay_${ep.screenplay}`)} ·{" "}
                   {ep.plan ? t("node_canvas_flow_has_plan") : t("node_canvas_flow_no_plan")}
                 </span>
                 {ep.group_id ? (

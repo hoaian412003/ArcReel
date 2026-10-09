@@ -131,7 +131,7 @@ class UseTemplateRequest(BaseModel):
 
 _STREAM_SCAN_SECONDS = 0.5
 _STREAM_HEARTBEAT_SECONDS = 15.0
-_WATCHED_DIRS = ("characters", "scenes", "props", "products", "scripts")
+_WATCHED_DIRS = ("characters", "scenes", "props", "products", "scripts", "drafts")
 
 
 def _canvas_signature(project_path: Path) -> str:

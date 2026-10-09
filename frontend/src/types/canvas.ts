@@ -49,6 +49,11 @@ export interface CanvasNodeData {
   script_value?: string;
   /** H3 提示词节点：current / stale / missing。 */
   h3_status?: string;
+  /** 文档节点：文件的修改时间戳，变了就重读预览。 */
+  file_rev?: number | null;
+  /** 剧本节点：none / pending_review / approved / corrupt，及待审阅版本的指纹。 */
+  screenplay_status?: "none" | "pending_review" | "approved" | "corrupt";
+  screenplay_fingerprint?: string | null;
   /** markdown 文档节点：项目里的文件与标题。 */
   file?: string;
   title?: string;
@@ -126,6 +131,7 @@ export interface CanvasFlowEpisode {
   episode: number;
   title: string;
   source: boolean;
+  screenplay: "none" | "pending_review" | "approved" | "corrupt";
   plan: boolean;
   group_id: string | null;
   units: CanvasFlowUnit[];

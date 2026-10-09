@@ -342,7 +342,7 @@ async def test_an_episode_is_imported_as_one_group_with_a_lane_of_plain_nodes_pe
         ("E1U01", step)
         for step in ("script", "direction", "keyframe", "h3", "video_gen", "video", "dub_text", "voice_gen", "voice")
     } <= steps
-    assert {n["data"]["step"] for n in members if n["type"] == "markdown"} == {"source", "plan"}
+    assert {n["data"]["step"] for n in members if n["type"] == "markdown"} == {"source", "screenplay", "plan"}
     assert not any(n.get("read_only") for n in view["nodes"])
     script = next(n for n in members if n["data"].get("unit") == "E1U01" and n["data"]["step"] == "script")
     assert script["data"]["text"] == "阿离看向阿宁。"
@@ -403,3 +403,42 @@ async def test_document_nodes_read_only_source_and_draft_files(ctx: Services) ->
     for bad in ("project.json", "../outside.txt", "source/../project.json"):
         with pytest.raises(CanvasGraphError):
             await service.markdown("demo", bad)
+
+
+async def test_the_screenplay_document_follows_the_project_draft_and_its_review(ctx: Services) -> None:
+    from lib.script import screenplay
+
+    service = canvas_tools._service(ctx)
+    project_dir = ctx.projects.get_project_path("demo")
+    group, _ = await service.import_episode("demo", 1)
+
+    def _node(view: dict[str, Any]) -> dict[str, Any]:
+        return next(n for n in view["nodes"] if n["data"].get("step") == "screenplay")
+
+    assert _node(await _canvas(ctx))["data"]["screenplay_status"] == "none"
+    assert await service.markdown("demo", "drafts/episode_1/screenplay.json") == ""
+
+    draft = screenplay.ScreenplayDraft.model_validate(
+        {
+            "title": "第一集",
+            "logline": "阿离当众翻脸",
+            "scenes": [
+                {
+                    "heading": "内景 · 茶楼 · 夜",
+                    "summary": "对质",
+                    "estimated_seconds": 30,
+                    "text": "阿离推开门。",
+                }
+            ],
+        }
+    )
+    written = screenplay.write_screenplay(project_dir, 1, draft)
+    data = _node(await _canvas(ctx))["data"]
+    assert data["screenplay_status"] == "pending_review"
+    assert data["screenplay_fingerprint"] == screenplay.screenplay_fingerprint(written)
+    assert "阿离推开门" in await service.markdown("demo", "drafts/episode_1/screenplay.json")
+
+    again, _ = await service.import_episode("demo", 1)  # 再导入只补缺的文档，不重复
+    assert again["id"] == group["id"]
+    view = await _canvas(ctx)
+    assert sum(1 for n in view["nodes"] if n["data"].get("step") == "screenplay") == 1

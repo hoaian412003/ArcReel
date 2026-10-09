@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { Handle, NodeResizer, Position, useNodeId, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { AlertTriangle, AtSign, Package, Image as ImageIcon, Loader2, Mic, Play, Sparkles, Type, Upload, Video, X, ChevronDown, ChevronUp, FileText, Save } from "lucide-react";
 import { API } from "@/api";
+import { errMsg } from "@/utils/async";
+import { useClaudeStore } from "@/stores/claude-store";
 import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/types/canvas";
 import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
@@ -577,7 +579,36 @@ function MarkdownNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { projectName, openMarkdown, remove } = useCanvasActions();
   const [preview, setPreview] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const file = data.file ?? "";
+  const fileRev = data.file_rev;
+  const episode = data.step === "screenplay" ? data.ep : undefined;
+  const status = data.screenplay_status ?? "none";
+  const writeWithAgent = async () => {
+    if (episode == null) return;
+    setWorking(true);
+    setProblem(null);
+    try {
+      await useClaudeStore.getState().ask(projectName, { action: "create_screenplay", episode });
+    } catch (error) {
+      setProblem(errMsg(error));
+    } finally {
+      setWorking(false);
+    }
+  };
+  const approve = async () => {
+    if (episode == null || !data.screenplay_fingerprint) return;
+    setWorking(true);
+    setProblem(null);
+    try {
+      await API.approveScreenplay(projectName, episode, data.screenplay_fingerprint);
+    } catch (error) {
+      setProblem(errMsg(error));
+    } finally {
+      setWorking(false);
+    }
+  };
   useEffect(() => {
     if (!file) return;
     const controller = new AbortController();
@@ -589,7 +620,7 @@ function MarkdownNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
         if (!controller.signal.aborted) setPreview("");
       });
     return () => controller.abort();
-  }, [file, projectName]);
+  }, [file, fileRev, projectName]);
   const title = data.title || file;
   return (
     <NodeShell
@@ -602,9 +633,26 @@ function MarkdownNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
       <p className="line-clamp-5 min-h-[56px] whitespace-pre-wrap text-[11.5px] leading-snug text-text-3">
         {preview === null ? t("node_canvas_loading") : preview.trim() || t("node_canvas_markdown_empty")}
       </p>
+      {episode != null ? (
+        <p className="mt-2 text-[11px] text-text-3">{t(`node_canvas_screenplay_${status}`)}</p>
+      ) : null}
       <button type="button" className={`nodrag mt-2 w-full justify-center ${GHOST_BTN_CLS}`} onClick={() => openMarkdown(file, title)}>
         {t("node_canvas_markdown_open")}
       </button>
+      {episode != null ? (
+        <div className="mt-1.5 flex gap-1.5">
+          <button type="button" className={`nodrag flex-1 justify-center ${ACCENT_BTN_SM_CLS}`} disabled={working} onClick={() => void writeWithAgent()}>
+            {working ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />}
+            {status === "none" ? t("node_canvas_screenplay_write") : t("node_canvas_screenplay_rewrite")}
+          </button>
+          {status === "pending_review" ? (
+            <button type="button" className={`nodrag flex-1 justify-center ${GHOST_BTN_CLS}`} disabled={working} onClick={() => void approve()}>
+              {t("node_canvas_screenplay_approve")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {problem ? <p className="mt-1.5 text-[11px] text-red-300">{problem}</p> : null}
     </NodeShell>
   );
 }

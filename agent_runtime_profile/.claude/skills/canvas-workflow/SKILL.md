@@ -15,6 +15,8 @@ user-invocable: false
 3. 资产节点是发布键：它的输入图成为项目资产图（`delete_asset` 可删项目资产）；删除分组只从画布移除，项目资产保留。提示词里写 `@[名称]` 会自动带上同名资产的图，无需连线。项目里有、画布上没有的资产用 `canvas_import_assets` 摆上来；一集的制作流程用 `canvas_import_episode`（单元脚本 → 导演 → 关键帧 → H3 → 视频 → 配音）。
 4. 用户在画布上选中了节点（或用 Add to Context 加入上下文的 @节点 id）时，指令里会带上节点 id：围绕它工作，不要动无关的节点。
 
+集分组顶部有三个文档节点：EP source → Screenplay → Script plan。用户在 Screenplay 节点点「让 Agent 写剧本」会给你一个 `create_screenplay` 动作：交给 `write-screenplay` 子智能体写并用 `submit_screenplay` 提交，节点随项目文件自动刷新；审阅通过只由用户在节点上点「通过审阅」，你不替他审。集分组不在画布上时先 `canvas_import_episode`（已在则只补缺的文档节点）。
+
 ## 搭链的规则
 
 - 节点有类型：`text`（提示词 / 备注）、`image_generate`（图片供应商）、`video_generate`（视频供应商：提示词 + 可选起始帧图 → 视频）、`audio_generate`（语音供应商：文本 → 语音），后三类可运行。图片 / 视频 / 语音节点由用户上传或运行产出，你不能新增；归类用 `canvas_group` / `canvas_ungroup`（只动画布，不改项目数据）。
