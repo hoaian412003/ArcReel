@@ -32,3 +32,12 @@ def parse_runninghub_usage(payload: object) -> RunningHubUsage:
         coins=_positive_number(usage.get("consumeCoins")),
         third_party_usd=_positive_number(usage.get("thirdPartyConsumeMoney")),
     )
+
+
+_FAST_POLL_SECONDS = 2.0
+_FAST_POLL_WINDOW_SECONDS = 30.0
+
+
+def poll_delay(elapsed: float, ceiling: float) -> float:
+    """轮询间隔：开头 30 秒每 2 秒问一次（任务刚提交时状态变化最快），之后放慢到 ``ceiling``。"""
+    return min(ceiling, _FAST_POLL_SECONDS) if elapsed < _FAST_POLL_WINDOW_SECONDS else ceiling

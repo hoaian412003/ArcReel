@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import time
 from pathlib import Path
 
 import httpx
@@ -18,7 +19,7 @@ from lib.backends.image_backends.base import (
     download_image_to_path,
 )
 from lib.backends.providers import PROVIDER_RUNNINGHUB
-from lib.backends.runninghub_usage import RunningHubUsage, parse_runninghub_usage
+from lib.backends.runninghub_usage import RunningHubUsage, parse_runninghub_usage, poll_delay
 from lib.infra.poll_sync_hook import fire_provider_sync
 
 DEFAULT_BASE_URL = "https://www.runninghub.ai"
@@ -202,6 +203,7 @@ class RunningHubImageBackend:
         request: ImageGenerationRequest,
     ) -> tuple[str, RunningHubUsage]:
         last_status = "unknown"
+        started = time.monotonic()
         try:
             async with asyncio.timeout(self._poll_timeout):
                 while True:
@@ -227,7 +229,7 @@ class RunningHubImageBackend:
                         raise RuntimeError("RunningHub image task succeeded without an image URL")
                     if status == "FAILED":
                         raise RuntimeError(_api_error(payload, "RunningHub image task failed"))
-                    await asyncio.sleep(self._poll_interval)
+                    await asyncio.sleep(poll_delay(time.monotonic() - started, self._poll_interval))
         except TimeoutError as exc:
             raise RuntimeError(
                 f"RunningHub image task {task_id} did not finish within "

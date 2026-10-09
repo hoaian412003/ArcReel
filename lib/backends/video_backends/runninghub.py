@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import mimetypes
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ import httpx
 from lib.backends.artifact_download_guard import artifact_http_client
 from lib.backends.backend_runtime import ProviderJobIdPersistenceMixin, download_resumable_video, submit_post
 from lib.backends.providers import PROVIDER_RUNNINGHUB
-from lib.backends.runninghub_usage import parse_runninghub_usage
+from lib.backends.runninghub_usage import parse_runninghub_usage, poll_delay
 from lib.backends.video_backend_contract import (
     VideoAudioMode,
     VideoCapabilities,
@@ -208,6 +209,7 @@ class RunningHubVideoBackend(ProviderJobIdPersistenceMixin):
         task_id: str,
         request: VideoGenerationRequest,
     ) -> VideoGenerationResult:
+        started = time.monotonic()
         async with asyncio.timeout(request.poll_timeout_seconds):
             while True:
                 payload = await self._poll(client, task_id, request)
@@ -216,7 +218,7 @@ class RunningHubVideoBackend(ProviderJobIdPersistenceMixin):
                     break
                 if status == "FAILED":
                     raise RuntimeError(_api_error(payload, "RunningHub AI App task failed"))
-                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+                await asyncio.sleep(poll_delay(time.monotonic() - started, _POLL_INTERVAL_SECONDS))
 
         results = payload.get("results")
         if not isinstance(results, list):

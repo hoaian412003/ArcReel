@@ -7,13 +7,28 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
 
 SyncHook = Callable[..., Awaitable[None]]
 
 _hook: SyncHook | None = None
+
+StatusListener = Callable[[str], Awaitable[None]]
+_status_listener: ContextVar[StatusListener | None] = ContextVar("provider_status_listener", default=None)
+
+
+@contextmanager
+def listen_provider_status(listener: StatusListener) -> Generator[None]:
+    """在当前任务上下文里接收供应商每次轮询报告的状态（大写原文，如 ``QUEUED`` / ``RUNNING``）。"""
+    token = _status_listener.set(listener)
+    try:
+        yield
+    finally:
+        _status_listener.reset(token)
 
 
 def set_sync_hook(hook: SyncHook | None) -> None:
@@ -22,6 +37,12 @@ def set_sync_hook(hook: SyncHook | None) -> None:
 
 
 async def fire_provider_sync(*, label: str = "", status: str | None = None) -> None:
+    listener = _status_listener.get()
+    if listener is not None and status:
+        try:
+            await listener(status.upper())
+        except Exception:
+            logger.debug("供应商状态监听失败", exc_info=True)
     hook = _hook
     if hook is None:
         return
