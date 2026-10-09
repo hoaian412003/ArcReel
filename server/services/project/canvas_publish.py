@@ -13,6 +13,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from lib.artifacts.artifact_activation import register_current_resource_artifact
+from lib.artifacts.version_manager import MANUAL_UPLOAD_VERSION_SOURCE, VersionManager
 from lib.canvas.graph import (
     NODE_ASSET,
     NODE_GROUP,
@@ -25,10 +27,13 @@ from lib.canvas.graph import (
 from lib.canvas.graph import _incoming as incoming
 from lib.canvas.store import load_canvas, mutate_canvas
 from lib.infra.image_utils import normalize_uploaded_image
+from lib.infra.json_io import atomic_write_bytes
 from lib.infra.path_safety import PathTraversalError, safe_join
+from lib.project.asset_derivatives import derivative_artifact_id, derivative_sheet_relative_path
 from lib.project.asset_types import ASSET_SPECS, resolve_asset_key
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import ProjectManager
+from lib.project.resource_paths import CHARACTER_DERIVATIVE_RESOURCE_TYPE
 from server.services.currency.upload_finalize import install_manual_asset_sheet_upload
 
 logger = logging.getLogger(__name__)
@@ -116,7 +121,11 @@ def _publish_group(
             stamps.append((group["id"], "published_description", description))
             wrote = True
         for node in children:
-            if node["type"] != NODE_ASSET or node["data"].get("derivative"):
+            if node["type"] != NODE_ASSET:
+                continue
+            if node["data"].get("derivative"):
+                if kind == "character":
+                    wrote |= _publish_derivative(pm, project_name, project_path, graph, node, name, stamps)
                 continue
             wrote |= _publish_sheet(pm, project_name, project_path, graph, node, kind, name, stamps)
     return wrote
@@ -162,6 +171,72 @@ def _publish_sheet(
         )
     stamps.append((node["id"], "published", stamp))
     return source != target
+
+
+def _publish_derivative(
+    pm: ProjectManager,
+    project_name: str,
+    project_path: Path,
+    graph: dict[str, Any],
+    node: dict[str, Any],
+    owner: str,
+    stamps: list[tuple[str, str, str]],
+) -> bool:
+    """角色分组里带 ``derivative`` 的资产节点：它的输入图成为该衍生的资产图（衍生条目须已在项目里）。"""
+    spec = ASSET_SPECS["character"]
+    derivative = str(node["data"]["derivative"])
+    data = resolve_asset_node(graph, node)["data"]
+    source = data.get("path")
+    if not isinstance(source, str) or not source:
+        return False
+    stamp = f"{source}@{data.get('version')}"
+    if node["data"].get("published") == stamp:
+        return False
+    project = pm.load_project(project_name)
+    owner_key = resolve_asset_key(project.get(spec.bucket_key), owner)
+    entry = project[spec.bucket_key].get(owner_key) if owner_key else None
+    table = entry.get("derivatives") if isinstance(entry, dict) else None
+    derivative_key = resolve_asset_key(table, derivative)
+    if owner_key is None or derivative_key is None:
+        return False
+    try:
+        file = safe_join(project_path, source)
+    except PathTraversalError:
+        return False
+    if not file.is_file():
+        return False
+    content, _suffix = normalize_uploaded_image(file.read_bytes(), file.suffix)
+    target_path = derivative_sheet_relative_path(owner_key, derivative_key)
+    if source == target_path:
+        stamps.append((node["id"], "published", stamp))
+        return False
+    target = safe_join(project_path, target_path)
+    artifact_id = derivative_artifact_id(owner_key, derivative_key)
+
+    def _mutate(locked: dict[str, Any]) -> None:
+        locked[spec.bucket_key][owner_key]["derivatives"][derivative_key][spec.sheet_field] = target_path
+
+    def _claim() -> None:
+        register_current_resource_artifact(
+            project_path, resource_type=CHARACTER_DERIVATIVE_RESOURCE_TYPE, resource_id=artifact_id
+        )
+
+    def _install(_project_file: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(target, content)
+        VersionManager(project_path).commit_installed_version(
+            CHARACTER_DERIVATIVE_RESOURCE_TYPE,
+            artifact_id,
+            "",
+            current_file=target,
+            on_commit=_claim,
+            source=MANUAL_UPLOAD_VERSION_SOURCE,
+            original_filename=file.name,
+        )
+
+    pm.update_project(project_name, _mutate, on_commit=_install, formal_paths=(target,))
+    stamps.append((node["id"], "published", stamp))
+    return True
 
 
 def finish_run(pm: ProjectManager, project_name: str, generator_id: str, media_id: str) -> None:

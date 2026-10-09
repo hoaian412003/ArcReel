@@ -252,6 +252,45 @@ async def test_a_new_asset_group_creates_the_project_asset_and_the_picture_on_it
     assert (project_dir / sheet).is_file()
 
 
+async def test_a_derivative_asset_node_publishes_its_picture_as_that_derivatives_sheet(
+    ctx: Services,
+) -> None:
+    from PIL import Image
+
+    service = canvas_tools._service(ctx)
+    group, _ = await service.create_asset_group("demo", "character", "阿离", "少女", {"x": 0, "y": 0})
+    ctx.projects.update_asset_entry(
+        "character",
+        "demo",
+        "阿离",
+        lambda entry: entry.update(derivatives={"战损": {"description": "衣衫破损", "character_sheet": ""}}),
+    )
+    project_dir = ctx.projects.get_project_path("demo")
+    (project_dir / "canvas" / "images").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 8), "blue").save(project_dir / "canvas" / "images" / "d.png")
+
+    def _add(graph: dict[str, Any]) -> None:
+        image = make_node("image", {"x": 0, "y": 0}, {}, server_data={"path": "canvas/images/d.png", "version": 1})
+        asset = make_node("asset", {"x": 10, "y": 10}, {"derivative": "战损"})
+        asset["parentId"] = group["id"]
+        graph["nodes"].extend([image, asset])
+        graph["edges"].append(
+            {
+                "id": "e-d",
+                "source": image["id"],
+                "sourceHandle": "image",
+                "target": asset["id"],
+                "targetHandle": "image",
+            }
+        )
+
+    await service.mutate("demo", _add)
+
+    sheet = ctx.projects.load_project("demo")["characters"]["阿离"]["derivatives"]["战损"]["character_sheet"]
+    assert sheet.startswith("characters/derivatives/阿离/")
+    assert (project_dir / sheet).is_file()
+
+
 async def test_editing_the_project_elsewhere_is_not_overwritten_by_the_canvas(ctx: Services) -> None:
     service = canvas_tools._service(ctx)
     await service.create_asset_group("demo", "scene", "茶楼", "旧楼", {"x": 0, "y": 0})
