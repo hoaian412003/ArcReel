@@ -559,14 +559,22 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   // 框选时分组框要「透明」：它几乎盖满画布，不放行的话从组内起拖会把整个分组拖走而不是画选框。
   const selectionKeyHeld = useKeyPress(SELECTION_KEYS);
   const selecting = selectMode || selectionKeyHeld;
+  // 拖动时 RF 只替换被拖节点的对象：淡化后的副本按原对象缓存，其余节点引用不变、不会跟着重绘。
+  const dimCache = useMemo(() => (lineage ? new WeakMap<CanvasFlowNode, CanvasFlowNode>() : null), [lineage]);
   const shownNodes = useMemo(() => {
-    const base = lineage
-      ? nodes.map((n) => (lineage.nodeIds.has(n.id) ? n : { ...n, style: { ...n.style, opacity: DIMMED_OPACITY } }))
-      : nodes;
+    const dim = (n: CanvasFlowNode): CanvasFlowNode => {
+      let copy = dimCache?.get(n);
+      if (!copy) {
+        copy = { ...n, style: { ...n.style, opacity: DIMMED_OPACITY } };
+        dimCache?.set(n, copy);
+      }
+      return copy;
+    };
+    const base = lineage ? nodes.map((n) => (lineage.nodeIds.has(n.id) ? n : dim(n))) : nodes;
     return selecting
       ? base.map((n) => (GROUP_NODE_TYPES.has(n.type ?? "") ? { ...n, selectable: false, style: { ...n.style, pointerEvents: "none" as const } } : n))
       : base;
-  }, [lineage, nodes, selecting]);
+  }, [lineage, dimCache, nodes, selecting]);
   const shownEdges = useMemo(
     () =>
       lineage

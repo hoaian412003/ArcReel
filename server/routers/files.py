@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -96,6 +97,29 @@ PUBLIC_ROOT_MEDIA_STEM = "style_reference"
 PUBLIC_MEDIA_EXTENSIONS: frozenset[str] = frozenset({*_IMAGE_EXTS, ".mp4", ".wav", ".mp3"})
 # 公开端点的所有文件响应都禁止浏览器按内容嗅探 MIME
 _PUBLIC_FILE_HEADERS: dict[str, str] = {"X-Content-Type-Options": "nosniff"}
+
+_THUMBNAIL_WIDTHS = frozenset({320, 480, 720})
+_THUMBNAIL_SOURCE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+
+def _thumbnail_for(project_name: str, file_path: Path, width: int) -> Path:
+    """画布小图：把大图缩到 ``width`` 宽的 webp，缓存在系统临时目录（源文件变了缓存键随之变）。"""
+    from PIL import Image
+
+    stat = file_path.stat()
+    key = hashlib.sha1(f"{project_name}|{file_path}|{stat.st_mtime_ns}|{stat.st_size}|{width}".encode()).hexdigest()
+    target = Path(tempfile.gettempdir()) / "arcreel_thumbs" / f"{key}.webp"
+    if target.is_file():
+        return target
+    with Image.open(file_path) as image:
+        if image.width <= width:
+            return file_path
+        image.thumbnail((width, width * 4))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.with_suffix(f".{os.getpid()}.tmp")
+        image.convert("RGBA" if "A" in image.getbands() else "RGB").save(staging, "WEBP", quality=82)
+    staging.replace(target)
+    return target
 
 
 def is_public_media_path(relative_parts: tuple[str, ...]) -> bool:
@@ -273,6 +297,18 @@ async def serve_project_file(project_name: str, path: str, request: Request, _t:
         headers = dict(_PUBLIC_FILE_HEADERS)
         if request.query_params.get("v") or path.startswith("versions/"):
             headers["Cache-Control"] = "public, max-age=31536000, immutable"
+
+        width = request.query_params.get("w")
+        if (
+            width
+            and width.isdigit()
+            and int(width) in _THUMBNAIL_WIDTHS
+            and file_path.suffix.lower() in _THUMBNAIL_SOURCE_SUFFIXES
+        ):
+            try:
+                file_path = await asyncio.to_thread(_thumbnail_for, project_name, file_path, int(width))
+            except Exception:
+                logger.warning("缩略图生成失败，退回原图 path=%s", path, exc_info=True)
 
         return FileResponse(file_path, headers=headers)
     except FileNotFoundError as exc:

@@ -481,10 +481,12 @@ def flow_status(pm: ProjectManager, project_name: str, graph: dict[str, Any]) ->
         episode = meta["episode"]
         script = read_formal_script(pm, project_name, project, episode) or {}
         units = [u for u in script.get("video_units") or [] if isinstance(u, dict) and u.get("unit_id")]
-        try:
-            state = KeyframeBoardService(pm).state(project_name, episode)
-        except KeyframePlanError:
-            state = {}
+        state: dict[str, Any] = {}
+        if units:  # 还没有单元脚本的集不会有关键帧板，省掉一次读盘
+            try:
+                state = KeyframeBoardService(pm).state(project_name, episode)
+            except KeyframePlanError:
+                state = {}
         cells = {c["id"]: c for s in state.get("sheets") or [] for c in s.get("cells") or []}
         cell_of = {row["unit_id"]: row["cell_id"] for row in state.get("units") or []}
         group = episode_group(graph, episode)

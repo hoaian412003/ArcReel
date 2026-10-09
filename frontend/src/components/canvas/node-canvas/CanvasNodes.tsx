@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Handle, NodeResizer, Position, useNodeId, type Node, type NodeProps } from "@xyflow/react";
+import { Handle, NodeResizer, Position, useNodeId, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { AlertTriangle, AtSign, Package, Image as ImageIcon, Loader2, Mic, Play, Sparkles, Type, Upload, Video, X, ChevronDown, ChevronUp, FileText, Save } from "lucide-react";
 import { API } from "@/api";
 import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/types/canvas";
@@ -21,6 +21,13 @@ const HANDLE_COLOR: Record<CanvasHandleType, string> = {
   asset: "oklch(0.8 0.14 55)",
 };
 const TEXT_SAVE_DELAY_MS = 600;
+
+/** 缩得很小时视频 / 音频不挂载：几十个媒体元素同时解码是缩放卡顿的主因。订阅布尔值，只在跨过阈值时重绘。 */
+const LOW_ZOOM = 0.45;
+const selectLowZoom = (state: { transform: [number, number, number] }) => state.transform[2] < LOW_ZOOM;
+function useLowZoom(): boolean {
+  return useStore(selectLowZoom);
+}
 
 const HANDLE_STYLES = new Map<string, CSSProperties>();
 
@@ -65,7 +72,7 @@ function NodeShell({
   return (
     <div
       style={{ width }}
-      className={`rounded-[12px] border bg-bg-grad-a/90 shadow-lg backdrop-blur ${
+      className={`rounded-[12px] border bg-bg-grad-a shadow-lg ${
         selected ? "border-accent/70" : "border-hairline"
       }`}
     >
@@ -116,12 +123,14 @@ function HandleLabel({ side, children }: { side: "left" | "right"; children: Rea
 
 /** 画布上的图片：双击放大查看（Esc 或点背景关闭）。 */
 function CanvasImage({ src, alt, className }: { src: string; alt: string; className: string }) {
+  // 节点里只显示小图（服务端缩放并缓存）；双击放大才载入原图。data: 占位图不带参数。
+  const thumb = src.startsWith("data:") ? src : `${src}${src.includes("?") ? "&" : "?"}w=480`;
   const { t } = useTranslation("dashboard");
   const [open, setOpen] = useState(false);
   return (
     <>
       <img
-        src={src}
+        src={thumb}
         alt={alt}
         title={t("node_canvas_image_zoom_hint")}
         className={`${className} cursor-zoom-in`}
@@ -485,14 +494,18 @@ function MediaOutputBody({
   const { t } = useTranslation("dashboard");
   const { projectName } = useCanvasActions();
   const busy = isBusy(data.status);
+  const lowZoom = useLowZoom();
+  if (data.path && lowZoom) {
+    return <div className={`${kind === "video" ? (compact ? "h-[110px]" : "h-[200px]") : "h-[54px]"} w-full rounded-[8px] bg-white/5`} />;
+  }
   if (data.path) {
     const src = API.getFileUrl(projectName, data.path, data.version ?? null);
     return kind === "video" ? (
       // eslint-disable-next-line jsx-a11y/media-has-caption -- 用户自己生成的预览，没有字幕源
-      <video src={src} controls preload="metadata" className={`nodrag ${compact ? "max-h-[110px]" : "max-h-[320px]"} w-full rounded-[8px] bg-black/30`} />
+      <video src={src} controls preload="none" className={`nodrag ${compact ? "max-h-[110px]" : "max-h-[320px]"} w-full rounded-[8px] bg-black/30`} />
     ) : (
       // eslint-disable-next-line jsx-a11y/media-has-caption -- 合成语音的试听，文本就在上游文本节点里
-      <audio src={src} controls preload="metadata" className="nodrag w-full" />
+      <audio src={src} controls preload="none" className="nodrag w-full" />
     );
   }
   if (busy) {
