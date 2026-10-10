@@ -92,6 +92,25 @@ def test_only_a_character_with_a_face_asset_gets_a_face_reference(sheet_project:
     assert [label[:7] for label in built.reference_labels] == [f"Image {n}" for n in range(1, 5)]
 
 
+def test_extra_canvas_references_follow_the_planned_ones_and_skip_duplicates(
+    sheet_project: dict, tmp_path: Path
+) -> None:
+    sheet = _sheet(_cell("K01", ["甲"], "U1"))
+    extra = _figure(tmp_path / "han35.png", (9, 9, 9))
+    planned = next(tmp_path.rglob("甲.png"))
+
+    built = build_sheet_prompt(
+        sheet,
+        project=sheet_project,
+        project_path=tmp_path,
+        extra_references=[(extra, "Hán Thăng, 35 tuổi."), (planned, "duplicate")],
+    )
+
+    assert [path.name for path in built.reference_images][-1] == "han35.png"
+    assert built.reference_images.count(planned) == 1
+    assert f"Image {len(built.reference_images)}: Hán Thăng, 35 tuổi." in built.prompt
+
+
 def test_prompt_is_english_and_points_each_panel_at_its_reference_images(sheet_project: dict, tmp_path: Path) -> None:
     sheet = _sheet(_cell("K01", ["甲", "乙/少年"], "U1"), _cell("K02", ["甲"], "U2"))
 

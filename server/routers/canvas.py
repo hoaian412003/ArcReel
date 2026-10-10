@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal, NoReturn
@@ -16,8 +15,8 @@ from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, ConfigDict, Field
 
-from lib.canvas.graph import NODE_IMAGE, CanvasGraphError, add_node, find_node, make_node
-from lib.canvas.store import CANVAS_UPLOAD_DIR, canvas_path
+from lib.canvas.graph import CanvasGraphError
+from lib.canvas.store import canvas_path
 from lib.generation.generation_queue import get_generation_queue
 from lib.infra.api_errors import (
     BadRequestError,
@@ -26,16 +25,15 @@ from lib.infra.api_errors import (
     ServiceUnavailableError,
     UnprocessableError,
 )
-from lib.infra.path_safety import safe_join
 from lib.project.project_manager import get_project_manager
 from server.auth import CurrentUser
 from server.dependencies import require_project_migration_ok
-from server.services.project.canvas_service import CanvasService
+from server.services.project.canvas_service import UPLOAD_EXTS, UPLOAD_MAX_BYTES, CanvasService
 
 router = APIRouter()
 
-_UPLOAD_EXTS = (".png", ".jpg", ".jpeg", ".webp")
-_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
+_UPLOAD_EXTS = UPLOAD_EXTS
+_UPLOAD_MAX_BYTES = UPLOAD_MAX_BYTES
 
 _GRAPH_ERRORS: dict[
     str, type[ConflictError] | type[NotFoundError] | type[UnprocessableError] | type[ServiceUnavailableError]
@@ -70,7 +68,7 @@ class Position(BaseModel):
 
 class CreateNodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["text", "image", "image_generate", "video_generate", "audio_generate"]
+    type: Literal["text", "image", "image_generate", "video_generate", "audio_generate", "asset"]
     position: Position
     data: dict[str, Any] = Field(default_factory=dict)
 
@@ -190,10 +188,22 @@ async def get_canvas(project_name: str):
 
 @router.post("/projects/{project_name}/canvas/nodes", dependencies=[Depends(require_project_migration_ok)])
 async def create_node(project_name: str, req: CreateNodeRequest):
+    # 手动新建的资产节点不属于任何资产分组：名称自己定，不发布成项目资产。
+    data = {**req.data, "standalone": True} if req.type == "asset" else req.data
     try:
-        node, revision = await _service(project_name).add_node(
-            project_name, req.type, req.position.model_dump(), req.data
-        )
+        node, revision = await _service(project_name).add_node(project_name, req.type, req.position.model_dump(), data)
+    except CanvasGraphError as exc:
+        _raise(exc)
+    return {"node": node, "revision": revision}
+
+
+@router.post(
+    "/projects/{project_name}/canvas/nodes/{node_id}/duplicate", dependencies=[Depends(require_project_migration_ok)]
+)
+async def duplicate_node(project_name: str, node_id: str):
+    """复制资产节点成可到处摆放的独立资产节点（名称、说明、图的来源随带）。"""
+    try:
+        node, revision = await _service(project_name).duplicate_asset(project_name, node_id)
     except CanvasGraphError as exc:
         _raise(exc)
     return {"node": node, "revision": revision}
@@ -367,33 +377,13 @@ async def upload_canvas_image(
     if len(content) > _UPLOAD_MAX_BYTES:
         raise BadRequestError("upload_too_large", max_mb=_UPLOAD_MAX_BYTES // (1024 * 1024))
 
-    service = _service(project_name)
-    project_path: Path = await asyncio.to_thread(service.pm.get_project_path, project_name)
-    rel = f"{CANVAS_UPLOAD_DIR}/{uuid.uuid4().hex}{suffix}"
-    target = safe_join(project_path, rel)
-
-    def _save() -> None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-
-    await asyncio.to_thread(_save)
-
-    def _place(graph: dict[str, Any]) -> dict[str, Any]:
-        if node_id is None:
-            return add_node(
-                graph, make_node(NODE_IMAGE, {"x": x, "y": y}, {"label": file.filename}, server_data={"path": rel})
-            )
-        node = find_node(graph, node_id)
-        if node["type"] != NODE_IMAGE or node["data"].get("generated"):
-            raise CanvasGraphError("canvas_invalid_connection")
-        node["data"].update(path=rel, version=int(node["data"].get("version") or 0) + 1)
-        return node
-
     try:
-        node, graph = await service.mutate(project_name, _place)
+        node, revision = await _service(project_name).place_image(
+            project_name, content, suffix, file.filename, {"x": x, "y": y}, node_id
+        )
     except CanvasGraphError as exc:
         _raise(exc)
-    return {"node": node, "revision": graph["revision"]}
+    return {"node": node, "revision": revision}
 
 
 @router.post(

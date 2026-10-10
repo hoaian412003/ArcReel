@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -107,8 +107,18 @@ def _people_entry(character: Mapping[str, Any]) -> str:
     return f"{character['name']} (face: Image {character['face']}, build and outfit: Image {character['body']})"
 
 
-def build_sheet_prompt(sheet: KeyframeSheet, *, project: Mapping[str, Any], project_path: Path) -> SheetPrompt:
-    """装配一张联合图的提示词与参考图。素材缺失抛 :class:`KeyframeSheetError`。"""
+def build_sheet_prompt(
+    sheet: KeyframeSheet,
+    *,
+    project: Mapping[str, Any],
+    project_path: Path,
+    extra_references: Sequence[tuple[Path, str]] = (),
+) -> SheetPrompt:
+    """装配一张联合图的提示词与参考图。素材缺失抛 :class:`KeyframeSheetError`。
+
+    ``extra_references`` 是用户在画布上额外接到这张联合图的参考图（路径，说明），排在规划引用的图之后；
+    与已有参考图同一文件的跳过。
+    """
     aspect_ratio = str(project.get("aspect_ratio") or "16:9")
     references: list[Path] = [scene_sheet_path(project, project_path, sheet.scene)]
     declarations = [
@@ -147,6 +157,15 @@ def build_sheet_prompt(sheet: KeyframeSheet, *, project: Mapping[str, Any], proj
         appearance = "" if "/" in name else str(_character_entry(project, name)[1].get("description") or "").strip()
         characters.append({"name": name, "face": face_number, "body": body_number, "appearance": appearance})
     by_name = {item["name"]: item for item in characters}
+
+    for path, label in extra_references:
+        if path in references:
+            continue
+        references.append(path)
+        declarations.append(
+            f"Image {len(references)}: {label or 'extra reference'}. "
+            "An extra reference chosen by the user; use it for the identity and look of the character it shows."
+        )
 
     total = GRID_COLUMNS * GRID_ROWS
     prompt = builtin_templates.render(

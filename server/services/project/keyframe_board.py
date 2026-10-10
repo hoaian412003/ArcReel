@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from lib.canvas.keyframe_refs import canvas_sheet_references
 from lib.keyframes.landing import sheet_basis
 from lib.keyframes.models import KeyframeBoard, KeyframeCell, KeyframeSheet
 from lib.keyframes.planning import plan_fingerprint
@@ -70,7 +71,12 @@ class KeyframeBoardService:
         if sheet is None:
             raise KeyframePlanError("sheet_missing", sheet_id)
         try:
-            built = build_sheet_prompt(sheet, project=project, project_path=project_path)
+            built = build_sheet_prompt(
+                sheet,
+                project=project,
+                project_path=project_path,
+                extra_references=canvas_sheet_references(project_path, episode, sheet_id),
+            )
         except KeyframeSheetError as exc:
             return {"sheet_id": sheet_id, "problem": {"code": exc.code, "name": exc.name}}
         root = project_path.resolve()

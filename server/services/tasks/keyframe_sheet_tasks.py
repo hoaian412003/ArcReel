@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from lib.canvas.keyframe_refs import canvas_sheet_references
 from lib.db.base import DEFAULT_USER_ID
 from lib.keyframes.landing import land_sheet, require_requested_ratio, sheet_basis
 from lib.keyframes.models import KeyframeSheet
@@ -49,7 +50,12 @@ def _prepare(project_name: str, episode: int, sheet_id: str) -> _Prepared:
     sheet = next((item for item in board.sheets if item.id == sheet_id), None)
     if sheet is None:
         raise ValueError(f"看板里没有联合图 {sheet_id}（规划可能已被重新提交）")
-    built = build_sheet_prompt(sheet, project=project, project_path=project_path)
+    built = build_sheet_prompt(
+        sheet,
+        project=project,
+        project_path=project_path,
+        extra_references=canvas_sheet_references(project_path, episode, sheet_id),
+    )
     return _Prepared(project, project_path, sheet, built, sheet_basis(built))
 
 

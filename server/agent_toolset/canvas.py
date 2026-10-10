@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,8 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from lib.canvas.graph import CanvasGraphError
 from lib.generation.generation_queue import get_generation_queue
 from lib.i18n import _ as translate
+from lib.infra.path_safety import safe_join
 from server.agent_toolset.declaration import BLOCKED, Exempt, ToolDeclaration
-from server.services.project.canvas_service import CanvasService
+from server.services.project.canvas_service import UPLOAD_EXTS, UPLOAD_MAX_BYTES, CanvasService
 from server.tool_runtime import CallerContext, ProjectScope, Services, ToolOutcome, ToolProblem, ToolRequest
 
 _TEXT_PREVIEW_CHARS = 600
@@ -148,6 +150,31 @@ class CanvasUngroupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     group_id: str = Field(min_length=1, description="分组节点 id；只拆分组，组内节点与项目资产保留")
+
+
+class CanvasCreateAssetGroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["character", "scene", "prop", "product"] = Field(description="资产类型")
+    name: str = Field(min_length=1, max_length=80, description="资产名（分组标题，也是项目里的资产名）")
+    description: str = Field(default="", max_length=20000, description="资产描述；有描述才会在项目里建出对应资产")
+    position: Position = Field(description="分组左上角；先 get_canvas 看现有节点的坐标，避免重叠")
+
+
+class CanvasSetNodeImageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file: str = Field(
+        min_length=1,
+        description="项目内的图片文件相对路径（png / jpg / jpeg / webp，≤ 20MB），如 source/ref.png；不能指向项目外",
+    )
+    position: Position = Field(description="新建图片节点时的位置；填进已有图片节点时忽略")
+    node_id: str | None = Field(
+        default=None, description="填进（或换掉）这个已有的上传图片节点；缺省则新建一个图片节点"
+    )
+    asset_node_id: str | None = Field(
+        default=None, description="给了就顺手把这张图连到该资产节点的 image 输入口：这张图即成为该项目资产的资产图"
+    )
 
 
 def _problem(exc: CanvasGraphError) -> ToolProblem:
@@ -352,6 +379,68 @@ async def canvas_import_assets(
     return ToolOutcome(value={"created_groups": created, "revision": revision})
 
 
+async def canvas_create_asset_group(
+    request: ToolRequest[CanvasCreateAssetGroupRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[dict[str, Any]]:
+    value = request.value
+    service = _service(services)
+    try:
+        group, revision = await service.create_asset_group(
+            scope.project_name, value.kind, value.name.strip(), value.description, value.position.model_dump()
+        )
+        view = await service.view(scope.project_name)
+    except CanvasGraphError as exc:
+        return ToolOutcome(problem=_problem(exc))
+    children = [_digest(n) for n in view["nodes"] if n.get("parentId") == group["id"]]
+    return ToolOutcome(value={"group": _digest(group), "children": children, "revision": revision})
+
+
+async def canvas_set_node_image(
+    request: ToolRequest[CanvasSetNodeImageRequest], scope: ProjectScope, _caller: CallerContext, services: Services
+) -> ToolOutcome[dict[str, Any]]:
+    value = request.value
+    service = _service(services)
+    suffix = "." + value.file.rsplit(".", 1)[-1].lower() if "." in value.file else ""
+    if suffix not in UPLOAD_EXTS:
+        return ToolOutcome(
+            problem=ToolProblem(
+                "canvas_upload_ext_unsupported",
+                translate("canvas_upload_ext_unsupported", allowed=", ".join(UPLOAD_EXTS)),
+            )
+        )
+    project_path = await asyncio.to_thread(service.pm.get_project_path, scope.project_name)
+    try:
+        source = safe_join(project_path, value.file, must_exist=True, require_file=True)
+    except (ValueError, FileNotFoundError, OSError):
+        return ToolOutcome(
+            problem=ToolProblem(
+                "canvas_image_file_not_found", translate("canvas_image_file_not_found", file=value.file)
+            )
+        )
+    content = await asyncio.to_thread(source.read_bytes)
+    if len(content) > UPLOAD_MAX_BYTES:
+        return ToolOutcome(
+            problem=ToolProblem(
+                "upload_too_large", translate("upload_too_large", max_mb=UPLOAD_MAX_BYTES // (1024 * 1024))
+            )
+        )
+    try:
+        node, revision = await service.place_image(
+            scope.project_name, content, suffix, source.name, value.position.model_dump(), value.node_id
+        )
+        edge = None
+        if value.asset_node_id is not None:
+            edge, revision = await service.connect(
+                scope.project_name, node["id"], "image", value.asset_node_id, "image"
+            )
+    except CanvasGraphError as exc:
+        return ToolOutcome(problem=_problem(exc))
+    return ToolOutcome(value={"node": _digest(node), "edge": edge, "revision": revision})
+
+
 async def canvas_group(
     request: ToolRequest[CanvasGroupRequest], scope: ProjectScope, _caller: CallerContext, services: Services
 ) -> ToolOutcome[dict[str, Any]]:
@@ -505,6 +594,30 @@ CANVAS_IMPORT_ASSETS = ToolDeclaration(
     handler=canvas_import_assets,
 )
 
+CANVAS_CREATE_ASSET_GROUP = ToolDeclaration(
+    name="canvas_create_asset_group",
+    description=(
+        "新建一个资产分组（角色 / 场景 / 道具 / 商品）：组内自带描述文本、图片供应商和资产节点，返回各子节点 id。"
+        "描述不空就会在项目里建出对应资产。想用现成的图当资产图：再用 canvas_set_node_image 带上返回的资产节点 id。"
+    ),
+    request_model=CanvasCreateAssetGroupRequest,
+    migration=BLOCKED,
+    domain_key="canvas_node",
+    handler=canvas_create_asset_group,
+)
+
+CANVAS_SET_NODE_IMAGE = ToolDeclaration(
+    name="canvas_set_node_image",
+    description=(
+        "把项目内的一张图片文件放上画布：新建图片节点，或填进已有的上传图片节点。"
+        "给 asset_node_id 则同时连到该资产节点，这张图即成为项目资产的资产图。图片供应商产出的节点不能被替换。"
+    ),
+    request_model=CanvasSetNodeImageRequest,
+    migration=BLOCKED,
+    domain_key="canvas_node",
+    handler=canvas_set_node_image,
+)
+
 CANVAS_GROUP = ToolDeclaration(
     name="canvas_group",
     description="把若干节点放进一个新分组（只是画布上的归类，不改项目数据）。",
@@ -535,6 +648,8 @@ CANVAS_TOOLS = (
     CANVAS_USE_TEMPLATE,
     CANVAS_IMPORT_EPISODE,
     CANVAS_IMPORT_ASSETS,
+    CANVAS_CREATE_ASSET_GROUP,
+    CANVAS_SET_NODE_IMAGE,
     CANVAS_GROUP,
     CANVAS_UNGROUP,
 )

@@ -7,11 +7,14 @@ from lib.canvas.graph import (
     add_node,
     add_run_outputs,
     connect,
+    duplicate_asset_node,
     empty_graph,
     make_node,
     patch_node,
     remove_node,
+    resolve_asset_node,
     resolve_generate_inputs,
+    set_note,
 )
 
 
@@ -686,3 +689,73 @@ def test_loading_pulls_an_earlier_stray_output_into_its_providers_group():
     normalize_legacy(graph)
 
     assert stray["parentId"] == group["id"]
+
+
+def test_duplicated_asset_follows_the_original_asset():
+    graph = empty_graph()
+    group = _add(graph, "group", label="Hán Thăng", asset="character")
+    image = _add(graph, "image", path="canvas/uploads/a.png")
+    asset = _add(graph, "asset", x=10, y=20, note="35 tuổi", derivative="35 tuổi")
+    asset["parentId"] = group["id"]
+    connect(graph, image["id"], "image", asset["id"], "image")
+
+    copy = duplicate_asset_node(graph, asset["id"])
+
+    assert "parentId" not in copy
+    assert copy["data"]["standalone"] is True
+    assert copy["data"]["copy_of"] == asset["id"]
+    live = resolve_asset_node(graph, copy)["data"]
+    assert (live["name"], live["derivative"], live["note"], live["path"]) == (
+        "Hán Thăng",
+        "35 tuổi",
+        "35 tuổi",
+        "canvas/uploads/a.png",
+    )
+
+    # 原资产改名 / 改说明 / 换图，副本随之改变；副本的副本仍然指向最初的原资产。
+    group["data"]["label"] = "Hán Thăng (sửa)"
+    set_note(graph, copy["id"], "bản mới")
+    image["data"]["path"] = "canvas/uploads/b.png"
+    again = duplicate_asset_node(graph, copy["id"])
+    assert again["data"]["copy_of"] == asset["id"]
+    for node in (copy, again):
+        live = resolve_asset_node(graph, node)["data"]
+        assert (live["name"], live["note"], live["path"]) == ("Hán Thăng (sửa)", "bản mới", "canvas/uploads/b.png")
+    assert asset["data"]["note"] == "bản mới"
+
+    # 原资产被删掉：副本留着复制时的名称与说明，不再有图。
+    remove_node(graph, asset["id"])
+    live = resolve_asset_node(graph, copy)["data"]
+    assert (live["name"], live.get("path")) == ("Hán Thăng", None)
+    other = _add(graph, "text")
+    with pytest.raises(CanvasGraphError):
+        duplicate_asset_node(graph, other["id"])
+
+
+def test_run_output_in_a_group_lands_right_of_the_generator_without_covering_neighbours():
+    graph = empty_graph()
+    group = _add(graph, "group", label="g", width=900, height=420)
+    gen = _add(graph, "image_generate", x=340, y=70)
+    asset = _add(graph, "asset", x=700, y=70)
+    gen["parentId"] = asset["parentId"] = group["id"]
+
+    out = add_run_outputs(graph, gen["id"], "p")
+
+    assert out["parentId"] == group["id"]
+    assert out["position"]["x"] == 760
+    assert out["position"]["y"] >= asset["position"]["y"] + 260  # 不压住右边的资产节点
+
+
+def test_pipeline_nodes_only_take_manual_links_on_ports_the_pipeline_reads():
+    graph = empty_graph()
+    image = _add(graph, "image", path="canvas/uploads/a.png")
+    text = _add(graph, "text", text="t")
+    sheet = _add(graph, "image_generate", step="kf_gen", sheet="S1", ep=1)
+    video = _add(graph, "video_generate", step="video_gen", unit="E1U01", ep=1)
+
+    assert connect(graph, image["id"], "image", sheet["id"], "image1")["target"] == sheet["id"]
+    with pytest.raises(CanvasGraphError) as prompt:
+        connect(graph, text["id"], "text", sheet["id"], "prompt")
+    assert prompt.value.code == "canvas_pipeline_port_fixed"
+    with pytest.raises(CanvasGraphError):
+        connect(graph, image["id"], "image", video["id"], "frame")

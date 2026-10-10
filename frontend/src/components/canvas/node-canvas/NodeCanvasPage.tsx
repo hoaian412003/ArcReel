@@ -18,7 +18,7 @@ import {
   type OnBeforeDelete,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { BoxSelect, Group, Library, UserPlus, ImagePlus, LayoutGrid, Loader2, Mic, Save, Sparkles, Trash2, Type, Video, Workflow, Download, ListChecks } from "lucide-react";
+import { Package, BoxSelect, Group, Library, UserPlus, ImagePlus, LayoutGrid, Loader2, Mic, Save, Sparkles, Trash2, Type, Video, Workflow, Download, ListChecks } from "lucide-react";
 import { API } from "@/api";
 import { AssetFormModal } from "@/components/assets/AssetFormModal";
 import { AssetPickerModal } from "@/components/assets/AssetPickerModal";
@@ -64,6 +64,8 @@ const SELECTION_KEYS = ["Meta", "Control", "Shift"];
 const PAN_BUTTONS = [1, 2];
 const GROUP_PADDING = 40;
 /** 组内节点尺寸连续这么久没变，才认为图片等内容加载完、可以排版。 */
+/** 带媒体的节点载入完成后的最低高度（含节点头与说明行）。 */
+const MEDIA_MIN_HEIGHT: Record<string, number> = { image: 360, video: 360 };
 const AUTOLAYOUT_SETTLE_MS = 800;
 const GROUP_HEADER = 52;
 const DEFAULT_EDGE_OPTIONS = { style: { strokeWidth: 1.8, stroke: "rgba(255,255,255,0.62)" } } as const;
@@ -270,7 +272,10 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   const measuredSizes = useCallback((): NodeSizes => {
     const sizes = new Map<string, { width: number; height: number }>();
     for (const n of getNodes()) {
-      if (n.measured?.width && n.measured.height) sizes.set(n.id, { width: n.measured.width, height: n.measured.height });
+      if (!n.measured?.width || !n.measured.height) continue;
+      // 缩得很小或图片 / 视频还没载入时节点量出来比最终矮：按已载入的高度兜底，之后放大 / 载入完不会互相压住。
+      const floor = n.data.path ? (MEDIA_MIN_HEIGHT[n.type ?? ""] ?? 0) : 0;
+      sizes.set(n.id, { width: n.measured.width, height: Math.max(n.measured.height, floor) });
     }
     return sizes;
   }, [getNodes]);
@@ -358,6 +363,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
         }, "node_canvas_run_failed");
       },
       remove: (nodeId) => guarded(() => API.deleteCanvasNode(projectName, nodeId)),
+      duplicate: (nodeId) => guarded(async () => void (await API.duplicateCanvasNode(projectName, nodeId))),
     }),
     [guarded, imageModels, projectName, pushToast, t, tidyOneGroup],
   );
@@ -593,7 +599,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
   }, [screenToFlowPosition]);
 
   const addNode = useCallback(
-    (type: CanvasNodeType, data?: CanvasNodeData) =>
+    (type: CanvasNodeType | "asset", data?: CanvasNodeData) =>
       guarded(() => API.createCanvasNode(projectName, { type, position: viewportCenter(), data })),
     [guarded, projectName, viewportCenter],
   );
@@ -724,6 +730,10 @@ function CanvasSurface({ projectName }: { projectName: string }) {
           <button type="button" className={TOOL_BTN_CLS} onClick={() => fileInput.current?.click()}>
             <ImagePlus className="h-3.5 w-3.5" aria-hidden="true" />
             {t("node_canvas_add_image")}
+          </button>
+          <button type="button" className={TOOL_BTN_CLS} onClick={() => void addNode("asset", { compact: true })}>
+            <Package className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("node_canvas_add_asset")}
           </button>
           </div>
           <div className={CLUSTER_CLS}>

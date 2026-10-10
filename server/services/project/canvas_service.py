@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
+from pathlib import Path
 from typing import Any
 
 from lib.canvas.graph import (
@@ -15,6 +17,7 @@ from lib.canvas.graph import (
     NODE_ASSET,
     NODE_AUDIO_GENERATE,
     NODE_GROUP,
+    NODE_IMAGE,
     NODE_IMAGE_GENERATE,
     NODE_TEXT,
     NODE_VIDEO_GENERATE,
@@ -26,6 +29,7 @@ from lib.canvas.graph import (
     branch_plan,
     connect,
     disconnect,
+    duplicate_asset_node,
     find_node,
     group_nodes,
     instantiate_template,
@@ -42,15 +46,20 @@ from lib.canvas.graph import (
     stale_generated_images,
     utc_now_iso,
 )
-from lib.canvas.store import load_canvas, mutate_canvas
+from lib.canvas.store import CANVAS_UPLOAD_DIR, load_canvas, mutate_canvas
 from lib.generation.generation_queue import GenerationQueue
 from lib.generation.generation_queue_client import TaskSpec
+from lib.infra.path_safety import safe_join
 from lib.project.project_manager import ProjectManager
 from server.services.project import canvas_episodes
 from server.services.project.canvas_assets import import_project_assets, to_primitives
 from server.services.project.canvas_publish import publish_asset_groups
 from server.services.project.canvas_view import build_project_view
 from server.services.tasks.canvas_tasks import CANVAS_AUDIO_TASK_TYPE, CANVAS_IMAGE_TASK_TYPE, CANVAS_VIDEO_TASK_TYPE
+
+#: 画布上传图片允许的扩展名与大小上限（网页上传与 Agent 工具共用）。
+UPLOAD_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 
 #: 供应商节点类型 → (任务类型, 队列媒体类型)。
 _PROVIDER_TASKS: dict[str, tuple[str, str]] = {
@@ -253,6 +262,42 @@ class CanvasService:
         # 画布上的资产分组变了就写到项目资产里（只在内容变了时才真写，失败只记日志）。
         await asyncio.to_thread(publish_asset_groups, self.pm, project_name)
         return result
+
+    async def place_image(
+        self,
+        project_name: str,
+        content: bytes,
+        suffix: str,
+        label: str | None,
+        position: dict[str, float],
+        node_id: str | None = None,
+    ) -> tuple[dict[str, Any], int]:
+        """图片落盘到画布上传目录：默认成为新的图片节点；带 ``node_id`` 时填进（或换掉）这个已有的图片节点。"""
+        project_path: Path = await asyncio.to_thread(self.pm.get_project_path, project_name)
+        rel = f"{CANVAS_UPLOAD_DIR}/{uuid.uuid4().hex}{suffix}"
+        target = safe_join(project_path, rel)
+
+        def _save() -> None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+
+        await asyncio.to_thread(_save)
+
+        def _place(graph: dict[str, Any]) -> dict[str, Any]:
+            if node_id is None:
+                return add_node(graph, make_node(NODE_IMAGE, position, {"label": label}, server_data={"path": rel}))
+            node = find_node(graph, node_id)
+            if node["type"] != NODE_IMAGE or node["data"].get("generated"):
+                raise CanvasGraphError("canvas_invalid_connection")
+            node["data"].update(path=rel, version=int(node["data"].get("version") or 0) + 1)
+            return node
+
+        node, graph = await self.mutate(project_name, _place)
+        return node, graph["revision"]
+
+    async def duplicate_asset(self, project_name: str, node_id: str) -> tuple[dict[str, Any], int]:
+        node, graph = await self.mutate(project_name, lambda g: duplicate_asset_node(g, node_id))
+        return node, graph["revision"]
 
     async def add_node(
         self, project_name: str, node_type: str, position: dict[str, float], data: dict[str, Any] | None

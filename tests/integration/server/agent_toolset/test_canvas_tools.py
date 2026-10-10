@@ -527,3 +527,52 @@ async def test_keyframe_boards_planned_later_appear_on_the_canvas_by_themselves(
     assert {n["data"]["step"] for n in boards} == {"kf_gen", "kf_sheet"}
     again = await _canvas(ctx)  # 只补一次
     assert len([n for n in again["nodes"] if n["data"].get("step") == "kf_gen"]) == 1
+
+
+async def test_agent_creates_an_asset_from_an_existing_project_image(ctx: Services) -> None:
+    project_path = ctx.projects.get_project_path("demo")
+    (project_path / "ref.png").write_bytes(b"\x89PNG-bytes")
+
+    created = await _call(
+        canvas_tools.canvas_create_asset_group,
+        canvas_tools.CanvasCreateAssetGroupRequest(
+            kind="scene", name="客厅", description="一间客厅", position=canvas_tools.Position(x=0, y=0)
+        ),
+        ctx,
+    )
+    assert created.problem is None
+    assert created.value is not None
+    port = next(n for n in created.value["children"] if n["type"] == "asset")
+
+    placed = await _call(
+        canvas_tools.canvas_set_node_image,
+        canvas_tools.CanvasSetNodeImageRequest(
+            file="ref.png", position=canvas_tools.Position(x=0, y=500), asset_node_id=port["id"]
+        ),
+        ctx,
+    )
+    assert placed.problem is None
+    assert placed.value is not None
+    assert placed.value["node"]["type"] == "image"
+    assert placed.value["edge"]["target"] == port["id"]
+    assert placed.value["edge"]["targetHandle"] == "image"
+
+
+async def test_set_node_image_rejects_missing_files_and_unsupported_types(ctx: Services) -> None:
+    pos = canvas_tools.Position(x=0, y=0)
+    missing = await _call(
+        canvas_tools.canvas_set_node_image, canvas_tools.CanvasSetNodeImageRequest(file="nope.png", position=pos), ctx
+    )
+    assert missing.problem is not None
+    assert missing.problem.code == "canvas_image_file_not_found"
+    outside = await _call(
+        canvas_tools.canvas_set_node_image,
+        canvas_tools.CanvasSetNodeImageRequest(file="../../etc/x.png", position=pos),
+        ctx,
+    )
+    assert outside.problem is not None
+    gif = await _call(
+        canvas_tools.canvas_set_node_image, canvas_tools.CanvasSetNodeImageRequest(file="a.gif", position=pos), ctx
+    )
+    assert gif.problem is not None
+    assert gif.problem.code == "canvas_upload_ext_unsupported"

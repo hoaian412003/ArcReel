@@ -12,7 +12,7 @@ user-invocable: false
 
 1. 先调用 `get_canvas`，读清现有节点、连线与已存的模板；不要凭空新建重复的节点。
 2. 画布上一切都是原语节点（text / image / image_generate / video_generate / audio_generate / video / audio / asset / markdown）加分组（group）；没有"角色""场景"这类特殊节点。角色、场景、道具、商品各是一个分组：文本 → 图片供应商 → 图片 → 资产节点（asset）。
-3. 资产节点是发布键：它的输入图成为项目资产图（`delete_asset` 可删项目资产）；删除分组只从画布移除，项目资产保留。提示词里写 `@[名称]` 会自动带上同名资产的图，无需连线。项目里有、画布上没有的资产用 `canvas_import_assets` 摆上来；一集的制作流程用 `canvas_import_episode`（单元脚本 → 导演 → 关键帧 → H3 → 视频 → 配音）。
+3. 资产节点是发布键：它的输入图成为项目资产图（`delete_asset` 可删项目资产）；删除分组只从画布移除，项目资产保留。提示词里写 `@[名称]` 会自动带上同名资产的图，无需连线。项目里有、画布上没有的资产用 `canvas_import_assets` 摆上来；用一张现成图新建资产：`canvas_create_asset_group`（返回各子节点 id，描述要写）→ `canvas_set_node_image`（`file` 写项目内图片路径，`asset_node_id` 填返回的资产节点 id）；一集的制作流程用 `canvas_import_episode`（单元脚本 → 导演 → 关键帧 → H3 → 视频 → 配音）。
 4. 用户在画布上选中了节点（或用 Add to Context 加入上下文的 @节点 id）时，指令里会带上节点 id：围绕它工作，不要动无关的节点。
 
 集分组顶部有三个文档节点，用 `out → in` 连成一条线：EP source → Screenplay → Script plan（文档口只在文档节点之间连）。
@@ -32,7 +32,7 @@ user-invocable: false
 
 ## 搭链的规则
 
-- 节点有类型：`text`（提示词 / 备注）、`image_generate`（图片供应商）、`video_generate`（视频供应商：提示词 + 可选起始帧图 → 视频）、`audio_generate`（语音供应商：文本 → 语音），后三类可运行。图片 / 视频 / 语音节点由用户上传或运行产出，你不能新增；归类用 `canvas_group` / `canvas_ungroup`（只动画布，不改项目数据）。
+- 节点有类型：`text`（提示词 / 备注）、`image_generate`（图片供应商）、`video_generate`（视频供应商：提示词 + 可选起始帧图 → 视频）、`audio_generate`（语音供应商：文本 → 语音），后三类可运行。视频 / 语音 / 图片节点由运行产出，不能 `canvas_add_node` 新增；项目里已有的图片文件用 `canvas_set_node_image` 放上画布；归类用 `canvas_group` / `canvas_ungroup`（只动画布，不改项目数据）。
 - 句柄只在同数据类型之间连：text→`prompt`（text）、图片→图片供应商的 `image1`（image）、图片→视频供应商的 `frame`（起始帧）、text→语音供应商的 `text`。连错会被拒绝，按返回的问题改正。
 - 把 `image_generate` 的输出句柄 `image` 直接连到另一个 `image_generate` 的 `image1`（或 `video_generate` 的 `frame`），下游运行时会取上游**最近一次**产出的图，重跑上游后无需重连。
 - 视频和语音都比图片贵且慢：运行前确认 `duration_seconds` 是所用视频模型支持的时长；视频进行中服务被重启会让该节点失败，需要重新运行。

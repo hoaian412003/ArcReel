@@ -32,6 +32,8 @@ export interface CanvasActions {
   /** 把节点加入 Agent 对话的上下文（输入框里也可以用 `@节点id` 引用）。 */
   addToContext: (nodeId: string) => void;
   remove: (nodeId: string) => Promise<void>;
+  /** 复制资产节点：副本是独立资产节点，可摆到任何地方再连到图片参考口。 */
+  duplicate: (nodeId: string) => Promise<void>;
 }
 
 export const CanvasActionsContext = createContext<CanvasActions | null>(null);

@@ -286,6 +286,39 @@ def patch_node(
     return node
 
 
+#: 复制节点时偏移的距离（画布坐标）。
+DUPLICATE_OFFSET = 40.0
+
+
+def duplicate_asset_node(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """复制一个资产节点成独立（不在分组里）的资产节点，并与原资产保持同步（``copy_of``）。
+
+    副本不属于任何资产分组、不发布成项目资产；名称、衍生名、说明、类型与图都跟随原资产
+    （见 :func:`resolve_asset_node`），所以不复制图的来源连线。复制副本的副本，仍然指向最初的原资产。
+    """
+    source = find_node(graph, node_id)
+    if source["type"] != NODE_ASSET:
+        raise CanvasGraphError("canvas_node_not_runnable", id=node_id)
+    original_id = str(source["data"].get("copy_of") or "")
+    if any(n["id"] == original_id and n["type"] == NODE_ASSET for n in graph["nodes"]):
+        origin = find_node(graph, original_id)
+    else:
+        origin = source
+    resolved = resolve_asset_node(graph, origin)["data"]
+    parent = next((n for n in graph["nodes"] if n["id"] == source.get("parentId")), None)
+    base = source["position"]
+    x = float(base["x"]) + (float(parent["position"]["x"]) if parent else 0.0) + DUPLICATE_OFFSET
+    y = float(base["y"]) + (float(parent["position"]["y"]) if parent else 0.0) + DUPLICATE_OFFSET
+    # name / derivative / note / asset 只是原资产被删之后的兜底快照。
+    data: dict[str, Any] = {"standalone": True, "copy_of": origin["id"], "name": resolved.get("name") or ""}
+    for key in ("derivative", "note", "asset"):
+        if resolved.get(key):
+            data[key] = resolved[key]
+    if source["data"].get("compact"):
+        data["compact"] = True
+    return add_node(graph, make_node(NODE_ASSET, {"x": x, "y": y}, data))
+
+
 def group_nodes(
     graph: dict[str, Any],
     node_ids: list[str],
@@ -394,9 +427,20 @@ def _compatible(out_type: str, in_type: str) -> bool:
     return out_type == in_type or (out_type == HANDLE_ASSET and in_type == HANDLE_IMAGE)
 
 
+#: 流水线步骤节点（``data.step``）上用户可以手动接线的输入口；其余输入取自项目，手动连线不会生效。
+PIPELINE_USER_INPUTS: dict[str, frozenset[str]] = {
+    "kf_gen": frozenset({"image1"}),
+    "video_gen": frozenset(),
+    "voice_gen": frozenset(),
+}
+
+
 def connect(graph: dict[str, Any], source: str, source_handle: str, target: str, target_handle: str) -> dict[str, Any]:
     src = _lookup(graph, source, None)
     dst = _lookup(graph, target, None)
+    allowed = PIPELINE_USER_INPUTS.get(str(dst["data"].get("step") or ""))
+    if allowed is not None and target_handle not in allowed:
+        raise CanvasGraphError("canvas_pipeline_port_fixed")
     out_type = _handle_type(OUTPUT_HANDLES, src, source_handle)
     in_type = _handle_type(INPUT_HANDLES, dst, target_handle)
     if out_type is None or in_type is None or not _compatible(out_type, in_type) or source == target:
@@ -444,8 +488,26 @@ def _sheet_of_generator(node_id: str) -> str:
     return node_id.replace(f"p:{kind}:", f"p:{kind[: -len('_gen')]}_sheet:", 1)
 
 
-def resolve_asset_node(graph: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
-    """资产节点的有效内容：图取自接在它 ``image`` 口上的节点（供应商节点取最近一次产物），名称与类型取自所在的资产分组。"""
+def resolve_asset_node(
+    graph: dict[str, Any], node: dict[str, Any], _seen: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    """资产节点的有效内容：图取自接在它 ``image`` 口上的节点（供应商节点取最近一次产物），名称与类型取自所在的资产分组。
+
+    复制出来的资产节点（``copy_of``）跟随它的原资产：名称、衍生名、说明、类型与图都取自原资产的有效内容，
+    原资产改了，副本随之改变。原资产已被删掉时，副本保留复制时记下的名称与说明。
+    """
+    original = next(
+        (n for n in graph["nodes"] if n["id"] == node["data"].get("copy_of") and n["type"] == NODE_ASSET), None
+    )
+    if original is not None and node["id"] not in _seen and original["id"] not in _seen:
+        base = resolve_asset_node(graph, original, _seen | {node["id"]})["data"]
+        data = dict(node["data"])
+        for key in ("name", "derivative", "note", "asset", "path", "version"):
+            if key in base:
+                data[key] = base[key]
+            else:
+                data.pop(key, None)
+        return {**node, "data": data}
     data = dict(node["data"])
     group = next((n for n in graph["nodes"] if n["id"] == node.get("parentId") and n["type"] == NODE_GROUP), None)
     if group is not None and group["data"].get("asset"):
@@ -633,6 +695,10 @@ def apply_notes(derived_nodes: list[dict[str, Any]], notes: Mapping[str, str]) -
 def set_note(graph: dict[str, Any], node_id: str, note: str) -> None:
     """设置节点的参考说明；派生节点（资产图）存在画布的 ``notes``，落盘节点存在 data 里。空串恢复默认 / 清除。"""
     text = note.strip()
+    if derived_kind(node_id) is None:
+        original = find_node(graph, node_id)["data"].get("copy_of")
+        if original and any(n["id"] == original for n in graph["nodes"]):
+            node_id = str(original)  # 副本的说明就是原资产的说明
     if derived_kind(node_id) is not None:
         if text:
             graph["notes"][node_id] = text
@@ -685,6 +751,35 @@ OUTPUT_GROUP_WIDTH = 340.0
 OUTPUT_GROUP_HEIGHT = 480.0
 
 
+#: 估算各节点类型在画布上占的宽 / 高，仅用来给新产物找不压住邻居的落点（真实大小由网页量）。
+_NODE_BOX: dict[str, tuple[float, float]] = {
+    NODE_TEXT: (260.0, 200.0),
+    NODE_IMAGE: (300.0, 340.0),
+    NODE_IMAGE_GENERATE: (280.0, 300.0),
+    NODE_ASSET: (260.0, 260.0),
+    NODE_VIDEO: (280.0, 340.0),
+    NODE_AUDIO: (280.0, 140.0),
+    NODE_VIDEO_GENERATE: (280.0, 340.0),
+    NODE_AUDIO_GENERATE: (280.0, 260.0),
+}
+_PLACE_STEP = 40.0
+
+
+def _free_spot(graph: dict[str, Any], group_id: str, x: float, y: float) -> tuple[float, float]:
+    """分组里从 ``(x, y)`` 起往下找第一个放得下一个产物节点、又不压住组内其他节点的位置。"""
+    boxes = [
+        (n["position"]["x"], n["position"]["y"], *_NODE_BOX.get(n["type"], (280.0, 240.0)))
+        for n in graph["nodes"]
+        if n.get("parentId") == group_id
+    ]
+    width, height = OUTPUT_GROUP_WIDTH, OUTPUT_GROUP_HEIGHT - 140.0
+    for _ in range(200):
+        if not any(bx < x + width and x < bx + bw and by < y + height and y < by + bh for bx, by, bw, bh in boxes):
+            break
+        y += _PLACE_STEP
+    return x, y
+
+
 def add_run_outputs(graph: dict[str, Any], node_id: str, prompt: str) -> dict[str, Any]:
     """为一次运行挂出一个待填充的媒体占位节点（图片 / 视频 / 语音）并连上供应商节点。
 
@@ -696,9 +791,11 @@ def add_run_outputs(graph: dict[str, Any], node_id: str, prompt: str) -> dict[st
     siblings = sum(1 for e in graph["edges"] if e["source"] == node_id and e["sourceHandle"] == handle)
     x = source["position"]["x"] + OUTPUT_OFFSET_X
     y = source["position"]["y"] + siblings * OUTPUT_STACK_GAP
-    media_node = make_node(media_type, {"x": x, "y": y})
     parent_id = source.get("parentId")
     group = next((n for n in graph["nodes"] if n["id"] == parent_id and n["type"] == NODE_GROUP), None)
+    if group is not None:
+        x, y = _free_spot(graph, group["id"], x, y)
+    media_node = make_node(media_type, {"x": x, "y": y})
     if group is not None:
         # 供应商在分组里：产物与它同组（位置本来就是相对分组的），分组放不下就撑大一点。
         media_node["parentId"] = group["id"]

@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Handle, NodeResizer, Position, useNodeId, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, AtSign, Package, Image as ImageIcon, Loader2, Mic, Play, Sparkles, Type, Upload, Video, X, ChevronDown, ChevronUp, FileText, Save } from "lucide-react";
+import { AlertTriangle, AtSign, Package, Image as ImageIcon, Loader2, Mic, Play, Sparkles, Type, Upload, Video, X, ChevronDown, ChevronUp, FileText, Save, Copy } from "lucide-react";
 import { API } from "@/api";
 import { errMsg } from "@/utils/async";
 import { useClaudeStore } from "@/stores/claude-store";
@@ -9,6 +9,8 @@ import type { CanvasAnyNodeType, CanvasHandleType, CanvasNodeData } from "@/type
 import { ACCENT_BTN_SM_CLS, GHOST_BTN_CLS, ICON_BTN_CLS, INPUT_CLS } from "@/components/ui/darkroom-tokens";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
 import { ImageLightbox } from "@/components/ui/ImageLightbox";
+import { KeyframeSheetRequestDialog } from "@/components/canvas/reference/KeyframeSheetRequestDialog";
+import type { KeyframeSheetRequest } from "@/types/keyframe";
 import { useBusyNodeIds, useCanvasActions } from "./canvas-context";
 import { ASPECT_RATIOS, PASSIVE_INPUT_HANDLE, isBusy } from "./canvas-rules";
 import { MarkdownText } from "./MarkdownText";
@@ -58,6 +60,7 @@ function NodeShell({
   icon,
   title,
   onRemove,
+  onDuplicate,
   compact,
   children,
 }: {
@@ -66,6 +69,7 @@ function NodeShell({
   icon: ReactNode;
   title: string;
   onRemove?: () => void;
+  onDuplicate?: () => void;
   /** 流水线节点：`true` 显示成紧凑卡片，`false` 展开，`undefined` 表示这个节点没有紧凑形态。 */
   compact?: boolean;
   children: ReactNode;
@@ -103,6 +107,17 @@ function NodeShell({
             aria-label={t("node_canvas_add_context")}
           >
             <AtSign className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
+        {onDuplicate && (
+          <button
+            type="button"
+            className={`nodrag ${ICON_BTN_CLS}`}
+            onClick={onDuplicate}
+            title={t("node_canvas_duplicate")}
+            aria-label={t("node_canvas_duplicate")}
+          >
+            <Copy className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         )}
         {onRemove && (
@@ -345,12 +360,73 @@ function ImageNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
  * 图片供应商节点（仿 RunningHub 工作流节点）：输入 image1（参考图）与 prompt，输出一张图。
  * 提示词里的 `@资产名` 运行时换成「图N」并自动带上该资产的图与说明。
  */
+/** 起始帧联合图节点上的参考图缩略条：与「生成前核对」弹窗同一份数据，点开看提示词；接线变了就重新读。 */
+export function KeyframeRefsStrip({ episode, sheetId, nodeId }: { episode: number; sheetId: string; nodeId: string }) {
+  const { t } = useTranslation("dashboard");
+  const { projectName } = useCanvasActions();
+  const lowZoom = useLowZoom();
+  const wired = useStore((state) =>
+    state.edges
+      .filter((e) => e.target === nodeId && e.targetHandle === "image1")
+      .map((e) => e.source)
+      .sort()
+      .join(","),
+  );
+  const [loaded, setLoaded] = useState<{ key: string; request: KeyframeSheetRequest | null; failed: boolean } | null>(null);
+  const [open, setOpen] = useState(false);
+  const key = `${projectName}:${episode}:${sheetId}:${wired}`;
+  useEffect(() => {
+    if (lowZoom) return;
+    const controller = new AbortController();
+    API.getKeyframeSheetRequest(projectName, episode, sheetId, { signal: controller.signal })
+      .then((request) => {
+        if (!controller.signal.aborted) setLoaded({ key, request, failed: false });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setLoaded({ key, request: null, failed: true });
+      });
+    return () => controller.abort();
+  }, [projectName, episode, sheetId, key, lowZoom]);
+  const current = loaded?.key === key ? loaded : null;
+  const request = current?.request ?? null;
+  const references = request && request.problem === null ? request.references : [];
+  return (
+    <div className="nodrag mb-2">
+      <button type="button" className={`w-full justify-start ${GHOST_BTN_CLS}`} onClick={() => setOpen(true)}>
+        {request?.problem != null
+          ? t("node_canvas_keyframe_refs_blocked", { name: request.problem.name })
+          : current?.failed
+            ? t("node_canvas_keyframe_refs_failed")
+            : t("node_canvas_keyframe_refs", { count: references.length })}
+      </button>
+      {references.length > 0 ? (
+        <ol className="mt-1.5 flex flex-wrap gap-1">
+          {references.map((reference, index) => (
+            <li
+              key={`${index}-${reference.path}`}
+              title={reference.label}
+              className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-[5px] bg-black/40"
+            >
+              {reference.path ? (
+                <img src={API.getFileUrl(projectName, reference.path)} alt={reference.label} className="h-full w-full object-cover" loading="lazy" />
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {open ? <KeyframeSheetRequestDialog projectName={projectName} episode={episode} sheetId={sheetId} onClose={() => setOpen(false)} /> : null}
+    </div>
+  );
+}
+
 function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
   const { setAspectRatio, setModel, imageModels, run, remove } = useCanvasActions();
   const busyIds = useBusyNodeIds();
   const busy = isBusy(data.status) || busyIds.has(id);
   const compact = data.step ? Boolean(data.compact) : undefined;
+  // 起始帧联合图：提示词与角色 / 场景参考由项目规划决定，只有 image1 能额外加参考图。
+  const pipeline = data.step === "kf_gen";
   return (
     <NodeShell
       selected={selected}
@@ -362,15 +438,18 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
     >
       <div className="relative -mx-3 mb-2 h-6">
         <Handle type="target" position={Position.Left} id="image1" style={handleStyle("image")} />
-        <HandleLabel side="left">{t("node_canvas_handle_image1")}</HandleLabel>
+        <HandleLabel side="left">{t(pipeline ? "node_canvas_handle_extra_refs" : "node_canvas_handle_image1")}</HandleLabel>
         <Handle type="source" position={Position.Right} id="image" style={handleStyle("image")} />
         <HandleLabel side="right">{t("node_canvas_handle_image")}</HandleLabel>
       </div>
-      <div className="relative -mx-3 mb-3 h-6">
-        <Handle type="target" position={Position.Left} id="prompt" style={handleStyle("text")} />
-        <HandleLabel side="left">{t("node_canvas_handle_prompt")}</HandleLabel>
-      </div>
-      {compact ? null : <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t("node_canvas_mention_hint")}</p>}
+      {pipeline ? null : (
+        <div className="relative -mx-3 mb-3 h-6">
+          <Handle type="target" position={Position.Left} id="prompt" style={handleStyle("text")} />
+          <HandleLabel side="left">{t("node_canvas_handle_prompt")}</HandleLabel>
+        </div>
+      )}
+      {pipeline && typeof data.ep === "number" && data.sheet ? <KeyframeRefsStrip episode={data.ep} sheetId={data.sheet} nodeId={id} /> : null}
+      {compact ? null : <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t(pipeline ? "node_canvas_pipeline_keyframe_hint" : "node_canvas_mention_hint")}</p>}
       <div className={`nodrag mb-2 ${compact ? "hidden" : ""}`}>
         <ProviderModelSelect
           value={data.model ?? ""}
@@ -416,32 +495,64 @@ function ImageGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
  */
 function AssetNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const { projectName, remove } = useCanvasActions();
+  const { projectName, remove, duplicate, setData } = useCanvasActions();
   const name = data.derivative ? `${data.name ?? ""}/${data.derivative}` : (data.name ?? "");
+  const compact = Boolean(data.compact);
+  const [draft, setDraft] = useState(data.name ?? "");
+  const dirty = useRef(false);
+  useEffect(() => {
+    if (!dirty.current) setDraft(data.name ?? "");
+  }, [data.name]);
+  const image = data.path ? (
+    <CanvasImage
+      src={API.getFileUrl(projectName, data.path, data.version ?? null)}
+      alt={name}
+      className={`nodrag ${compact ? "h-10 w-10" : "max-h-[120px] w-full"} object-contain`}
+    />
+  ) : null;
   return (
     <NodeShell
       selected={selected}
-      width={260}
+      width={compact ? 200 : 260}
       icon={<Package className="h-3.5 w-3.5" aria-hidden="true" />}
       title={name ? t("node_canvas_asset_label", { name }) : t("node_canvas_asset_plain")}
       onRemove={() => void remove(id)}
+      onDuplicate={() => void duplicate(id)}
+      compact={compact}
     >
-      <div className="relative -mx-3 mb-2 h-6">
-        <Handle type="target" position={Position.Left} id="image" style={handleStyle("image")} />
-        <HandleLabel side="left">{t("node_canvas_handle_image")}</HandleLabel>
-      </div>
-      <div className="flex min-h-[80px] items-center justify-center overflow-hidden rounded-[8px] border border-dashed border-hairline bg-black/30">
-        {data.path ? (
-          <CanvasImage
-            src={API.getFileUrl(projectName, data.path, data.version ?? null)}
-            alt={name}
-            className="nodrag max-h-[120px] w-full object-contain"
-          />
-        ) : (
-          <span className="text-[12px] text-text-4">{t("node_canvas_asset_empty")}</span>
-        )}
-      </div>
-      <NoteField id={id} note={data.note} />
+      {data.standalone && !data.copy_of ? (
+        <input
+          className={`nodrag mb-2 w-full ${INPUT_CLS}`}
+          value={draft}
+          placeholder={t("node_canvas_asset_name_placeholder")}
+          aria-label={t("node_canvas_asset_name_placeholder")}
+          onChange={(e) => {
+            dirty.current = true;
+            setDraft(e.target.value);
+          }}
+          onBlur={() => {
+            dirty.current = false;
+            if (draft !== (data.name ?? "")) void setData(id, { name: draft });
+          }}
+        />
+      ) : null}
+      {compact ? (
+        <div className="relative -mx-3 flex min-h-[40px] items-center gap-2 px-3">
+          <Handle type="target" position={Position.Left} id="image" style={handleStyle("image")} />
+          {image ?? <span className="text-[12px] text-text-4">{t("node_canvas_asset_empty")}</span>}
+        </div>
+      ) : (
+        <>
+          <div className="relative -mx-3 mb-2 h-6">
+            <Handle type="target" position={Position.Left} id="image" style={handleStyle("image")} />
+            <HandleLabel side="left">{t("node_canvas_handle_image")}</HandleLabel>
+          </div>
+          <div className="flex min-h-[80px] items-center justify-center overflow-hidden rounded-[8px] border border-dashed border-hairline bg-black/30">
+            {image ?? <span className="text-[12px] text-text-4">{t("node_canvas_asset_empty")}</span>}
+          </div>
+          <NoteField id={id} note={data.note} />
+        </>
+      )}
       <Handle type="source" position={Position.Right} id="asset" style={handleStyle("asset")} />
     </NodeShell>
   );
@@ -703,6 +814,8 @@ function VideoGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
   const busyIds = useBusyNodeIds();
   const busy = isBusy(data.status) || busyIds.has(id);
   const compact = data.step ? Boolean(data.compact) : undefined;
+  // 单元视频：提示词与起始帧取自项目脚本与起始帧看板，画布上的连线只用来展示，不能改。
+  const fed = Boolean(data.step);
   return (
     <NodeShell
       selected={selected}
@@ -713,16 +826,16 @@ function VideoGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
       compact={compact}
     >
       <div className="relative -mx-3 mb-2 h-6">
-        <Handle type="target" position={Position.Left} id="prompt" style={handleStyle("text")} />
+        <Handle type="target" position={Position.Left} id="prompt" isConnectable={!fed} style={handleStyle("text", !fed)} />
         <HandleLabel side="left">{t("node_canvas_handle_prompt")}</HandleLabel>
       </div>
       <div className="relative -mx-3 mb-3 h-6">
-        <Handle type="target" position={Position.Left} id="frame" style={handleStyle("image")} />
+        <Handle type="target" position={Position.Left} id="frame" isConnectable={!fed} style={handleStyle("image", !fed)} />
         <HandleLabel side="left">{t("node_canvas_handle_frame")}</HandleLabel>
         <Handle type="source" position={Position.Right} id="video" style={handleStyle("video")} />
         <HandleLabel side="right">{t("node_canvas_handle_video")}</HandleLabel>
       </div>
-      {compact ? null : <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t("node_canvas_frame_hint")}</p>}
+      {compact ? null : <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t(fed ? "node_canvas_pipeline_fed_hint" : "node_canvas_frame_hint")}</p>}
       <div className={`mb-3 grid grid-cols-2 gap-2 text-[11.5px] text-text-3 ${compact ? "hidden" : ""}`}>
         <label className="flex flex-col gap-1">
           {t("node_canvas_aspect_ratio")}
@@ -764,6 +877,8 @@ function AudioGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
   const busy = isBusy(data.status) || busyIds.has(id);
   const compact = data.step ? Boolean(data.compact) : undefined;
   const [voice, setVoice] = useState(data.voice ?? "");
+  // 配音：台词取自项目脚本，画布上的连线只用来展示，不能改。
+  const fed = Boolean(data.step);
   return (
     <NodeShell
       selected={selected}
@@ -774,11 +889,12 @@ function AudioGenerateNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>
       compact={compact}
     >
       <div className="relative -mx-3 mb-3 h-6">
-        <Handle type="target" position={Position.Left} id="text" style={handleStyle("text")} />
+        <Handle type="target" position={Position.Left} id="text" isConnectable={!fed} style={handleStyle("text", !fed)} />
         <HandleLabel side="left">{t("node_canvas_handle_script_text")}</HandleLabel>
         <Handle type="source" position={Position.Right} id="audio" style={handleStyle("audio")} />
         <HandleLabel side="right">{t("node_canvas_handle_audio")}</HandleLabel>
       </div>
+      {compact || !fed ? null : <p className="mb-2 text-[10.5px] leading-snug text-text-4">{t("node_canvas_pipeline_fed_hint")}</p>}
       <label className={`mb-3 flex flex-col gap-1 text-[11.5px] text-text-3 ${compact ? "hidden" : ""}`}>
         {t("node_canvas_voice")}
         <input

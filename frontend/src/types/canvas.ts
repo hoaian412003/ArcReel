@@ -71,6 +71,10 @@ export interface CanvasNodeData {
   asset?: "character" | "scene" | "prop" | "product";
   /** asset 节点：衍生名（如「幼年」）；有衍生名的资产节点不发布成项目的资产图。 */
   derivative?: string;
+  /** asset 节点：手动新建或复制出来的独立资产节点（不在资产分组里、不发布成项目资产），名称自己定。 */
+  standalone?: boolean;
+  /** asset 节点：复制自哪个资产节点；名称、说明、图都跟随原资产。 */
+  copy_of?: string;
   [key: string]: unknown;
 }
 

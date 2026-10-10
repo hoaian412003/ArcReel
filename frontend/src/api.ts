@@ -1553,9 +1553,14 @@ class API {
 
   static async createCanvasNode(
     projectName: string,
-    body: { type: CanvasNodeType; position: { x: number; y: number }; data?: CanvasNodeData },
+    body: { type: CanvasNodeType | "asset"; position: { x: number; y: number }; data?: CanvasNodeData },
   ): Promise<{ node: CanvasNode; revision: number }> {
     return this.request(`${this.canvasBase(projectName)}/nodes`, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** 复制资产节点成可到处摆放的独立资产节点（名称、说明、图的来源随带）。 */
+  static async duplicateCanvasNode(projectName: string, nodeId: string): Promise<{ node: CanvasNode; revision: number }> {
+    return this.request(`${this.canvasBase(projectName)}/nodes/${encodeURIComponent(nodeId)}/duplicate`, { method: "POST" });
   }
 
   /** 图片节点（含项目资产图）的参考说明：作为参考图被引用时随图交给供应商；空串恢复默认 / 清除。 */
