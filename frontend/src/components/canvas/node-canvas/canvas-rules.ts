@@ -5,6 +5,7 @@ const INPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHand
   image_generate: { prompt: "text", image1: "image" },
   video_generate: { prompt: "text", frame: "image" },
   audio_generate: { text: "text" },
+  markdown: { in: "doc" },
 };
 const OUTPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHandleType>>> = {
   text: { text: "text" },
@@ -15,6 +16,7 @@ const OUTPUT_HANDLES: Partial<Record<CanvasAnyNodeType, Record<string, CanvasHan
   video_generate: { video: "video" },
   audio_generate: { audio: "audio" },
   asset: { asset: "asset" },
+  markdown: { out: "doc" },
 };
 
 /** 自动挂出 / 推导出的节点上，只承接来源连线的被动输入句柄。 */
@@ -101,13 +103,24 @@ export function referencedNodeIds(text: string, contextIds: readonly string[], n
 
 const CONTEXT_DATA_LIMIT = 1500;
 
+/** 引用的是分组时，附上组里有什么：文档节点逐个列出（含剧本审阅状态），单元节点只数个数，免得把整集塞进上下文。 */
+function groupMembers(groupId: string, nodes: readonly CanvasNode[]): string {
+  const members = nodes.filter((n) => n.parentId === groupId);
+  const docs = members.filter((n) => n.type === "markdown");
+  const units = new Set(members.map((n) => n.data.unit).filter(Boolean));
+  const lines = docs.map((n) => `  - ${n.id} (markdown, step=${n.data.step ?? ""}, file=${n.data.file ?? ""}${n.data.screenplay_status ? `, screenplay_status=${n.data.screenplay_status}` : ""})`);
+  lines.push(`  - ${members.length} member nodes, ${units.size} units on the canvas`);
+  return `  members:\n${lines.join("\n")}`;
+}
+
 /** 发给 Agent 的说明：先列出被引用节点的 id 与当前内容，再附用户原话；Agent 据此用 canvas_* 工具直接改画布。 */
 export function buildAgentNote(text: string, ids: readonly string[], nodes: readonly CanvasNode[]): string {
   if (ids.length === 0) return text;
   const lines = ids.map((id) => {
     const node = nodes.find((n) => n.id === id);
     const data = JSON.stringify(node?.data ?? {});
-    return `- ${id} (${node?.type ?? "unknown"}): ${data.length > CONTEXT_DATA_LIMIT ? `${data.slice(0, CONTEXT_DATA_LIMIT)}…` : data}`;
+    const head = `- ${id} (${node?.type ?? "unknown"}): ${data.length > CONTEXT_DATA_LIMIT ? `${data.slice(0, CONTEXT_DATA_LIMIT)}…` : data}`;
+    return node?.type === "group" ? `${head}\n${groupMembers(id, nodes)}` : head;
   });
   return `Referenced canvas nodes (the user's @mentions; apply the request to these nodes):\n${lines.join("\n")}\n\n${text}`;
 }

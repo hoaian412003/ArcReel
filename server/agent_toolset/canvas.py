@@ -387,6 +387,7 @@ _HANDLES_NOTE = (
     "角色 / 场景 / 道具 / 商品都是普通分组（group）：组内是文本 → 图片供应商 → 图片 → 资产节点（asset，输出 image）。"
     "资产节点 = 发布键：它的输入图成为项目资产图；删除分组只从画布移除，项目资产保留。"
     "提示词里写 @[名称] 即自动带上同名资产的图，无需连线。"
+    "文档（markdown）节点只在彼此之间连：输出口 out → 输入口 in，表示「从这份文档得来」（EP source → Screenplay → Script plan）。"
 )
 
 GET_CANVAS = ToolDeclaration(
@@ -487,7 +488,7 @@ CANVAS_IMPORT_EPISODE = ToolDeclaration(
     description=(
         "把一集的制作流程摆上画布：分组「EPxx · 标题」，内含来源与规划 markdown 节点，"
         "每个单元一行（单元脚本 → 导演 → 关键帧 → H3 提示词 → 生成视频 → 视频 → 配音文本 → 生成音色 → 配音）。"
-        "已在画布上则返回现有分组。"
+        "已在画布上则只补缺的：文档节点及其连线、还没上画布的单元行与关键帧板，已有节点不动；每完成一步就调一次让画布跟上。"
     ),
     request_model=CanvasImportEpisodeRequest,
     migration=BLOCKED,

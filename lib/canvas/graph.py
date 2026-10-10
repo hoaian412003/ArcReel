@@ -115,6 +115,8 @@ HANDLE_VIDEO = "video"
 HANDLE_AUDIO = "audio"
 #: 资产输出口：携带一张图和它的参考说明，可接到任何接受参考图的输入口。
 HANDLE_ASSET = "asset"
+#: 文档口：只在文档（markdown）节点之间连，表示「从这份文档得来」（来源 → 剧本 → 单元拆解）。
+HANDLE_DOC = "doc"
 
 #: ``(节点类型, 句柄 id) → 数据类型``，输入句柄在左、输出句柄在右。
 INPUT_HANDLES: dict[str, dict[str, str]] = {
@@ -123,6 +125,7 @@ INPUT_HANDLES: dict[str, dict[str, str]] = {
     NODE_AUDIO_GENERATE: {"text": HANDLE_TEXT},
     # 资产节点接一张图：这张图就是它的内容；放在资产分组里时，它也是这个项目资产的资产图（见 canvas_publish）。
     NODE_ASSET: {"image": HANDLE_IMAGE},
+    NODE_MARKDOWN: {"in": HANDLE_DOC},
 }
 OUTPUT_HANDLES: dict[str, dict[str, str]] = {
     NODE_TEXT: {"text": HANDLE_TEXT},
@@ -133,6 +136,7 @@ OUTPUT_HANDLES: dict[str, dict[str, str]] = {
     NODE_VIDEO_GENERATE: {"video": HANDLE_VIDEO},
     NODE_AUDIO_GENERATE: {"audio": HANDLE_AUDIO},
     NODE_ASSET: {"asset": HANDLE_ASSET},
+    NODE_MARKDOWN: {"out": HANDLE_DOC},
 }
 
 #: 只由服务端写入的 data 字段。

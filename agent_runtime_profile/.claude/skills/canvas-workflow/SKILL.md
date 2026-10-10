@@ -1,6 +1,6 @@
 ---
 name: canvas-workflow
-description: 在项目的节点画布上搭建、连线并运行创作链路（提示词 → 图片 → 视频 / 语音）。当用户说"在画布上"、"帮我搭一条链"、"用画布生成"，或通过画布输入框向你下达指令时使用。
+description: 在项目的节点画布上搭建、连线并运行创作链路（提示词 → 图片 → 视频 / 语音）。当用户说"在画布上"、"@EP source"、"帮我搭一条链"、"用画布生成"，或通过画布输入框向你下达指令时使用。
 user-invocable: false
 ---
 
@@ -15,7 +15,19 @@ user-invocable: false
 3. 资产节点是发布键：它的输入图成为项目资产图（`delete_asset` 可删项目资产）；删除分组只从画布移除，项目资产保留。提示词里写 `@[名称]` 会自动带上同名资产的图，无需连线。项目里有、画布上没有的资产用 `canvas_import_assets` 摆上来；一集的制作流程用 `canvas_import_episode`（单元脚本 → 导演 → 关键帧 → H3 → 视频 → 配音）。
 4. 用户在画布上选中了节点（或用 Add to Context 加入上下文的 @节点 id）时，指令里会带上节点 id：围绕它工作，不要动无关的节点。
 
-集分组顶部有三个文档节点：EP source → Screenplay → Script plan。用户在 Screenplay 节点点「让 Agent 写剧本」会给你一个 `create_screenplay` 动作：交给 `write-screenplay` 子智能体写并用 `submit_screenplay` 提交，节点随项目文件自动刷新；审阅通过只由用户在节点上点「通过审阅」，你不替他审。集分组不在画布上时先 `canvas_import_episode`（已在则只补缺的文档节点）。
+集分组顶部有三个文档节点，用 `out → in` 连成一条线：EP source → Screenplay → Script plan（文档口只在文档节点之间连）。
+
+**用户 @ 了 EP source 节点**（引用的节点 `data.step` 是 `source`，`data.ep` 是集号 N），并要求写剧本或只是引用它让你往下做：
+1. 用 `write-screenplay` 子智能体为第 N 集写剧本（它读源文、用 `submit_screenplay` 提交）。本集已有剧本且没被明确要求重写时，先回报，不覆盖。
+2. 提交成功后调用 `canvas_import_episode`（集号 N）：集分组或 Screenplay 节点还没有就补上，并把 EP source → Screenplay → Script plan 连好；已有的不动。
+3. 回复剧本摘要，并告诉用户去 Screenplay 节点审阅：审阅通过只由用户点「通过审阅」，你不替他审。
+
+**用户 @ 了集分组**（引用的节点是 `group` 且 `data.episode` 是集号 N）并让你往下做：这是「继续第 N 集」，按 video-workflow 的流程走：
+1. `get_workflow_plan`（目标集 N）读 `next_action`，按它 dispatch 对应子智能体（剧本规划 `split-reference-video-units`、导演 `direct-episode`、提示词 `create-episode-script`、关键帧 `plan-keyframes` 等），每步返回后刷新计划继续。
+2. 遇到要用户决定的动作（剧本审阅、规划确认、导演审阅等）就停下，告诉用户去哪个节点 / 页面决定；会计费的生成（图 / 视频 / 配音）先说明再等用户同意，不擅自提交。
+3. 每完成一步（或停下前）调用 `canvas_import_episode`（集号 N）：把新出现的文档节点、单元行（脚本 → 导演 → 关键帧 → H3 → 视频 → 配音）与关键帧板补到集分组里，已有节点与用户调过的位置不动；节点内容随项目文件自动刷新。
+
+用户也可以直接点 Screenplay 节点上的「让 Agent 写剧本」，等同于第一个流程。
 
 ## 搭链的规则
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -43,8 +44,8 @@ STEPS = ("script", "direction", "keyframe", "h3", "video_gen", "video", "dub_tex
 COLUMN_WIDTH = 330
 BOARD_COLUMN_X = 28
 LANE_X = BOARD_COLUMN_X + COLUMN_WIDTH + 30
-ROW_HEIGHT = 200
-LANE_TOP = 330
+ROW_HEIGHT = 380  # 文本节点会随内容往下长（紧凑态最高约 280）
+LANE_TOP = 520
 DOC_TOP = 64
 _H3_ORDER = ("subject_definitions", "summary", "detailed_description", "overall_soundscape", "non_diegetic_music")
 _EDITABLE_FIELDS = ("text", "direction")
@@ -147,19 +148,30 @@ def ensure_docs(graph: dict[str, Any], group: dict[str, Any], episode: int) -> N
         doc = make_node(NODE_MARKDOWN, {"x": 0, "y": 0}, {"file": template.format(ep=episode), "title": label})
         doc["data"].update(ep=episode, step=step)
         _place(graph, doc, group, BOARD_COLUMN_X + index * (COLUMN_WIDTH + 30), DOC_TOP)
+    docs = {
+        n["data"]["step"]: n
+        for n in graph["nodes"]
+        if n.get("parentId") == group["id"] and n["data"].get("step") in {step for step, _, _ in _DOCS}
+    }
+    for (upstream, _, _), (downstream, _, _) in pairwise(_DOCS):
+        if (
+            upstream in docs
+            and downstream in docs
+            and not any(
+                e["source"] == docs[upstream]["id"] and e["target"] == docs[downstream]["id"] for e in graph["edges"]
+            )
+        ):
+            _edge(graph, docs[upstream], "out", docs[downstream], "in")
     needed = BOARD_COLUMN_X + len(_DOCS) * (COLUMN_WIDTH + 30) + 28
     if float(group["data"].get("width") or 0) < needed:
         group["data"]["width"] = float(needed)
-    if float(group["data"].get("height") or 0) < DOC_TOP + 260:
-        group["data"]["height"] = float(DOC_TOP + 260)
+    if float(group["data"].get("height") or 0) < DOC_TOP + 420:
+        group["data"]["height"] = float(DOC_TOP + 420)
 
 
 def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any], episode: int) -> dict[str, Any]:
-    """把第 ``episode`` 集的流程摆上画布（已经在画布上就原样返回那个分组）。"""
+    """把第 ``episode`` 集的流程摆上画布。已经在画布上时只补缺的：文档节点、还没上画布的单元行与关键帧板，已有节点（含用户调过的位置）不动。"""
     existing = episode_group(graph, episode)
-    if existing is not None:
-        ensure_docs(graph, existing, episode)
-        return existing
     project = pm.load_project(project_name)
     meta = find_episode(project, episode)
     if meta is None:
@@ -176,23 +188,33 @@ def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any],
     cells = {c["id"]: c for sheet in sheets for c in sheet.get("cells") or []}
     row_of = {str(u["unit_id"]): index for index, u in enumerate(units)}
 
-    existing_x = [n["position"]["x"] + n["data"].get("width", 0) for n in graph["nodes"] if n["type"] == NODE_GROUP]
     width = LANE_X + len(STEPS) * COLUMN_WIDTH
     height = LANE_TOP + max(len(units), 1) * ROW_HEIGHT + 40
-    title = str(meta.get("title") or "")
-    group = make_node(
-        NODE_GROUP,
-        {"x": max(existing_x, default=0.0) + 200.0, "y": 0.0},
-        {"label": f"EP{episode:02d} · {title}".strip(" ·"), "width": float(width), "height": float(height)},
-    )
-    group["data"]["episode"] = episode
-    graph["nodes"].insert(0, group)
+    if existing is not None:
+        group = existing
+        group["data"]["width"] = max(float(group["data"].get("width") or 0), float(width))
+        group["data"]["height"] = max(float(group["data"].get("height") or 0), float(height))
+    else:
+        existing_x = [n["position"]["x"] + n["data"].get("width", 0) for n in graph["nodes"] if n["type"] == NODE_GROUP]
+        title = str(meta.get("title") or "")
+        group = make_node(
+            NODE_GROUP,
+            {"x": max(existing_x, default=0.0) + 200.0, "y": 0.0},
+            {"label": f"EP{episode:02d} · {title}".strip(" ·"), "width": float(width), "height": float(height)},
+        )
+        group["data"]["episode"] = episode
+        graph["nodes"].insert(0, group)
 
     ensure_docs(graph, group, episode)
+    members = [n for n in graph["nodes"] if n.get("parentId") == group["id"]]
+    have_units = {n["data"].get("unit") for n in members if n["data"].get("unit")}
+    have_sheets = {n["data"].get("sheet") for n in members if n["data"].get("step") == "kf_gen"}
 
     aspect = str(project.get("aspect_ratio") or "9:16")
     keyframe_nodes: dict[str, dict[str, Any]] = {}
     for sheet in sheets:
+        if sheet["id"] in have_sheets:
+            continue
         first_row = min(
             (row_of[u] for c in sheet.get("cells") or [] for u in c.get("unit_ids") or [] if u in row_of), default=0
         )
@@ -226,6 +248,8 @@ def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any],
 
     for index, unit in enumerate(units):
         unit_id = str(unit["unit_id"])
+        if unit_id in have_units:
+            continue
         y = LANE_TOP + index * ROW_HEIGHT
         x = {step: LANE_X + i * COLUMN_WIDTH for i, step in enumerate(STEPS)}
         script_node = _place(

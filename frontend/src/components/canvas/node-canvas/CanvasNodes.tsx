@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Handle, NodeResizer, Position, useNodeId, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { AlertTriangle, AtSign, Package, Image as ImageIcon, Loader2, Mic, Play, Sparkles, Type, Upload, Video, X, ChevronDown, ChevronUp, FileText, Save } from "lucide-react";
@@ -21,6 +21,7 @@ const HANDLE_COLOR: Record<CanvasHandleType, string> = {
   video: "oklch(0.72 0.15 25)",
   audio: "oklch(0.78 0.12 320)",
   asset: "oklch(0.8 0.14 55)",
+  doc: "oklch(0.78 0.04 250)",
 };
 const TEXT_SAVE_DELAY_MS = 600;
 
@@ -191,6 +192,15 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const unsaved = scriptField !== null && data.script_value !== undefined && draft !== data.script_value;
   const dirty = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const areaRef = useRef<HTMLTextAreaElement | null>(null);
+  const maxHeight = compact ? 280 : 520;
+  // 文字多就往下长（到上限再滚动），不用手动拖大。
+  useLayoutEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight + 2, maxHeight)}px`;
+  }, [draft, maxHeight]);
 
   useEffect(() => {
     // 服务端回写的文本只在本地没有未保存改动时才覆盖草稿。
@@ -221,8 +231,8 @@ function TextNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
         <p className="mb-1.5 text-[10.5px] text-amber-300">{t(`node_canvas_h3_status_${data.h3_status}`)}</p>
       ) : null}
       <textarea
-        className={`nodrag nowheel ${INPUT_CLS} ${compact ? "min-h-[52px] max-h-[64px]" : "min-h-[96px]"} resize-y`}
-        rows={compact ? 2 : undefined}
+        ref={areaRef}
+        className={`nodrag nowheel ${INPUT_CLS} ${compact ? "min-h-[80px]" : "min-h-[96px]"} resize-y`}
         value={draft}
         placeholder={t("node_canvas_text_placeholder")}
         onChange={(e) => {
@@ -439,7 +449,7 @@ function AssetNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
 /** 分组：标题可改、可缩放；删掉分组框只是拆组，里面的节点保留。资产分组的标题就是资产名。 */
 function GroupView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const { setData, resizeGroup, remove } = useCanvasActions();
+  const { setData, resizeGroup, remove, addToContext } = useCanvasActions();
   const [draft, setDraft] = useState(data.label ?? "");
   const dirty = useRef(false);
   useEffect(() => {
@@ -473,6 +483,15 @@ function GroupView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
             {t(`node_canvas_group_kind_${data.asset}`)}
           </span>
         ) : null}
+        <button
+          type="button"
+          className={`nodrag ${ICON_BTN_CLS}`}
+          onClick={() => addToContext(id)}
+          title={t("node_canvas_add_context")}
+          aria-label={t("node_canvas_add_context")}
+        >
+          <AtSign className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
         <button type="button" className={`nodrag ${GHOST_BTN_CLS}`} onClick={() => void remove(id)}>
           {t("node_canvas_ungroup")}
         </button>
@@ -630,7 +649,7 @@ function MarkdownNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
       title={title}
       onRemove={data.step ? undefined : () => void remove(id)}
     >
-      <p className="line-clamp-5 min-h-[56px] whitespace-pre-wrap text-[11.5px] leading-snug text-text-3">
+      <p className="line-clamp-[14] min-h-[180px] whitespace-pre-wrap text-[11.5px] leading-snug text-text-3">
         {preview === null ? t("node_canvas_loading") : preview.trim() || t("node_canvas_markdown_empty")}
       </p>
       {episode != null ? (
@@ -653,6 +672,8 @@ function MarkdownNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
         </div>
       ) : null}
       {problem ? <p className="mt-1.5 text-[11px] text-red-300">{problem}</p> : null}
+      <Handle type="target" position={Position.Left} id="in" style={handleStyle("doc")} />
+      <Handle type="source" position={Position.Right} id="out" style={handleStyle("doc")} />
     </NodeShell>
   );
 }

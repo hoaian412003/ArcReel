@@ -442,3 +442,35 @@ async def test_the_screenplay_document_follows_the_project_draft_and_its_review(
     assert again["id"] == group["id"]
     view = await _canvas(ctx)
     assert sum(1 for n in view["nodes"] if n["data"].get("step") == "screenplay") == 1
+    # 来源 → 剧本 → 单元拆解 连成一条线（每对只连一次）。
+    ids = {n["data"]["step"]: n["id"] for n in view["nodes"] if n["type"] == "markdown"}
+    doc_edges = {(e["source"], e["target"]) for e in view["edges"] if e["source"] in ids.values()}
+    assert doc_edges == {(ids["source"], ids["screenplay"]), (ids["screenplay"], ids["plan"])}
+
+
+async def test_importing_again_adds_only_the_units_that_are_not_on_the_canvas_yet(ctx: Services) -> None:
+    service = canvas_tools._service(ctx)
+    group, _ = await service.import_episode("demo", 1)
+    before = {n["id"]: n["position"] for n in (await _canvas(ctx))["nodes"]}
+
+    ctx.projects.save_script(
+        "demo",
+        {
+            "episode": 1,
+            "title": "第一集",
+            "content_mode": "drama",
+            "video_units": [*_UNITS, {"unit_id": "E1U03", "text": "新增的一段。", "duration_seconds": 8}],
+        },
+        "episode_1.json",
+    )
+    again, _ = await service.import_episode("demo", 1)
+
+    view = await _canvas(ctx)
+    assert again["id"] == group["id"]
+    units = {n["data"]["unit"] for n in view["nodes"] if n["data"].get("unit")}
+    assert units == {"E1U01", "E1U02", "E1U03"}
+    assert all(
+        before[node_id] == next(n for n in view["nodes"] if n["id"] == node_id)["position"] for node_id in before
+    )
+    third = [n for n in view["nodes"] if n["data"].get("unit") == "E1U03" and n["data"]["step"] == "script"]
+    assert len(third) == 1

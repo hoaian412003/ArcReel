@@ -6,7 +6,7 @@ export type CanvasDerivedType = "asset";
 /** 运行产出的媒体节点。 */
 export type CanvasMediaNodeType = "video" | "audio";
 export type CanvasAnyNodeType = CanvasNodeType | CanvasDerivedType | CanvasMediaNodeType;
-export type CanvasHandleType = "text" | "image" | "video" | "audio" | "asset";
+export type CanvasHandleType = "text" | "image" | "video" | "audio" | "asset" | "doc";
 export type CanvasNodeStatus = "idle" | "queued" | "running" | "done" | "failed";
 
 export interface CanvasNodeData {

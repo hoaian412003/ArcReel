@@ -154,3 +154,21 @@ describe("asset port connections", () => {
     expect(isValidCanvasConnection(nodes, { ...from, target: "gen", targetHandle: "prompt" })).toBe(false);
   });
 });
+
+
+describe("buildAgentNote for a group", () => {
+  it("lists the group's documents and counts its units", () => {
+    const nodes = [
+      { id: "group_1", type: "group", position: { x: 0, y: 0 }, data: { episode: 1, label: "EP01" } },
+      { id: "markdown_1", type: "markdown", parentId: "group_1", position: { x: 0, y: 0 }, data: { step: "source", file: "source/episode_1.txt" } },
+      { id: "markdown_2", type: "markdown", parentId: "group_1", position: { x: 0, y: 0 }, data: { step: "screenplay", file: "drafts/episode_1/screenplay.json", screenplay_status: "approved" } },
+      { id: "text_1", type: "text", parentId: "group_1", position: { x: 0, y: 0 }, data: { unit: "E1U01", step: "script" } },
+    ] as unknown as Parameters<typeof buildAgentNote>[2];
+
+    const note = buildAgentNote("continue", ["group_1"], nodes);
+
+    expect(note).toContain("markdown_2 (markdown, step=screenplay");
+    expect(note).toContain("screenplay_status=approved");
+    expect(note).toContain("1 units on the canvas");
+  });
+});
