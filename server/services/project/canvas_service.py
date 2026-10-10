@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from lib.canvas.graph import (
@@ -89,6 +90,9 @@ def _model_override(model: object) -> dict[str, str]:
 def _append(items: list[Any], item: Any) -> Any:
     items.append(item)
     return item
+
+
+logger = logging.getLogger(__name__)
 
 
 class CanvasService:
@@ -195,9 +199,26 @@ class CanvasService:
         frame, graph = await self.mutate(project_name, _apply)
         return frame, graph["revision"]
 
+    def _sync_new_units(self, project_name: str, graph: dict[str, Any]) -> dict[str, Any]:
+        """流水线（含 Agent）又产出了新单元：已在画布上的那一集自动补上单元行。失败只记日志，不影响看画布。"""
+        try:
+            episodes = canvas_episodes.episodes_with_new_units(self.pm, project_name, graph)
+            if not episodes:
+                return graph
+
+            def _apply(g: dict[str, Any]) -> None:
+                for episode in episodes:
+                    canvas_episodes.import_episode(self.pm, project_name, g, episode, only_new=True)
+
+            _, graph = mutate_canvas(self.pm, self.pm.get_project_path(project_name), _apply)
+        except Exception:
+            logger.exception("画布自动补单元失败 project=%s", project_name)
+        return graph
+
     def view_sync(self, project_name: str) -> dict[str, Any]:
         """画布；资产节点带上它接着的那张图，方便界面显示。"""
         graph = self.ensure_migrated_sync(project_name)
+        graph = self._sync_new_units(project_name, graph)
         stale = stale_generated_images(graph, {})
         nodes = []
         for n in graph["nodes"]:

@@ -169,7 +169,9 @@ def ensure_docs(graph: dict[str, Any], group: dict[str, Any], episode: int) -> N
         group["data"]["height"] = float(DOC_TOP + 420)
 
 
-def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any], episode: int) -> dict[str, Any]:
+def import_episode(
+    pm: ProjectManager, project_name: str, graph: dict[str, Any], episode: int, *, only_new: bool = False
+) -> dict[str, Any]:
     """把第 ``episode`` 集的流程摆上画布。已经在画布上时只补缺的：文档节点、还没上画布的单元行与关键帧板，已有节点（含用户调过的位置）不动。"""
     existing = episode_group(graph, episode)
     project = pm.load_project(project_name)
@@ -208,6 +210,9 @@ def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any],
     ensure_docs(graph, group, episode)
     members = [n for n in graph["nodes"] if n.get("parentId") == group["id"]]
     have_units = {n["data"].get("unit") for n in members if n["data"].get("unit")}
+    if only_new:
+        # 自动跟进：只补上次同步之后新出现的单元，用户从画布上删掉的单元不会又冒出来。
+        have_units |= set(group["data"].get("synced_units") or [])
     have_sheets = {n["data"].get("sheet") for n in members if n["data"].get("step") == "kf_gen"}
 
     aspect = str(project.get("aspect_ratio") or "9:16")
@@ -391,7 +396,31 @@ def import_episode(pm: ProjectManager, project_name: str, graph: dict[str, Any],
             }
         )
         del script_node
+    group["data"]["synced_units"] = sorted(str(u["unit_id"]) for u in units)
     return group
+
+
+def episodes_with_new_units(pm: ProjectManager, project_name: str, graph: dict[str, Any]) -> list[int]:
+    """画布上已同步过的集分组里，项目又出现了新单元的集（还没同步过的分组不自动动，由导入触发）。"""
+    result: list[int] = []
+    groups = [
+        n
+        for n in graph["nodes"]
+        if n["type"] == NODE_GROUP and isinstance(n["data"].get("episode"), int) and "synced_units" in n["data"]
+    ]
+    if not groups:
+        return result
+    project = pm.load_project(project_name)
+    for group in groups:
+        episode = group["data"]["episode"]
+        script = read_formal_script(pm, project_name, project, episode) or {}
+        known = set(group["data"].get("synced_units") or [])
+        if any(
+            isinstance(u, dict) and u.get("unit_id") and str(u["unit_id"]) not in known
+            for u in script.get("video_units") or []
+        ):
+            result.append(episode)
+    return result
 
 
 def refresh_outputs(pm: ProjectManager, project_name: str, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:

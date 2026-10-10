@@ -474,3 +474,31 @@ async def test_importing_again_adds_only_the_units_that_are_not_on_the_canvas_ye
     )
     third = [n for n in view["nodes"] if n["data"].get("unit") == "E1U03" and n["data"]["step"] == "script"]
     assert len(third) == 1
+
+
+async def test_viewing_the_canvas_adds_units_that_appeared_later_but_not_ones_the_user_deleted(ctx: Services) -> None:
+    service = canvas_tools._service(ctx)
+    await service.import_episode("demo", 1)
+    view = await _canvas(ctx)
+    doomed = [n["id"] for n in view["nodes"] if n["data"].get("unit") == "E1U02"]
+    for node_id in doomed:
+        await service.delete_node("demo", node_id)
+
+    ctx.projects.save_script(
+        "demo",
+        {
+            "episode": 1,
+            "title": "第一集",
+            "content_mode": "drama",
+            "video_units": [*_UNITS, {"unit_id": "E1U03", "text": "新增的一段。", "duration_seconds": 8}],
+        },
+        "episode_1.json",
+    )
+    view = await _canvas(ctx)
+
+    units = {n["data"]["unit"] for n in view["nodes"] if n["data"].get("unit")}
+    assert units == {"E1U01", "E1U03"}  # 新单元自动补上；用户删掉的 E1U02 不再冒出来
+
+    await service.import_episode("demo", 1)  # 明确要求导入时才补回
+    units = {n["data"]["unit"] for n in (await _canvas(ctx))["nodes"] if n["data"].get("unit")}
+    assert units == {"E1U01", "E1U02", "E1U03"}
