@@ -102,8 +102,9 @@ export function tidyEpisodeGroup(
     const unit = n.data.unit;
     if (unit && (EPISODE_STEPS as readonly string[]).includes(n.data.step ?? "")) units.set(unit, [...(units.get(unit) ?? []), n]);
   }
-  const originalTop = (nodes: readonly CanvasNode[]) => Math.min(...nodes.map((n) => n.position.y));
-  const unitOrder = [...units.keys()].sort((a, b) => originalTop(units.get(a) ?? []) - originalTop(units.get(b) ?? []));
+  // 单元按编号排（E2U02 在 E2U10 前，E2U08a 在 E2U08 后），不依赖节点当前的位置：位置可能已经被打乱。
+  const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+  const unitOrder = [...units.keys()].sort(byName);
   const boards = members.filter((n) => n.data.step === "kf_gen" || n.data.step === "kf_sheet");
 
   const boardWidth = boards.length > 0 ? Math.max(...boards.map((n) => dims(n).width)) : 0;
@@ -132,19 +133,20 @@ export function tidyEpisodeGroup(
   }
   let bottom = Math.max(y, docBottom);
 
-  // 关键帧板：按原来的上下顺序，各自对齐第一个落在它下面的单元行，再顺着往下避开上一张。
-  const rowOriginals = unitOrder.map((unit) => originalTop(units.get(unit) ?? []));
+  // 关键帧板：对齐第一个用到它的单元所在的行（单元的关键帧节点带着它的联合图编号），再顺着往下避开上一张。
   const sheets = new Map<string, CanvasNode[]>();
   for (const n of boards) sheets.set(n.data.sheet ?? n.id, [...(sheets.get(n.data.sheet ?? n.id) ?? []), n]);
+  const firstRowOfSheet = new Map<string, number>();
+  unitOrder.forEach((unit, index) => {
+    for (const n of units.get(unit) ?? []) {
+      if (n.data.step === "keyframe" && n.data.sheet && !firstRowOfSheet.has(n.data.sheet)) firstRowOfSheet.set(n.data.sheet, index);
+    }
+  });
   let previousBottom = laneTop;
-  const orderedSheets = [...sheets.values()].sort((a, b) => originalTop(a) - originalTop(b));
-  for (const pair of orderedSheets) {
-    const top = originalTop(pair);
-    let row = 0;
-    rowOriginals.forEach((original, index) => {
-      if (original <= top + 1) row = index;
-    });
-    let at = Math.max(rowY.get(unitOrder[row] ?? "") ?? laneTop, previousBottom);
+  for (const sheetId of [...sheets.keys()].sort(byName)) {
+    const pair = sheets.get(sheetId) ?? [];
+    const row = firstRowOfSheet.get(sheetId);
+    let at = Math.max(row === undefined ? laneTop : (rowY.get(unitOrder[row] ?? "") ?? laneTop), previousBottom);
     for (const n of [...pair].sort((a, b) => (a.data.step === "kf_gen" ? -1 : 1) - (b.data.step === "kf_gen" ? -1 : 1))) {
       positions[n.id] = { x: PAD, y: at };
       at += dims(n).height + 16;

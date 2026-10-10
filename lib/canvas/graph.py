@@ -680,6 +680,11 @@ def stale_generated_images(graph: dict[str, Any], derived: Mapping[str, dict[str
     return stale
 
 
+#: 产物节点放进分组时给它留的宽 / 高（图片节点约 300 宽、视频 / 语音更矮）。
+OUTPUT_GROUP_WIDTH = 340.0
+OUTPUT_GROUP_HEIGHT = 480.0
+
+
 def add_run_outputs(graph: dict[str, Any], node_id: str, prompt: str) -> dict[str, Any]:
     """为一次运行挂出一个待填充的媒体占位节点（图片 / 视频 / 语音）并连上供应商节点。
 
@@ -692,6 +697,13 @@ def add_run_outputs(graph: dict[str, Any], node_id: str, prompt: str) -> dict[st
     x = source["position"]["x"] + OUTPUT_OFFSET_X
     y = source["position"]["y"] + siblings * OUTPUT_STACK_GAP
     media_node = make_node(media_type, {"x": x, "y": y})
+    parent_id = source.get("parentId")
+    group = next((n for n in graph["nodes"] if n["id"] == parent_id and n["type"] == NODE_GROUP), None)
+    if group is not None:
+        # 供应商在分组里：产物与它同组（位置本来就是相对分组的），分组放不下就撑大一点。
+        media_node["parentId"] = group["id"]
+        group["data"]["width"] = max(float(group["data"].get("width") or 0), x + OUTPUT_GROUP_WIDTH)
+        group["data"]["height"] = max(float(group["data"].get("height") or 0), y + OUTPUT_GROUP_HEIGHT)
     now = utc_now_iso()
     media_node["data"].update(
         {"status": STATUS_QUEUED, "prompt": prompt, "generated": True, "submitted_at": now, "status_at": now}
@@ -739,6 +751,25 @@ def wire_result_to_asset(graph: dict[str, Any], generator_id: str, media_id: str
     )
 
 
+def _adopt_stray_outputs(graph: dict[str, Any]) -> None:
+    """早先运行的产物没跟供应商同组（位置却是按组内算的，于是跑到画布远处）：补上同组，位置不用改。"""
+    by_id = {n["id"]: n for n in graph["nodes"]}
+    for edge in graph["edges"]:
+        media = by_id.get(edge["target"])
+        source = by_id.get(edge["source"])
+        if (
+            media is None
+            or source is None
+            or media.get("parentId")
+            or not media["data"].get("generated")
+            or edge["targetHandle"] != "in"
+        ):
+            continue
+        parent = by_id.get(source.get("parentId") or "")
+        if parent is not None and parent["type"] == NODE_GROUP:
+            media["parentId"] = parent["id"]
+
+
 def normalize_legacy(graph: dict[str, Any]) -> None:
     """把旧版落盘的画布迁移到当前形状（读盘时调用，下次写盘即固化）。
 
@@ -747,6 +778,7 @@ def normalize_legacy(graph: dict[str, Any]) -> None:
     - 集视图已移除：丢弃 ``view``、H3 写作节点，以及连到已不存在的集 / 单元 / 起始帧联合图推导节点的连线。
     """
     graph.pop("view", None)
+    _adopt_stray_outputs(graph)
     removed = {n["id"] for n in graph["nodes"] if n["type"] == "h3_writer"}
     graph["nodes"] = [n for n in graph["nodes"] if n["id"] not in removed]
     gone = tuple(f"{DERIVED_PREFIX}{kind}:" for kind in _REMOVED_EPISODE_KINDS)

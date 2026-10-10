@@ -189,6 +189,7 @@ def import_episode(
     sheets = state.get("sheets") or []
     cell_of = {row["unit_id"]: row["cell_id"] for row in state.get("units") or []}
     cells = {c["id"]: c for sheet in sheets for c in sheet.get("cells") or []}
+    sheet_of_cell = {c["id"]: sheet["id"] for sheet in sheets for c in sheet.get("cells") or []}
     row_of = {str(u["unit_id"]): index for index, u in enumerate(units)}
 
     width = LANE_X + len(STEPS) * COLUMN_WIDTH
@@ -290,7 +291,8 @@ def import_episode(
             x["direction"],
             y,
         )
-        cell = cells.get(cell_of.get(unit_id) or "")
+        cell_id = cell_of.get(unit_id) or ""
+        cell = cells.get(cell_id)
         key_path = _exists(project_path, (cell or {}).get("image"))
         keyframe = make_node(
             NODE_IMAGE,
@@ -299,7 +301,11 @@ def import_episode(
             server_data={"path": key_path, "version": _version(project_path, key_path)},
         )
         _place(
-            graph, _tag(keyframe, episode, "keyframe", unit_id, cell=(cell or {}).get("id")), group, x["keyframe"], y
+            graph,
+            _tag(keyframe, episode, "keyframe", unit_id, cell=(cell or {}).get("id"), sheet=sheet_of_cell.get(cell_id)),
+            group,
+            x["keyframe"],
+            y,
         )
         h3, _ = h3_text(unit)
         h3_node = _place(
@@ -479,6 +485,16 @@ def refresh_outputs(pm: ProjectManager, project_name: str, nodes: list[dict[str,
             node = _media(node, (sheets.get(data.get("sheet")) or {}).get("image"))
         elif step == "keyframe":
             node = _media(node, (cells.get(data.get("cell")) or {}).get("image"))
+            sheet_id = next(
+                (
+                    sid
+                    for sid, sheet in sheets.items()
+                    if any(c.get("id") == data.get("cell") for c in sheet.get("cells") or [])
+                ),
+                None,
+            )
+            if sheet_id is not None:
+                node = {**node, "data": {**node["data"], "sheet": sheet_id}}
         elif unit is not None and step == "video":
             node = _media(node, _assets(unit).get("video_clip"))
         elif unit is not None and step == "voice":

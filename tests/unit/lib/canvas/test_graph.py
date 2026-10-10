@@ -654,3 +654,35 @@ def test_a_user_group_moves_to_the_front_when_it_gains_members() -> None:
     set_members(graph, [c["id"]], group["id"], {c["id"]: {"x": 5, "y": 5}})
 
     assert graph["nodes"][0] is group
+
+
+def test_a_run_output_stays_in_the_providers_group_and_the_group_grows_to_hold_it():
+    graph = empty_graph()
+    group = make_node("group", {"x": 0, "y": 0}, {"label": "角色", "width": 400.0, "height": 300.0})
+    generator = make_node("image_generate", {"x": 40, "y": 60})
+    generator["parentId"] = group["id"]
+    graph["nodes"].extend([group, generator])
+
+    media = add_run_outputs(graph, generator["id"], "一张脸")
+
+    assert media["parentId"] == group["id"]
+    assert group["data"]["width"] >= media["position"]["x"] + 300
+    assert group["data"]["height"] >= media["position"]["y"] + 300
+
+
+def test_loading_pulls_an_earlier_stray_output_into_its_providers_group():
+    from lib.canvas.graph import normalize_legacy
+
+    graph = empty_graph()
+    group = make_node("group", {"x": 0, "y": 0}, {"label": "角色"})
+    generator = make_node("image_generate", {"x": 40, "y": 60})
+    generator["parentId"] = group["id"]
+    stray = make_node("image", {"x": 400, "y": 60}, {"generated": True})
+    graph["nodes"].extend([group, generator, stray])
+    graph["edges"].append(
+        {"id": "e1", "source": generator["id"], "sourceHandle": "image", "target": stray["id"], "targetHandle": "in"}
+    )
+
+    normalize_legacy(graph)
+
+    assert stray["parentId"] == group["id"]

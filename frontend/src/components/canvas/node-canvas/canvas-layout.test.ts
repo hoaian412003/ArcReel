@@ -87,14 +87,31 @@ describe("tidyEpisodeGroup", () => {
     expect(height).toBeGreaterThan(positions.s2.y + 200);
   });
 
+  it("orders units by their id even when the nodes were scrambled before", () => {
+    const members = [unitNode("a", "E2U10", "script", 0), unitNode("b", "E2U02", "script", 9000), unitNode("c", "E2U01", "script", 500)];
+    const { positions } = tidyEpisodeGroup(members, new Map());
+
+    expect(positions.c.y).toBeLessThan(positions.b.y);
+    expect(positions.b.y).toBeLessThan(positions.a.y);
+  });
+
   it("puts documents on top and keeps keyframe sheets beside their first unit without overlapping each other", () => {
     const doc = (id: string, step: string): CanvasNode => ({ id, type: "markdown", position: { x: 0, y: 0 }, data: { step } as CanvasNode["data"], parentId: "g" });
     const board = (id: string, step: string, sheet: string, y: number): CanvasNode => ({ id, type: "image", position: { x: 0, y }, data: { step, sheet } as CanvasNode["data"], parentId: "g" });
+    const keyframe = (id: string, unit: string, sheet: string): CanvasNode => ({
+      id,
+      type: "image",
+      position: { x: 0, y: 0 },
+      data: { unit, step: "keyframe", sheet } as CanvasNode["data"],
+      parentId: "g",
+    });
     const members = [
       doc("src", "source"),
       doc("plan", "plan"),
       unitNode("s1", "U1", "script", 400),
       unitNode("s2", "U2", "script", 800),
+      keyframe("k1", "U1", "S1"),
+      keyframe("k2", "U2", "S2"),
       board("g1", "kf_gen", "S1", 400),
       board("b1", "kf_sheet", "S1", 440),
       board("g2", "kf_gen", "S2", 800),
