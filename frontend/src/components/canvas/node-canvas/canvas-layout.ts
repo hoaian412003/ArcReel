@@ -123,7 +123,7 @@ export function tidyEpisodeGroup(
     cursor += (columnWidth.get(step) ?? 0) + COLUMN_SPACING;
   }
 
-  const laneTop = docBottom + 40;
+  const laneTop = docBottom + 90; // 文档预览异步载入后会比量到时更高，多留一些
   const rowY = new Map<string, number>();
   let y = laneTop;
   for (const unit of unitOrder) {
