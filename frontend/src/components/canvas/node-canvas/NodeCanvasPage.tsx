@@ -430,23 +430,29 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [groupSelected, groupableIds.length]);
 
-  // 刚放进画布的资产分组：等组内节点渲染出实际尺寸（图片加载完后节点才定高，所以要尺寸稳定一小会儿），
-  // 用 ELK 排一次版并存下位置，之后位置归用户。
+  // 刚放进画布的分组 / 刚补进新节点的集分组：等组内节点渲染出实际尺寸（图片加载完后节点才定高，所以要尺寸稳定一小会儿），
+  // 排一次版（集分组按矩阵，其余用 ELK）并存下位置，之后位置归用户。
   const laidOut = useRef(new Set<string>());
   useEffect(() => {
     if (!graph) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
     for (const group of graph.nodes) {
+      // 标记清掉之后允许下一批新节点再触发一次（Agent 往已有的集分组里补单元时）。
+      if (group.type === "group" && !group.data.autolayout) laidOut.current.delete(group.id);
       if (group.type !== "group" || !group.data.autolayout || laidOut.current.has(group.id)) continue;
       const kids = nodes.filter((n) => n.parentId === group.id);
       if (kids.length === 0 || kids.some((k) => !k.measured?.width || !k.measured.height)) continue;
+      const sizes = new Map(kids.map((k) => [k.id, { width: k.measured?.width ?? 0, height: k.measured?.height ?? 0 }]));
+      const stored = graph.nodes.filter((n) => n.parentId === group.id);
       const children = kids.map((k) => ({ id: k.id, type: k.type ?? "text", width: k.measured?.width ?? 0, height: k.measured?.height ?? 0 }));
       const ids = new Set(kids.map((k) => k.id));
       const edgesInside = graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+      const isEpisode = group.data.episode != null;
       timers.push(
         setTimeout(() => {
           laidOut.current.add(group.id);
-          layoutGroup(children, edgesInside)
+          // 集分组按矩阵排（行高取最高的节点）；其余分组按连线方向排。
+          (isEpisode ? Promise.resolve(tidyEpisodeGroup(stored, sizes)) : layoutGroup(children, edgesInside))
             .then(async (result) => {
               await API.updateCanvasLayout(projectName, result.positions);
               await API.updateCanvasNode(projectName, group.id, {

@@ -174,6 +174,7 @@ def import_episode(
 ) -> dict[str, Any]:
     """把第 ``episode`` 集的流程摆上画布。已经在画布上时只补缺的：文档节点、还没上画布的单元行与关键帧板，已有节点（含用户调过的位置）不动。"""
     existing = episode_group(graph, episode)
+    nodes_before = len(graph["nodes"])
     project = pm.load_project(project_name)
     meta = find_episode(project, episode)
     if meta is None:
@@ -398,6 +399,9 @@ def import_episode(
             }
         )
         del script_node
+    if len(graph["nodes"]) > nodes_before:
+        # 新节点是按固定间距放的；网页量到真实大小后按矩阵重排一次（排完清掉这个标记）。
+        group["data"]["autolayout"] = True
     group["data"]["synced_units"] = sorted(str(u["unit_id"]) for u in units)
     group["data"]["synced_sheets"] = sorted(str(sheet["id"]) for sheet in sheets)
     return group

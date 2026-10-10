@@ -467,6 +467,7 @@ async def test_importing_again_adds_only_the_units_that_are_not_on_the_canvas_ye
 
     view = await _canvas(ctx)
     assert again["id"] == group["id"]
+    assert again["data"]["autolayout"] is True  # 补了新节点：网页量到真实大小后重排一次
     units = {n["data"]["unit"] for n in view["nodes"] if n["data"].get("unit")}
     assert units == {"E1U01", "E1U02", "E1U03"}
     assert all(
