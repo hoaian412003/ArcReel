@@ -158,6 +158,8 @@ SAMPLE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "canvas_use_template": {"template_id": "t", "position": {"x": 0, "y": 0}},
     "canvas_import_episode": {"episode": 1},
     "canvas_import_assets": {},
+    "get_keyframe_board": {"episode": 1},
+    "generate_keyframe_sheet": {"episode": 1, "sheet_id": "S1"},
     "canvas_group": {"node_ids": ["n"], "label": "g", "position": {"x": 0, "y": 0}},
     "canvas_ungroup": {"group_id": "g"},
     "submit_keyframe_plan": {
@@ -520,6 +522,9 @@ _PROBLEM_ON_SAMPLE = frozenset(
         "canvas_import_episode",
         "canvas_group",
         "canvas_ungroup",
+        # 测试项目不是参考生视频项目：起始帧看板不适用。
+        "get_keyframe_board",
+        "generate_keyframe_sheet",
         # 测试项目不是参考生视频项目：单元拆解的简报与提交只服务该路线。
         "get_script_plan_brief",
         "submit_script_plan",

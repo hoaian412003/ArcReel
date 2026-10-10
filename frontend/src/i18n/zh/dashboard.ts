@@ -1998,6 +1998,8 @@ export default {
   'tool_name_canvas_group': '画布分组',
   'tool_name_canvas_ungroup': '拆分画布分组',
   'tool_name_submit_keyframe_plan': '提交起始帧规划',
+  'tool_name_get_keyframe_board': '查看起始帧看板',
+  'tool_name_generate_keyframe_sheet': '生成起始帧联合图',
   'tool_name_approve_screenplay': '通过剧本',
   'tool_name_get_direction_report': '读取导演报告',
   'tool_name_decide_direction_review': '记录导演审阅决定',

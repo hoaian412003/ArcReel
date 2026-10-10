@@ -214,6 +214,8 @@ def import_episode(
         # 自动跟进：只补上次同步之后新出现的单元，用户从画布上删掉的单元不会又冒出来。
         have_units |= set(group["data"].get("synced_units") or [])
     have_sheets = {n["data"].get("sheet") for n in members if n["data"].get("step") == "kf_gen"}
+    if only_new:
+        have_sheets |= set(group["data"].get("synced_sheets") or [])
 
     aspect = str(project.get("aspect_ratio") or "9:16")
     keyframe_nodes: dict[str, dict[str, Any]] = {}
@@ -397,6 +399,7 @@ def import_episode(
         )
         del script_node
     group["data"]["synced_units"] = sorted(str(u["unit_id"]) for u in units)
+    group["data"]["synced_sheets"] = sorted(str(sheet["id"]) for sheet in sheets)
     return group
 
 
@@ -419,6 +422,14 @@ def episodes_with_new_units(pm: ProjectManager, project_name: str, graph: dict[s
             isinstance(u, dict) and u.get("unit_id") and str(u["unit_id"]) not in known
             for u in script.get("video_units") or []
         ):
+            result.append(episode)
+            continue
+        try:
+            sheets = KeyframeBoardService(pm).state(project_name, episode).get("sheets") or []
+        except KeyframePlanError:
+            continue
+        synced = set(group["data"].get("synced_sheets") or [])
+        if any(str(sheet["id"]) not in synced for sheet in sheets):
             result.append(episode)
     return result
 

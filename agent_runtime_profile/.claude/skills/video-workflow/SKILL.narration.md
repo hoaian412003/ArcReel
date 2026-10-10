@@ -291,6 +291,15 @@ dispatch `generate-assets` 子智能体：
 
 > **切换 `grid_storyboard` 后的重做**：本动作的常规触发条件是「缺分镜图」，而用户在设置页切换该开关不会让已有分镜图失效，剧本里也不记录分镜图由哪种装配方式产出——单看缺图会把整集判成已完成。用户在已有分镜图的项目上切换开关后要求按新方式出图时，与其确认要重做的分镜范围，再显式带 ID 重生：切到宫格用 `mcp__arcreel__generate_grid({"script": target.script_filename, "scene_ids": [...]})`，切回单图用 `mcp__arcreel__generate_storyboards({"script": target.script_filename, "segment_ids": [...]})`（`script` 必填；ID 列表省略时只补缺图，达不到重做效果）。已生成的视频同样不会自动失效，重出分镜图后需按新图重跑 `generate_videos` 对应分镜。
 
+## 起始帧（keyframe）：参考生视频 + H3 提示词档，进入 `generate_videos` 之前
+
+**适用**：`generation_mode == reference_video` 且 `video_prompt_profile == h3_ref2va`（见 `get_project_content`）；其它项目没有这一步。计划里没有它的 `next_action`，所以由你在提示词写完（`author_prompts` 完成）、轮到 `generate_videos` / `choose_narration_delivery` 之前主动处理，别直接跳到视频。它不是强制的（未生成或未审核时视频照样能出），但站位 / 景别稳定得多，默认走一遍。
+
+1. **规划（只写文本，不花钱）**：dispatch `plan-keyframes` 子智能体（项目名称、集数 N）。它 `get_keyframe_brief` → `submit_keyframe_plan`。返回后画布会自动长出每张联合图的节点，不必手动整理。
+2. **生成联合图（付费，按图片计费）**：先 `get_keyframe_board` 看哪几张缺图 / 过期，向用户说明张数与费用并等他同意，再对每张逐个调 `generate_keyframe_sheet`（立即返回任务 id，不等结果）。完成后服务端自动按格切分；用 `get_keyframe_board` 确认。
+3. **审核由用户做**：格子须逐格「已审核」才会随视频请求发出。你不替用户审，告诉他去看板或画布上的 Keyframe 节点核对人脸与站位。
+4. 用户明确说不要起始帧时跳过，直接继续 `generate_videos`。
+
 ## `generate_videos`：视频生成
 
 **触发**：`next_action.type == "generate_videos"`

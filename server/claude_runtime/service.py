@@ -757,7 +757,10 @@ class ClaudeSessionService:
                 f"Keep cross-session notes in {workspace.memory_dir}. Explain consequential edits. "
                 "You own this project's data: assets, scripts and the node canvas are yours to manage through the tools; "
                 "every turn is snapshotted so the user can revert. Ask before any paid provider run (image/video/audio). "
-                "Run subagents in the foreground and wait for their result before answering; do not use run_in_background.",
+                "Run subagents in the foreground and wait for their result before answering; do not use run_in_background. "
+                "The node canvas follows the project by itself (new units, keyframe boards, document nodes), so do not "
+                "rebuild it after each step; call canvas_import_episode only to place an episode that is not on the "
+                "canvas yet or to restore nodes the user deleted.",
             },
         )
 

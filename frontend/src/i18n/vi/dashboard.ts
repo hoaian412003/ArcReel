@@ -2144,6 +2144,8 @@ export default {
   'tool_name_canvas_group': 'Gom node canvas',
   'tool_name_canvas_ungroup': 'Rã nhóm canvas',
   'tool_name_submit_keyframe_plan': 'Nộp kế hoạch khung đầu',
+  'tool_name_get_keyframe_board': 'Xem bảng khung đầu',
+  'tool_name_generate_keyframe_sheet': 'Tạo ảnh ghép khung đầu',
   'tool_name_approve_screenplay': 'Duyệt kịch bản',
   'tool_name_get_direction_report': 'Đọc báo cáo đạo diễn',
   'tool_name_decide_direction_review': 'Ghi quyết định duyệt đạo diễn',

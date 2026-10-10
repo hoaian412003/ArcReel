@@ -502,3 +502,27 @@ async def test_viewing_the_canvas_adds_units_that_appeared_later_but_not_ones_th
     await service.import_episode("demo", 1)  # 明确要求导入时才补回
     units = {n["data"]["unit"] for n in (await _canvas(ctx))["nodes"] if n["data"].get("unit")}
     assert units == {"E1U01", "E1U02", "E1U03"}
+
+
+async def test_keyframe_boards_planned_later_appear_on_the_canvas_by_themselves(
+    ctx: Services, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.services.project import canvas_episodes
+
+    service = canvas_tools._service(ctx)
+    await service.import_episode("demo", 1)
+    sheets: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        canvas_episodes.KeyframeBoardService,
+        "state",
+        lambda _self, _project, _episode: {"sheets": sheets, "units": []},
+    )
+    assert not [n for n in (await _canvas(ctx))["nodes"] if n["data"].get("step") == "kf_gen"]
+
+    sheets.append({"id": "S1", "scene": "茶楼", "image": None, "cells": [{"id": "C1", "unit_ids": ["E1U01"]}]})
+    view = await _canvas(ctx)
+
+    boards = [n for n in view["nodes"] if n["data"].get("step") in ("kf_gen", "kf_sheet")]
+    assert {n["data"]["step"] for n in boards} == {"kf_gen", "kf_sheet"}
+    again = await _canvas(ctx)  # 只补一次
+    assert len([n for n in again["nodes"] if n["data"].get("step") == "kf_gen"]) == 1

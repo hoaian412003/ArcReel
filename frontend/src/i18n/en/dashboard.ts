@@ -1999,6 +1999,8 @@ export default {
   'tool_name_canvas_group': 'Group canvas nodes',
   'tool_name_canvas_ungroup': 'Ungroup canvas nodes',
   'tool_name_submit_keyframe_plan': 'Submit the keyframe plan',
+  'tool_name_get_keyframe_board': 'Read the keyframe board',
+  'tool_name_generate_keyframe_sheet': 'Generate a keyframe sheet',
   'tool_name_approve_screenplay': 'Approve the screenplay',
   'tool_name_get_direction_report': 'Read the direction report',
   'tool_name_decide_direction_review': 'Record the direction review decision',

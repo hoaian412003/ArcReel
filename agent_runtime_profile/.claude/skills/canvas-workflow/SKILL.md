@@ -25,7 +25,8 @@ user-invocable: false
 **用户 @ 了集分组**（引用的节点是 `group` 且 `data.episode` 是集号 N）并让你往下做：这是「继续第 N 集」，按 video-workflow 的流程走：
 1. `get_workflow_plan`（目标集 N）读 `next_action`，按它 dispatch 对应子智能体（剧本规划 `split-reference-video-units`、导演 `direct-episode`、提示词 `create-episode-script`、关键帧 `plan-keyframes` 等），每步返回后刷新计划继续。
 2. 遇到要用户决定的动作（剧本审阅、规划确认、导演审阅等）就停下，告诉用户去哪个节点 / 页面决定；会计费的生成（图 / 视频 / 配音）先说明再等用户同意，不擅自提交。
-3. 每完成一步（或停下前）调用 `canvas_import_episode`（集号 N）：把新出现的文档节点、单元行（脚本 → 导演 → 关键帧 → H3 → 视频 → 配音）与关键帧板补到集分组里，已有节点与用户调过的位置不动；节点内容随项目文件自动刷新。
+3. 集分组会自动跟上项目：新出现的单元行（脚本 → 导演 → 关键帧 → H3 → 视频 → 配音）与关键帧板自动补到画布上，节点内容随项目文件自动刷新，不必每步都手动导入。只有用户把节点删了又想要回来、或分组不在画布上时才调用 `canvas_import_episode`（集号 N）。用户已删掉的单元不会被自动加回。
+4. 参考生视频 + H3 的集在提示词写完后要处理起始帧：规划用 `plan-keyframes`；出图用 `generate_keyframe_sheet`（付费，先说明并得到同意）；格子的审核只由用户做。
 
 用户也可以直接点 Screenplay 节点上的「让 Agent 写剧本」，等同于第一个流程。
 
