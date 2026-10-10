@@ -489,3 +489,46 @@ async def test_turn_stays_open_until_background_subagents_report_back(tmp_path, 
     events = await service.events(accepted["session"]["id"], user_id="default")
     assert any(event["type"] == "turn_finished" for event in events)
     await service.shutdown()
+
+
+class StaleNotificationClient(BackgroundTaskClient):
+    """续接旧会话：先冒出上一轮遗留后台任务的通知和一条空结果，真正的回答随后才来。"""
+
+    async def receive_response(self) -> AsyncIterator[Any]:
+        yield TaskNotificationMessage(
+            subtype="task_notification",
+            data={},
+            task_id="old",
+            status="stopped",
+            output_file="",
+            summary="stopped",
+            uuid="u0",
+            session_id=self.session_id,
+        )
+        yield self._result("empty")
+
+    async def receive_messages(self) -> AsyncIterator[Any]:
+        yield AssistantMessage(content=[TextBlock(text="real answer")], model="claude-test", session_id=self.session_id)
+        type(self).consumed_follow_up = True
+        yield self._result("real")
+
+
+async def test_empty_result_from_a_leftover_task_notification_does_not_end_the_turn(tmp_path, db_factory) -> None:
+    StaleNotificationClient.closed_early = False
+    StaleNotificationClient.consumed_follow_up = False
+    project = tmp_path / "projects" / "demo"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text('{"name":"demo"}', encoding="utf-8")
+    service = ClaudeSessionService(
+        data_root=tmp_path,
+        session_factory=db_factory,
+        client_factory=lambda options: StaleNotificationClient(options, call_number=1),
+    )
+    accepted = await service.send_action(
+        "demo", ClaudeAction(action="create_screenplay", episode=1, client_key="stale"), user_id="default"
+    )
+    await service.wait_for_idle(accepted["session"]["id"])
+
+    assert StaleNotificationClient.consumed_follow_up
+    assert not StaleNotificationClient.closed_early
+    await service.shutdown()

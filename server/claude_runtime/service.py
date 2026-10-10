@@ -8,11 +8,13 @@ import json
 import logging
 import os
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from claude_agent_sdk import (
+    AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
     PermissionResultAllow,
@@ -69,12 +71,28 @@ _CHANGE_LIST_LIMIT = 30
 BACKGROUND_TASK_TIMEOUT_SECONDS = 1800
 
 
-def _track_background_tasks(message: Any, pending: set[str]) -> None:
-    """按任务消息维护「还没结束的后台任务」；终态可能只来自 TaskUpdated，也可能只来自 TaskNotification。"""
-    if isinstance(message, TaskStartedMessage):
-        pending.add(message.task_id)
-    elif isinstance(message, TaskNotificationMessage | TaskUpdatedMessage) and message.status in TERMINAL_TASK_STATUSES:
-        pending.discard(message.task_id)
+@dataclass
+class _TurnProgress:
+    """一轮里已经看到了什么：还没结束的后台任务，以及主 Agent 有没有真的回答过。"""
+
+    pending_tasks: set[str] = field(default_factory=set)
+    answered: bool = False
+
+    def observe(self, message: Any) -> None:
+        # 终态可能只来自 TaskUpdated，也可能只来自 TaskNotification。
+        if isinstance(message, AssistantMessage):
+            self.answered = True
+        elif isinstance(message, TaskStartedMessage):
+            self.pending_tasks.add(message.task_id)
+        elif (
+            isinstance(message, TaskNotificationMessage | TaskUpdatedMessage)
+            and message.status in TERMINAL_TASK_STATUSES
+        ):
+            self.pending_tasks.discard(message.task_id)
+
+    @property
+    def finished(self) -> bool:
+        return self.answered and not self.pending_tasks
 
 
 class ClaudeUnavailableError(RuntimeError):
@@ -542,18 +560,19 @@ class ClaudeSessionService:
                 self._active_clients[session_id] = client
                 await client.query(prompt, session_id=session["sdk_session_id"])
                 self._unstarted_sessions.discard(session_id)
-                pending_tasks: set[str] = set()
+                progress = _TurnProgress()
                 final_result: ResultMessage | None = None
                 async for message in client.receive_response():
                     if await self._record_message(session_id, turn_id, message, user_id=user_id):
-                        _track_background_tasks(message, pending_tasks)
+                        progress.observe(message)
                     if isinstance(message, ResultMessage):
                         final_result = message
-                if final_result is not None and pending_tasks:
-                    # 主 Agent 先答完、后台子智能体还在跑：关掉客户端会把它们一起杀掉，这一轮留到它们结束
-                    # 并等到随后那条汇报结果（上限防止永远挂着）。
+                if final_result is not None and not progress.finished:
+                    # 还没等到真正的回答：主 Agent 先答完而后台子智能体在跑（关掉客户端会把它们一起杀掉），
+                    # 或者续接旧会话时先冒出上一轮遗留的后台任务通知、把这条消息的结果顶掉了。
+                    # 这一轮继续读到它们结束并等到随后的结果（上限防止永远挂着）。
                     final_result = await self._await_background_tasks(
-                        client, session_id, turn_id, pending_tasks, final_result, user_id=user_id
+                        client, session_id, turn_id, progress, final_result, user_id=user_id
                     )
                 if final_result is not None:
                     result_received = True
@@ -606,7 +625,7 @@ class ClaudeSessionService:
         client: Any,
         session_id: str,
         turn_id: str,
-        pending_tasks: set[str],
+        progress: _TurnProgress,
         result: ResultMessage,
         *,
         user_id: str,
@@ -615,13 +634,15 @@ class ClaudeSessionService:
             async with asyncio.timeout(BACKGROUND_TASK_TIMEOUT_SECONDS):
                 async for message in client.receive_messages():
                     if await self._record_message(session_id, turn_id, message, user_id=user_id):
-                        _track_background_tasks(message, pending_tasks)
+                        progress.observe(message)
                     if isinstance(message, ResultMessage):
                         result = message
-                        if not pending_tasks:
+                        if progress.finished:
                             break
         except TimeoutError:
-            logger.warning("后台子智能体超时未结束 session=%s turn=%s pending=%s", session_id, turn_id, pending_tasks)
+            logger.warning(
+                "后台子智能体超时未结束 session=%s turn=%s pending=%s", session_id, turn_id, progress.pending_tasks
+            )
         return result
 
     @staticmethod
