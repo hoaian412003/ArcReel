@@ -484,11 +484,9 @@ function GroupView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
             {t(`node_canvas_group_kind_${data.asset}`)}
           </span>
         ) : null}
-        {data.episode == null ? (
-          <button type="button" className={`nodrag ${GHOST_BTN_CLS}`} onClick={() => void tidyGroup(id)}>
-            {t("node_canvas_group_tidy")}
-          </button>
-        ) : null}
+        <button type="button" className={`nodrag ${GHOST_BTN_CLS}`} onClick={() => void tidyGroup(id)}>
+          {t("node_canvas_group_tidy")}
+        </button>
         <button
           type="button"
           className={`nodrag ${ICON_BTN_CLS}`}

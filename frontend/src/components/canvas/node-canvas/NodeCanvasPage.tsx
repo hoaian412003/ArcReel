@@ -38,7 +38,7 @@ import {
   type ImageModelChoices,
   CanvasBusyContext,
 } from "./canvas-context";
-import { tidyLayout } from "./canvas-layout";
+import { tidyEpisodeGroup, tidyLayout, type NodeSizes } from "./canvas-layout";
 import { layoutGroup } from "./canvas-elk";
 import { BranchStepFailed, runBranch } from "./branch-runner";
 import { buildAgentNote, isValidCanvasConnection, lineageOf, referencedNodeIds } from "./canvas-rules";
@@ -266,6 +266,30 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     return () => useCanvasContextStore.getState().register(projectName, null);
   }, [projectName]);
 
+  /** React Flow 量到的节点大小：重排按它来，节点变高 / 变宽之后不会互相压住。 */
+  const measuredSizes = useCallback((): NodeSizes => {
+    const sizes = new Map<string, { width: number; height: number }>();
+    for (const n of getNodes()) {
+      if (n.measured?.width && n.measured.height) sizes.set(n.id, { width: n.measured.width, height: n.measured.height });
+    }
+    return sizes;
+  }, [getNodes]);
+
+  /** 重排一个分组：集分组按矩阵排，其余分组按连线方向排。返回组内相对位置与分组需要的大小。 */
+  const tidyOneGroup = useCallback(
+    async (groupId: string) => {
+      const stored = graphRef.current?.nodes ?? [];
+      const members = stored.filter((n) => n.parentId === groupId);
+      if (members.length === 0) return null;
+      const sizes = measuredSizes();
+      if (stored.find((n) => n.id === groupId)?.data.episode != null) return tidyEpisodeGroup(members, sizes);
+      const ids = new Set(members.map((m) => m.id));
+      const children = members.map((m) => ({ id: m.id, type: m.type, width: sizes.get(m.id)?.width ?? 280, height: sizes.get(m.id)?.height ?? 160 }));
+      return layoutGroup(children, (graphRef.current?.edges ?? []).filter((e) => ids.has(e.source) && ids.has(e.target)));
+    },
+    [measuredSizes],
+  );
+
   const actions = useMemo<CanvasActions>(
     () => ({
       projectName,
@@ -281,12 +305,8 @@ function CanvasSurface({ projectName }: { projectName: string }) {
         guarded(() => API.updateCanvasNode(projectName, nodeId, { position, data: { width, height } })),
       tidyGroup: (groupId) =>
         guarded(async () => {
-          const kids = getNodes().filter((n) => n.parentId === groupId);
-          if (kids.length === 0) return;
-          const ids = new Set(kids.map((k) => k.id));
-          const children = kids.map((k) => ({ id: k.id, type: k.type ?? "text", width: k.measured?.width ?? 280, height: k.measured?.height ?? 160 }));
-          const inside = (graphRef.current?.edges ?? []).filter((e) => ids.has(e.source) && ids.has(e.target));
-          const result = await layoutGroup(children, inside);
+          const result = await tidyOneGroup(groupId);
+          if (!result) return;
           await API.updateCanvasLayout(projectName, result.positions);
           await API.updateCanvasNode(projectName, groupId, { data: { width: result.width, height: result.height } });
         }),
@@ -339,7 +359,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
       },
       remove: (nodeId) => guarded(() => API.deleteCanvasNode(projectName, nodeId)),
     }),
-    [getNodes, guarded, imageModels, projectName, pushToast, t],
+    [guarded, imageModels, projectName, pushToast, t, tidyOneGroup],
   );
 
   const executeBranch = useCallback(async () => {
@@ -496,12 +516,26 @@ function CanvasSurface({ projectName }: { projectName: string }) {
     return Promise.resolve({ nodes: kept, edges: doomedEdges.filter((e) => !spared.has(e.source) && !spared.has(e.target)) });
   }, []);
 
+  /** 一个按钮整理全部：每个分组先按里面节点的实际大小重排，再把画布上的分组与散节点按数据流排开。 */
   const tidy = useCallback(() => {
     if (!graph) return;
-    const positions = tidyLayout(graph.nodes, graph.edges);
-    if (Object.keys(positions).length === 0) return;
-    void guarded(() => API.updateCanvasLayout(projectName, positions));
-  }, [graph, guarded, projectName]);
+    void guarded(async () => {
+      const sizes = new Map(measuredSizes());
+      const positions: Record<string, { x: number; y: number }> = {};
+      const resized: Array<{ id: string; width: number; height: number }> = [];
+      for (const group of graph.nodes.filter((n) => n.type === "group")) {
+        const result = await tidyOneGroup(group.id);
+        if (!result) continue;
+        Object.assign(positions, result.positions);
+        resized.push({ id: group.id, width: result.width, height: result.height });
+        sizes.set(group.id, { width: result.width, height: result.height });
+      }
+      Object.assign(positions, tidyLayout(graph.nodes, graph.edges, sizes));
+      if (Object.keys(positions).length === 0) return;
+      await API.updateCanvasLayout(projectName, positions);
+      await Promise.all(resized.map((g) => API.updateCanvasNode(projectName, g.id, { data: { width: g.width, height: g.height } })));
+    });
+  }, [graph, guarded, measuredSizes, projectName, tidyOneGroup]);
 
   // 通知 / 任务失败提示点进来的「定位到某个角色」：把画布平移缩放到该角色节点并选中它。
   useEffect(() => {
