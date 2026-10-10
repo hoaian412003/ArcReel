@@ -19,9 +19,17 @@ from claude_agent_sdk import (
     PermissionResultDeny,
     ResultMessage,
     StreamEvent,
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
     UserMessage,
 )
-from claude_agent_sdk.types import ServerToolResultBlock, ToolPermissionContext, ToolResultBlock
+from claude_agent_sdk.types import (
+    TERMINAL_TASK_STATUSES,
+    ServerToolResultBlock,
+    ToolPermissionContext,
+    ToolResultBlock,
+)
 
 from lib.db import safe_session_factory
 from lib.db.base import DEFAULT_USER_ID
@@ -55,6 +63,18 @@ ClientFactory = Callable[[ClaudeAgentOptions], Any]
 
 
 _CHANGE_LIST_LIMIT = 30
+
+
+#: 主 Agent 答完后，最多再等后台子智能体这么久。
+BACKGROUND_TASK_TIMEOUT_SECONDS = 1800
+
+
+def _track_background_tasks(message: Any, pending: set[str]) -> None:
+    """按任务消息维护「还没结束的后台任务」；终态可能只来自 TaskUpdated，也可能只来自 TaskNotification。"""
+    if isinstance(message, TaskStartedMessage):
+        pending.add(message.task_id)
+    elif isinstance(message, TaskNotificationMessage | TaskUpdatedMessage) and message.status in TERMINAL_TASK_STATUSES:
+        pending.discard(message.task_id)
 
 
 class ClaudeUnavailableError(RuntimeError):
@@ -269,7 +289,7 @@ class ClaudeSessionService:
             session_id = workspace.main_session(user_id)
             if session_id is None:
                 sessions = await self.list_sessions(project_name, user_id=user_id)
-                session_id = sessions[-1]["id"] if sessions else None
+                session_id = sessions[0]["id"] if sessions else None
             result = await self.send_message(
                 project_name=project_name,
                 content=rendered.content,
@@ -522,26 +542,29 @@ class ClaudeSessionService:
                 self._active_clients[session_id] = client
                 await client.query(prompt, session_id=session["sdk_session_id"])
                 self._unstarted_sessions.discard(session_id)
+                pending_tasks: set[str] = set()
+                final_result: ResultMessage | None = None
                 async for message in client.receive_response():
-                    if isinstance(message, UserMessage) and not self._has_tool_result(message):
-                        continue
-                    event_type = "message_delta" if isinstance(message, StreamEvent) else "sdk_message"
-                    await self._append_event(
-                        session_id,
-                        event_type,
-                        {"turn_id": turn_id, "message": sdk_message_payload(message)},
+                    if await self._record_message(session_id, turn_id, message, user_id=user_id):
+                        _track_background_tasks(message, pending_tasks)
+                    if isinstance(message, ResultMessage):
+                        final_result = message
+                if final_result is not None and pending_tasks:
+                    # 主 Agent 先答完、后台子智能体还在跑：关掉客户端会把它们一起杀掉，这一轮留到它们结束
+                    # 并等到随后那条汇报结果（上限防止永远挂着）。
+                    final_result = await self._await_background_tasks(
+                        client, session_id, turn_id, pending_tasks, final_result, user_id=user_id
+                    )
+                if final_result is not None:
+                    result_received = True
+                    result_failed = final_result.is_error
+                    await self._complete_turn(
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        result=final_result,
+                        previous=previous,
                         user_id=user_id,
                     )
-                    if isinstance(message, ResultMessage):
-                        result_received = True
-                        result_failed = message.is_error
-                        await self._complete_turn(
-                            session_id=session_id,
-                            turn_id=turn_id,
-                            result=message,
-                            previous=previous,
-                            user_id=user_id,
-                        )
             if not result_received:
                 raise RuntimeError("Claude response ended without a result")
             async with self._session_factory() as db:
@@ -564,6 +587,42 @@ class ClaudeSessionService:
                 await asyncio.shield(
                     self._record_project_changes(session_id, turn_id, project_path, snapshot_id, user_id)
                 )
+
+    async def _record_message(self, session_id: str, turn_id: str, message: Any, *, user_id: str) -> bool:
+        """把一条 SDK 消息记进事件日志；纯用户回显（不含工具结果）不记，返回是否记了。"""
+        if isinstance(message, UserMessage) and not self._has_tool_result(message):
+            return False
+        event_type = "message_delta" if isinstance(message, StreamEvent) else "sdk_message"
+        await self._append_event(
+            session_id,
+            event_type,
+            {"turn_id": turn_id, "message": sdk_message_payload(message)},
+            user_id=user_id,
+        )
+        return True
+
+    async def _await_background_tasks(
+        self,
+        client: Any,
+        session_id: str,
+        turn_id: str,
+        pending_tasks: set[str],
+        result: ResultMessage,
+        *,
+        user_id: str,
+    ) -> ResultMessage:
+        try:
+            async with asyncio.timeout(BACKGROUND_TASK_TIMEOUT_SECONDS):
+                async for message in client.receive_messages():
+                    if await self._record_message(session_id, turn_id, message, user_id=user_id):
+                        _track_background_tasks(message, pending_tasks)
+                    if isinstance(message, ResultMessage):
+                        result = message
+                        if not pending_tasks:
+                            break
+        except TimeoutError:
+            logger.warning("后台子智能体超时未结束 session=%s turn=%s pending=%s", session_id, turn_id, pending_tasks)
+        return result
 
     @staticmethod
     async def _take_turn_snapshot(project_path: Path, turn_id: str) -> str | None:
@@ -676,7 +735,8 @@ class ClaudeSessionService:
                 "Use project skills and the project-bound ArcReel MCP tools to manage its artifacts. "
                 f"Keep cross-session notes in {workspace.memory_dir}. Explain consequential edits. "
                 "You own this project's data: assets, scripts and the node canvas are yours to manage through the tools; "
-                "every turn is snapshotted so the user can revert. Ask before any paid provider run (image/video/audio).",
+                "every turn is snapshotted so the user can revert. Ask before any paid provider run (image/video/audio). "
+                "Run subagents in the foreground and wait for their result before answering; do not use run_in_background.",
             },
         )
 

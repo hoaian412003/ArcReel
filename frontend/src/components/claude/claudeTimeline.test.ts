@@ -105,6 +105,16 @@ describe("projectClaudeTimeline", () => {
   });
 });
 
+describe("activities left open by a finished turn", () => {
+  it("shows a sub-agent that never reported back as stopped once its turn has ended", () => {
+    const started = event(1, { message_type: "TaskStartedMessage", task_id: "t1", task_type: "local_agent", description: "Episode 2 script plan" });
+    const ended: ClaudeEvent = { session_id: "session-1", seq: 2, type: "turn_finished", payload: { turn_id: "x" }, created_at: "2026-10-04T00:00:00Z" };
+
+    expect(projectClaudeTimeline([started], new Set())[0]).toMatchObject({ status: "running" });
+    expect(projectClaudeTimeline([started, ended], new Set())[0]).toMatchObject({ status: "stopped" });
+  });
+});
+
 describe("project changes", () => {
   it("projects a project_changes event into a revertable summary", () => {
     const timeline = projectClaudeTimeline(

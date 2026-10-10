@@ -240,7 +240,8 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
         if (cancelled) return;
         setSessions(items);
         const preferred = useClaudeStore.getState().selected[projectName];
-        chooseSession(preferred || items[items.length - 1]?.id || null);
+        // 列表按最近更新倒序，首项即最新会话。
+        chooseSession(preferred || items[0]?.id || null);
       })
       .catch((error) => pushToast(errMsg(error), "error"));
     return () => { cancelled = true; };
@@ -455,7 +456,7 @@ export function ClaudePanel({ projectName, onClose }: ClaudePanelProps) {
       role="dialog"
       aria-modal="false"
       aria-label={t("claude_title")}
-      className="claude-floating-window fixed bottom-3 right-3 z-40 flex h-[min(720px,calc(100dvh-5rem))] w-[min(420px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[14px] bg-[#101116] shadow-[0_28px_80px_-24px_rgba(0,0,0,0.9)] sm:bottom-5 sm:right-5"
+      className="claude-floating-window fixed bottom-3 right-3 z-40 flex h-[min(720px,calc(100dvh-5rem))] w-[min(520px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[14px] bg-[#101116] shadow-[0_28px_80px_-24px_rgba(0,0,0,0.9)] sm:bottom-5 sm:right-5"
     >
       <div className="flex h-12 items-center gap-2 border-b border-white/10 px-3">
         <Bot className="h-4 w-4 text-[#d7ff45]" aria-hidden />

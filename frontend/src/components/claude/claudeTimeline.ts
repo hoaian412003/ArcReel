@@ -112,7 +112,9 @@ export function projectClaudeTimeline(
     items[index] = { ...current, ...definedPatch };
   };
 
+  let lastTurnEndSeq = -1;
   for (const event of events) {
+    if (event.type === "turn_finished" || event.type === "turn_error") lastTurnEndSeq = Math.max(lastTurnEndSeq, event.seq);
     if (event.type === "user_message" && typeof event.payload.content === "string") {
       items.push({ kind: "user", key: `user-${event.seq}`, seq: event.seq, text: event.payload.content });
       continue;
@@ -234,7 +236,10 @@ export function projectClaudeTimeline(
     }
   }
 
-  return items;
+  // 一轮已经结束、却始终没等到结束消息的工具 / 子智能体（进程中断或被收掉）不再显示为「运行中」。
+  return items.map((item) =>
+    item.kind === "activity" && item.status === "running" && item.seq < lastTurnEndSeq ? { ...item, status: "stopped" } : item,
+  );
 }
 
 export function activitySummary(activity: ClaudeActivityItem): string | null {

@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import Any
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, TextBlock, UserMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    StreamEvent,
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TextBlock,
+    UserMessage,
+)
 from claude_agent_sdk.types import ToolResultBlock, ToolUseBlock
 from sqlalchemy import select
 
@@ -31,7 +40,7 @@ class FakeClaudeClient:
         self.prompt = prompt
         self.session_id = session_id
 
-    async def receive_response(self):
+    async def receive_response(self) -> AsyncIterator[Any]:
         yield StreamEvent(
             uuid=f"delta-{self.call_number}",
             session_id=self.session_id,
@@ -405,3 +414,78 @@ async def test_tail_cursor_and_earlier_events_page_whole_turns(tmp_path, db_fact
     last = await service.earlier_events(session_id, before_seq=starts[1], turns=2, project_name="demo")
     assert last["events"][0]["seq"] == 1
     assert last["has_more"] is False
+
+
+class BackgroundTaskClient(FakeClaudeClient):
+    """主 Agent 先答完，后台子智能体随后才结束并带来第二条汇报。"""
+
+    closed_early = False
+    consumed_follow_up = False
+
+    async def __aexit__(self, *_args: object) -> None:
+        # 关客户端会杀掉后台任务：此时若汇报还没读完，就是过早关闭。
+        type(self).closed_early = not type(self).consumed_follow_up
+
+    async def receive_response(self) -> AsyncIterator[Any]:
+        yield TaskStartedMessage(
+            subtype="task_started",
+            data={},
+            task_id="t1",
+            description="Episode 2 script plan",
+            uuid="u1",
+            session_id=self.session_id,
+            tool_use_id="tool-1",
+            task_type="local_agent",
+        )
+        yield self._result("started")
+
+    async def receive_messages(self) -> AsyncIterator[Any]:
+        yield TaskNotificationMessage(
+            subtype="task_notification",
+            data={},
+            task_id="t1",
+            status="completed",
+            output_file="",
+            summary="done",
+            uuid="u2",
+            session_id=self.session_id,
+        )
+        type(self).consumed_follow_up = True
+        yield self._result("report")
+
+    def _result(self, text: str) -> ResultMessage:
+        return ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id=self.session_id,
+            stop_reason="end_turn",
+            total_cost_usd=0.1,
+            usage={"input_tokens": 1, "output_tokens": 1},
+            result=text,
+        )
+
+
+async def test_turn_stays_open_until_background_subagents_report_back(tmp_path, db_factory) -> None:
+    BackgroundTaskClient.closed_early = False
+    BackgroundTaskClient.consumed_follow_up = False
+    project = tmp_path / "projects" / "demo"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text('{"name":"demo"}', encoding="utf-8")
+    service = ClaudeSessionService(
+        data_root=tmp_path,
+        session_factory=db_factory,
+        client_factory=lambda options: BackgroundTaskClient(options, call_number=1),
+    )
+    accepted = await service.send_action(
+        "demo", ClaudeAction(action="create_screenplay", episode=1, client_key="bg"), user_id="default"
+    )
+    await service.wait_for_idle(accepted["session"]["id"])
+
+    assert BackgroundTaskClient.consumed_follow_up
+    assert not BackgroundTaskClient.closed_early
+    events = await service.events(accepted["session"]["id"], user_id="default")
+    assert any(event["type"] == "turn_finished" for event in events)
+    await service.shutdown()
