@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { API } from "@/api";
+import { MarkdownText } from "./MarkdownText";
 import { GlassModal } from "@/components/ui/GlassModal";
 import { ICON_BTN_CLS } from "@/components/ui/darkroom-tokens";
 
@@ -39,9 +40,12 @@ export function MarkdownModal({
           <X className="h-4 w-4" aria-hidden="true" />
         </button>
       </div>
-      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-5 py-4 text-[12.5px] leading-relaxed text-text-2">
-        {content === null ? t("node_canvas_loading") : content.trim() || t("node_canvas_markdown_empty")}
-      </pre>
+      <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+        <MarkdownText
+          className="text-[13px]"
+          source={content === null ? t("node_canvas_loading") : content.trim() || t("node_canvas_markdown_empty")}
+        />
+      </div>
     </GlassModal>
   );
 }

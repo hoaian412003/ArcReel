@@ -11,6 +11,7 @@ import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
 import { ImageLightbox } from "@/components/ui/ImageLightbox";
 import { useBusyNodeIds, useCanvasActions } from "./canvas-context";
 import { ASPECT_RATIOS, PASSIVE_INPUT_HANDLE, isBusy } from "./canvas-rules";
+import { MarkdownText } from "./MarkdownText";
 import { NodeStatusLine } from "./NodeStatusLine";
 
 export type CanvasFlowNode = Node<CanvasNodeData, CanvasAnyNodeType>;
@@ -654,9 +655,13 @@ function MarkdownNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
       title={title}
       onRemove={data.step ? undefined : () => void remove(id)}
     >
-      <p className="line-clamp-[14] min-h-[180px] whitespace-pre-wrap text-[11.5px] leading-snug text-text-3">
-        {preview === null ? t("node_canvas_loading") : preview.trim() || t("node_canvas_markdown_empty")}
-      </p>
+      <div className="relative max-h-[260px] min-h-[120px] overflow-hidden">
+        <MarkdownText
+          className="text-[11.5px]"
+          source={preview === null ? t("node_canvas_loading") : preview.trim() || t("node_canvas_markdown_empty")}
+        />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-bg-grad-a to-transparent" />
+      </div>
       {episode != null ? (
         <p className="mt-2 text-[11px] text-text-3">{t(`node_canvas_screenplay_${status}`)}</p>
       ) : null}
