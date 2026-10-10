@@ -20,6 +20,8 @@ export interface CanvasActions {
   imageModels: ImageModelChoices;
   /** 分组框缩放结束：保存新的位置与大小。 */
   resizeGroup: (nodeId: string, position: { x: number; y: number }, width: number, height: number) => Promise<void>;
+  /** 按组内节点当前的实际大小重排这个分组（用于文字变长、图片载入后节点互相压住时）。 */
+  tidyGroup: (groupId: string) => Promise<void>;
   /** 把图片填进（或换掉）这个图片节点。 */
   uploadImage: (nodeId: string, file: File) => Promise<void>;
   /** 把单元文本 / 导演说明存回剧本（依赖它的 H3 提示词与产出会按规则过期）。 */

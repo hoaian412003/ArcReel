@@ -449,7 +449,7 @@ function AssetNodeView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
 /** 分组：标题可改、可缩放；删掉分组框只是拆组，里面的节点保留。资产分组的标题就是资产名。 */
 function GroupView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
   const { t } = useTranslation("dashboard");
-  const { setData, resizeGroup, remove, addToContext } = useCanvasActions();
+  const { setData, resizeGroup, remove, addToContext, tidyGroup } = useCanvasActions();
   const [draft, setDraft] = useState(data.label ?? "");
   const dirty = useRef(false);
   useEffect(() => {
@@ -482,6 +482,11 @@ function GroupView({ id, data, selected }: NodeProps<CanvasFlowNode>) {
           <span className="shrink-0 rounded-full border border-hairline px-2 py-0.5 text-[10.5px] font-medium text-text-3" title={t("node_canvas_group_asset_hint")}>
             {t(`node_canvas_group_kind_${data.asset}`)}
           </span>
+        ) : null}
+        {data.episode == null ? (
+          <button type="button" className={`nodrag ${GHOST_BTN_CLS}`} onClick={() => void tidyGroup(id)}>
+            {t("node_canvas_group_tidy")}
+          </button>
         ) : null}
         <button
           type="button"

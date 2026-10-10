@@ -2825,6 +2825,7 @@ export default {
   'node_canvas_screenplay_write': '让 Agent 写剧本',
   'node_canvas_screenplay_rewrite': '让 Agent 重写',
   'node_canvas_screenplay_approve': '通过审阅',
+  'node_canvas_group_tidy': '整理',
   'node_canvas_expand': '展开',
   'node_canvas_collapse': '收起',
   'node_canvas_h3_status_stale': 'H3 提示词已过期（文本改过）',

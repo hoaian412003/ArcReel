@@ -2824,6 +2824,7 @@ export default {
   'node_canvas_screenplay_write': 'Nhờ agent viết kịch bản',
   'node_canvas_screenplay_rewrite': 'Nhờ agent viết lại',
   'node_canvas_screenplay_approve': 'Duyệt',
+  'node_canvas_group_tidy': 'Sắp xếp',
   'node_canvas_expand': 'Mở rộng',
   'node_canvas_collapse': 'Thu gọn',
   'node_canvas_h3_status_stale': 'Prompt H3 đã cũ (văn bản đã đổi)',

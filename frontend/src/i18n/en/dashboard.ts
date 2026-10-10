@@ -2826,6 +2826,7 @@ export default {
   'node_canvas_screenplay_write': 'Write with the agent',
   'node_canvas_screenplay_rewrite': 'Rewrite with the agent',
   'node_canvas_screenplay_approve': 'Approve',
+  'node_canvas_group_tidy': 'Tidy',
   'node_canvas_expand': 'Expand',
   'node_canvas_collapse': 'Collapse',
   'node_canvas_h3_status_stale': 'H3 prompt is out of date (the text changed)',

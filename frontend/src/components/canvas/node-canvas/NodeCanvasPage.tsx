@@ -279,6 +279,17 @@ function CanvasSurface({ projectName }: { projectName: string }) {
       uploadImage: (nodeId, file) => guarded(() => API.fillCanvasImage(projectName, nodeId, file)),
       resizeGroup: (nodeId, position, width, height) =>
         guarded(() => API.updateCanvasNode(projectName, nodeId, { position, data: { width, height } })),
+      tidyGroup: (groupId) =>
+        guarded(async () => {
+          const kids = getNodes().filter((n) => n.parentId === groupId);
+          if (kids.length === 0) return;
+          const ids = new Set(kids.map((k) => k.id));
+          const children = kids.map((k) => ({ id: k.id, type: k.type ?? "text", width: k.measured?.width ?? 280, height: k.measured?.height ?? 160 }));
+          const inside = (graphRef.current?.edges ?? []).filter((e) => ids.has(e.source) && ids.has(e.target));
+          const result = await layoutGroup(children, inside);
+          await API.updateCanvasLayout(projectName, result.positions);
+          await API.updateCanvasNode(projectName, groupId, { data: { width: result.width, height: result.height } });
+        }),
       addToContext: (nodeId) => {
         useCanvasContextStore.getState().add(projectName, nodeId);
         useClaudeStore.getState().open(projectName);
@@ -328,7 +339,7 @@ function CanvasSurface({ projectName }: { projectName: string }) {
       },
       remove: (nodeId) => guarded(() => API.deleteCanvasNode(projectName, nodeId)),
     }),
-    [guarded, imageModels, projectName, pushToast, t],
+    [getNodes, guarded, imageModels, projectName, pushToast, t],
   );
 
   const executeBranch = useCallback(async () => {
